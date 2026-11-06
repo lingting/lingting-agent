@@ -15,5 +15,10 @@ lib-web-core = { workspace = true }
 service-core = { workspace = true }
 types-core = { workspace = true }
 
+framework-web = { workspace = true, features = ["collect"] }
+framework-web-axum = { workspace = true, features = ["collect"] }
+framework-proc-ts = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect"] }
+
 [lints]
 workspace = true

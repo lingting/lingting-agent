@@ -8,6 +8,8 @@ description = "跨 Crate 的公共基础能力"
 license.workspace = true
 repository.workspace = true
 publish = false
+[dependencies]
+framework-core = { workspace = true }
 
 [lints]
 workspace = true

@@ -41,7 +41,7 @@
     - [x] 工具链版本由文件固定，而非依赖开发者本机默认值。
     - [x] 未创建任何业务逻辑代码。
 
-- [ ] **P1-003 依赖与版本矩阵对齐**
+- [x] **P1-003 依赖与版本矩阵对齐**
 
   - **目标**：一次性锁定 P1 所需依赖版本，消除 `framework-*` 内部版本错位带来的不可编译风险。
   - **具体工作**：
@@ -52,11 +52,12 @@
     5. 写入 `decisions.md`（D-015 及相关项）。
   - **前置依赖**：P1-002
   - **交付物**：确定后的 `Cargo.toml` 依赖段；`decisions.md` 版本对齐结论。
+    - **依赖落位**：`lib-core` → `framework-core`；`lib-web` → `framework-web` / `framework-web-axum` / `framework-proc-ts` / `framework-proc-core`（后两者是宏展开的绝对路径依赖，必须直接声明并开 `collect`）；`lib-bin-cli` → `clap` / `reqwest`；`lib-bin-tui` → `ratatui`。`types-core` 的 `framework-proc-auto/collect` 与 `lib-web-core` 的 `framework-web` 随 P1-010 / P1-009 落地。
   - **验收标准**：
-    - [ ] `cargo build` 在锁定版本下通过，`Cargo.lock` 已生成。
-    - [ ] 不存在同一 `framework-*` crate 的多个版本被同时解析进依赖图（以 `cargo tree -d` 输出为证据）。
-    - [ ] 每个锁定版本在 `decisions.md` 中都有“为什么是它”的一句理由。
-    - [ ] `framework-*` 获取方式（registry / path）已在 `decisions.md` 中定稿，D-015 由 `OPEN` 改为 `DECIDED`；若选 path，切回 registry 的条件已写明。
+    - [x] `cargo build` 在锁定版本下通过，`Cargo.lock` 已生成。
+    - [x] 不存在同一 `framework-*` crate 的多个版本被同时解析进依赖图（以 `cargo tree -d` 输出为证据）。
+    - [x] 每个锁定版本在 `decisions.md` 中都有“为什么是它”的一句理由。
+    - [x] `framework-*` 获取方式（registry / path）已在 `decisions.md` 中定稿，D-015 由 `OPEN` 改为 `DECIDED`；若选 path，切回 registry 的条件已写明。
 
 - [ ] **P1-004 技术验证：framework-proc-web 服务端 API 定义**
 

@@ -13,5 +13,8 @@ publish = false
 lib-core = { workspace = true }
 types-core = { workspace = true }
 
+clap = { workspace = true }
+reqwest = { workspace = true }
+
 [lints]
 workspace = true

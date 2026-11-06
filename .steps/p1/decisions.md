@@ -33,7 +33,7 @@
 | D-012 | Server 地址配置与发现 | DECIDED |
 | D-013 | 优雅关闭实现方式 | OPEN |
 | D-014 | 鉴权策略 | OPEN |
-| D-015 | `framework-*` 版本对齐与获取方式 | OPEN |
+| D-015 | `framework-*` 依赖引入方式与版本矩阵 | DECIDED (已核实) |
 | D-016 | 单 Binary 的功能裁剪与体积权衡 | OPEN |
 | D-017 | P1 是否引入 SQLite | DECIDED |
 | D-018 | `i64` 账号/ID 的跨语言表示 | DECIDED |
@@ -272,21 +272,83 @@
 
 ---
 
-## D-015 `framework-*` 版本对齐与获取方式
+## D-015 `framework-*` 依赖引入方式与版本矩阵
 
-- **问题**：P1 如何引入 `framework-*`？
+- **问题**：P1 如何引入 `framework-*`，以及 P1 所需依赖各自锁定到哪个版本？
 - **背景（已核实）**：
   - 本地源码仓库 `D:/code/lingting/lingting-rust-framework` 为 workspace 统一版本 **26.11.0**，`edition 2024`、`rust-version 1.98.0`。
   - registry 发布状态（已按 crates.io 稀疏索引核实）：`framework-core`、`framework-proc-core`、`framework-proc-ts`、`framework-proc-web`、`framework-web`、`framework-web-axum` **均已发布 26.11.0**，且 feature 定义（`collect` 链）与本地源码一致。本机 cargo 缓存对 web 三件套只到 26.8.150，属缓存滞后，不代表未发布。
-  - `framework-proc-core` 硬约束 `specta = "=2.0.0-rc.25"`、`specta-typescript = "0.0.12"`。
+  - `framework-proc-core` 硬约束 `specta = "=2.0.0-rc.25"`、`specta-typescript = "0.0.12"`、`specta-serde = "0.0.12"`。
+  - P1-003 已在本地源码上完成复核：`path` 引入后整个 workspace 可编译，`Cargo.lock` 中全部 `framework-*` 均为唯一版本 26.11.0，`cargo tree -d` 无框架 crate 重复。
 - **可选方案**：
   1. 全部走 `path` 依赖本地 `lingting-rust-framework`（版本必然一致，改动即时可见）。
-  2. 全部走 registry 26.11.0（需先确认 web 系列是否已发布 26.11.0）。
+  2. 全部走 registry 26.11.0。
   3. 混用（明确 REJECTED：正是要避免的情况）。
-- **推荐方案**：方案 1 起步（P1 期间大概率需要改 `framework-proc-rust` 与 `framework-web-axum`）；在 26.11.0 全部发布且改动合入后切回方案 2。
-- **决策理由**：P1 依赖对框架的两处改动（新增 `framework-proc-rust`、可能新增 shutdown 入口），path 依赖是唯一能让改动即时生效的方式；混用会造成 trait/类型跨版本不兼容（`inventory` 注册的元数据类型必须唯一）。
+- **决策**：方案 1 —— 全部 `path` 引入，**当前不写 `version` 约束**；等 `framework-proc-rust` 开发完成、P1 期间对框架的改动收敛后，再统一补上 `version = "<当时框架版本>"` 作为防漂移约束（本地源码版本被改动而未更新本仓库声明时，`cargo build` 立即报版本不匹配，而不是静默使用新版本）。
+- **决策理由**：
+  - P1 需要向框架提交两处改动（D-003 新增 `framework-proc-rust`、D-013 补齐优雅关闭入口），`path` 依赖是唯一能让改动即时生效、且改动与消费方在同一次 `cargo build` 中被验证的方式。
+  - registry 26.11.0 虽已全量发布，但一旦 P1 期间改动框架，registry 版本就必然滞后，届时仍需切回 `path`，来回切换的代价高于直接使用 `path`。
+  - 混用会造成 `inventory` 注册的元数据类型跨版本分裂（不同 `framework-proc-core` 版本 → 两套注册表）。
+  - 现在不写 `version` 的理由：P1 期间框架仓库会持续新增/修改 crate（先 `framework-proc-rust`，再优雅关闭入口），每次框架侧版本推进都要同步改本仓库的 `version` 声明，属纯噪音；等改动收敛后一次性补上，防漂移能力不失，维护成本最低。
 - **反例警示**：不同版本的 `framework-proc-core` 同时进入依赖图会导致 `ApiMetadata` 类型不统一、注册表分裂，表现为“接口定义了但生成器看不到”。
-- **状态**：`OPEN`（registry 26.11.0 已全量发布，P1-003 只需在 path / registry 之间做最终取舍）
+
+### P1 依赖版本矩阵
+
+| 依赖 | 锁定写法 | 为什么是它 |
+|---|---|---|
+| `framework-*`（core / web / web-axum / proc-*） | `path`（暂不带 `version`，`framework-proc-rust` 完成后补） | 见上：改动需即时生效；`version` 约束推迟到框架改动收敛，避免每轮框架改动都要同步本仓库声明 |
+| `axum` | `0.8` | 必须与 `framework-web-axum` 内部依赖同一大版本，否则同一次构建会出现两个 axum（框架不支持 0.7，0.9 尚未发布） |
+| `tokio` | `1.52`（`rt-multi-thread`、`sync`、`time`、`macros`） | 与框架 workspace 对齐；`net` 由 `framework-web-axum` 自行开启，本仓库不重复声明 |
+| `clap` | `4.6`（`derive`） | 4.x 当前维护线；P1 只用 derive 定义子命令，`env` 等 feature 等真正需要时再开 |
+| `reqwest` | `0.13`（`json`、`stream`） | 客户端 Transport 用；`stream` 是 SSE 增量读取的前提；默认 `default-tls` 已是 rustls，与本机其他 Rust 项目保持一致，避免同机多版本 |
+| `ratatui` | `0.30` | 0.30 是当前稳定线，默认 feature 已含 crossterm 后端，TUI 不额外引后端 crate |
+| `serde` | `1.0`（`derive`） | 与框架 workspace 一致，DTO 序列化与框架元数据共用 |
+| `serde_json` | `1.0` | 与 `framework-proc-core` 依赖的版本一致，避免 JSON 类型跨版本 |
+| `specta` | `=2.0.0-rc.25` | `framework-proc-core` 的硬约束（等号锁定）；换成 rc.28 会与框架的类型注册表不兼容 |
+| `specta-typescript` | `0.0.12` | 同上，框架硬约束；0.0.15 与框架使用的导出 API 不兼容 |
+| `specta-serde` | `0.0.12` | 框架硬约束，仅经 `framework-proc-core` 传递使用 |
+
+约束语义：除 `specta` 用等号外，其余都是**下限约束**（caret），`Cargo.lock` 的实际解析结果是 `axum 0.8.9`、`tokio 1.54.1`、`clap 4.6.7`、`reqwest 0.13.5`、`ratatui 0.30.2`。P1 不写 `=x.y.z` 的理由：框架侧同样使用下限约束，钉死会与框架的依赖期望无谓冲突，且 patch 级升级不应要求改代码；真正的可复现性由 `Cargo.lock` 入库保证。
+
+未在 P1-003 锁定的项：`sqlx`（P2 才用，保留在 workspace 依赖中但无消费方）、`rust-embed`（`lib-bin-web` 的 `embed-ui` feature，P1-016 再定）、`framework-proc-rust`（P1-006 新增后按同一规则以 `path` + `version` 引入）。
+
+### Feature 传递结论（已核实源码）
+
+- `framework-web` 的 `collect = ["dep:inventory", "framework-proc-web/collect"]`：同时打开路由注册表与 `web_api_*` 宏的 `push_web_api!` 展开。
+- `framework-web-axum` 的 `default = ["collect"]`，经它引入 `framework-web` 时 `collect` 自动成立。
+- `framework-proc-ts` 的 `collect = ["framework-proc-core/collect"]`，本身不改变宏展开，只是转发开关。
+- **关键**：`framework-proc-ts::ts_api` 的展开**无条件**输出 `::framework_proc_core::push_api_metadata!`，而该宏与 `framework_proc_core::__private::inventory` 只在 `framework-proc-core/collect` 下存在 → 定义 API 的 crate 若没开 `framework-proc-core/collect`，是**编译错误**，不是“生成器看不到”。
+- 宏展开使用绝对路径 `::framework_web` / `::framework_proc_ts` / `::framework_proc_core`，因此定义 API 的 crate 必须把三者声明为**直接依赖**，只靠传递依赖无法通过编译。
+- 结论（谁显式开 collect）：
+  - 服务端 API crate（P1 为 `lib-web`）：显式开启 `framework-web`、`framework-web-axum`、`framework-proc-ts`、`framework-proc-core` 的 `collect`。
+  - 生成器 crate（P1-007 定形）：只需 `framework-proc-core` 的 `collect`（提供 `api_metadata_iter()`），并正常 link 定义 API 的 crate。
+- 复核方式：`cargo tree -e features -p lib-web -i framework-proc-core` 可见 `framework-proc-core feature "collect"` 由 `lib-web` 与 `framework-proc-ts/collect` 共同开启；`framework-web feature "collect"` 由 `lib-web` 与 `framework-web-axum/collect` 共同开启。
+
+### `inventory` 注册机制的副作用
+
+1. 注册是**静态 trait-object 提交**（`inventory::submit!`），在链接期收集：元数据只在“定义 API 的 crate 真正被 link 进当前二进制”时存在。仅 `cargo build` 服务端不会产出元数据表，生成器必须链接服务端 API crate。
+2. `collect` 关闭时注册表整体不存在：`push_web_api!` 与 `api_metadata_iter()` 都消失，路由需要手工挂载，生成器无从读取。
+3. `framework-proc-auto/collect` 目前**未开启**（P1-003 范围外，属 `types-core` 定义 DTO 时的事）：`#[auto_type]` / `#[auto_enum]` 展开不产出类型元数据。P1-010 定义 DTO 时必须为 `types-core` 开启，否则 TS 侧只有方法签名、没有 DTO 类型。
+4. feature 合并的连带效果：一旦开启 `framework-proc-auto/collect`，`framework-core` 自身用 `#[auto_type]` 声明的类型（如 `R`）也会注册进同一张表。生成器必须按 `ApiMetadata.namespace`（`module_path!()`）过滤，不能假设表里只有本项目的类型。
+5. `collect` 是**编译期**开关，切开会改变产出的二进制内容；因此服务端、生成器、测试都要基于同一份 feature 组合构建，否则会出现“同一个接口在不同二进制里可见性不同”。
+
+### 切回 registry 的条件
+
+同时满足以下四条才切换（切换是一次独立改动，需重跑 `cargo build` 与 `cargo tree -d`）：
+
+1. `framework-proc-rust`（D-003）与优雅关闭入口（D-013）的改动已合入框架并发布；
+2. registry 上相关 `framework-*` 的 `collect` feature 链与本地源码一致；
+3. 全部 `framework-*` 改为 `version = "<已发布版本>"` 后，`cargo tree -d` 中无框架 crate 重复；
+4. 生成器与服务端使用同一来源（不允许部分 `path`、部分 registry）。
+
+在切回 registry 之前，还须先按上文补齐本地源码期间应有的 `version` 约束并跑通构建 —— 即“先 `path` + `version`，再换成纯 `version`”，避免版本事实只存在于脑记里。
+
+### 已知遗留
+
+- `cargo tree -d` 中第三方重复不属于本次对齐目标：`syn 2.0.119` 与 `syn 3.0.9` 并存（不同 proc-macro 生态），`bytes` / `serde_core` / `serde_json` / `memchr` 的“重复”是 host（proc-macro/构建脚本）与 target 两套构建上下文，同版本不同上下文，不影响契约类型一致性。
+- 外部 `path` 依赖的编译警告（当前为 `framework-proc-auto` 的 3 条 `dead_code`）会出现在本仓库的构建输出里，且**无法在本仓库侧按 crate 静音**：Cargo 只对 registry / git 依赖自动加 `--cap-lints allow`，`path` 依赖一律按本地处理；`cargo clippy -- <flag>` 的额外参数也只作用于本仓库的目标。可选做法只有两种 —— 在 `lingting-rust-framework` 里修掉死代码（推荐），或在本仓库用全局 `RUSTFLAGS` / `--cap-lints allow` 一刀切（会连带削弱本仓库自己的 lint 基线，不采用）。因此 P1-002 的“`cargo clippy` 零 warning”基线只对本仓库成员成立。
+
+- **状态**：`DECIDED`
 
 ---
 

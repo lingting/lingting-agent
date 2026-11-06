@@ -34,17 +34,20 @@ lib-bin-web = { path = "crates/lib-bin-web" }
 types-core = { path = "crates/types-core" }
 service-core = { path = "crates/service-core" }
 
-framework-bus = { version = "26.11.0" }
-framework-core = { version = "26.11.0" }
-framework-datetime = { version = "26.11.0" }
-framework-startup = { version = "26.11.0" }
-framework-system = { version = "26.11.0" }
-framework-region = { version = "26.11.0" }
-framework-proc-auto = { version = "26.11.0" }
-framework-proc-core = { version = "26.11.0" }
-framework-proc-ts = { version = "26.11.0" }
-framework-timer = { version = "26.11.0" }
-framework-proc-timer = { version = "26.11.0" }
+# framework（作者自有框架；P1 走 path 引入，本地源码版本 26.11.0；待 framework-proc-rust 开发完成后再补 version 约束，见 decisions.md D-015）
+framework-bus = { path = "../lingting-rust-framework/framework-bus" }
+framework-core = { path = "../lingting-rust-framework/framework-core" }
+framework-datetime = { path = "../lingting-rust-framework/framework-datetime" }
+framework-startup = { path = "../lingting-rust-framework/framework-startup" }
+framework-system = { path = "../lingting-rust-framework/framework-system" }
+framework-region = { path = "../lingting-rust-framework/framework-region" }
+framework-proc-auto = { path = "../lingting-rust-framework/framework-proc-auto" }
+framework-proc-core = { path = "../lingting-rust-framework/framework-proc-core" }
+framework-proc-ts = { path = "../lingting-rust-framework/framework-proc-ts" }
+framework-web = { path = "../lingting-rust-framework/framework-web" }
+framework-web-axum = { path = "../lingting-rust-framework/framework-web-axum" }
+framework-timer = { path = "../lingting-rust-framework/framework-timer" }
+framework-proc-timer = { path = "../lingting-rust-framework/framework-proc-timer" }
 
 aes = { version = "0.8" }
 base64 = { version = "0.22" }
@@ -60,6 +63,9 @@ blake3 = { version = "1.8" }
 url = { version = "2.5", features = ["serde"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "macros"] }
 axum = { version = "0.8" }
+clap = { version = "4.6", features = ["derive"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+ratatui = { version = "0.30" }
 anyhow = "1.0"
 regex = { version = "1.12" }
 chrono = { version = "0.4" }

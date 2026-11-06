@@ -13,5 +13,7 @@ publish = false
 lib-bin-cli = { workspace = true }
 lib-core = { workspace = true }
 
+ratatui = { workspace = true }
+
 [lints]
 workspace = true

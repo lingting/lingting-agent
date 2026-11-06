@@ -596,7 +596,7 @@ manager-agent -> service-agent
 | `agent-route` | `service-core`、`types-core`、`lib-core` | Rig | `agent-runtime`、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-tool`、`agent-route`、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web` | `lib-web`、业务 Service、Agent Runtime |
-| `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum` | `lib-bin-*`、`bin-*` |
+| `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-ts`、`framework-proc-core`（后三者是 `web_api_*` 宏展开的绝对路径依赖，必须直接声明并开 `collect`） | `lib-bin-*`、`bin-*` |
 | `lib-bin-cli` | `lib-core`、`types-core`（经生成的 Rust SDK） | Clap、Reqwest | Agent Runtime、服务端业务实现 |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui | Agent Runtime、服务端业务实现 |
 | `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
