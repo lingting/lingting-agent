@@ -14,10 +14,10 @@
 | 生成链路是否成立 | **成立**。一条命令从 `api_metadata_iter()` 产出完整 npm ESM 包 | 实测 |
 | 生成物落位 | `packages/sdk-ts/`（`package.json` + `dist/*.js` + `dist/*.d.ts`） | 实测 |
 | 是否入库 | **不入库**，`packages/` 整体被 `.gitignore` 忽略（D-006 已修订） | 实测 |
-| 前端引入方式 | 根目录 `pnpm-workspace.yaml` 的 `packages/*`，WebUI 侧用 `"@lingting/agent-api": "workspace:*"` | 待 WebUI 工程落地（P1-016） |
+| 前端引入方式 | `lingting-agent-ui/pnpm-workspace.yaml` 的 `../packages/*`，WebUI 侧用 `"@lingting/agent-api": "workspace:*"` | 脚手架已落地（P1-016 待接入调用） |
 | 重复生成是否幂等 | **幂等**，两次生成的全部文件 md5 一致 | 实测 |
 | `i64` 映射 | `auto_type` 字段在 TS 侧标为 `string`，wire 上也是字符串，标注与运行时一致 | 实测 + D-018 |
-| 生成物类型检查（`tsc --noEmit`） | **未执行**：本地未安装 typescript，且不引入额外依赖 | 待验证 |
+| 生成物类型检查（`tsc --noEmit`） | **通过**：在 `lingting-agent-ui/` 内用该工程的 typescript 检查生成物 `dist/*.d.ts`，无类型错误 | 实测 |
 
 ---
 
@@ -26,7 +26,7 @@
 | 位置 | 作用 |
 |---|---|
 | `crates/lib-web/examples/gen_ts_sdk.rs` | 生成器（临时形态，最终形态归 P1-007） |
-| `pnpm-workspace.yaml` | pnpm workspace 声明，`packages/*` |
+| `lingting-agent-ui/pnpm-workspace.yaml` | pnpm workspace 声明，`packages` 指向 `../packages/*` |
 | `scripts/gen.sh` | 一条命令同时产出 TS 与 Rust 两份 SDK |
 
 生成器要点：
@@ -91,9 +91,10 @@ Transport 由 WebUI 自己实现（D-002 的既有约定）。
 
 ## 6. 未覆盖 / 待后续
 
-1. **`tsc --noEmit` 未执行**：需要在仓库内引入 typescript 依赖（或使用 `npx`），属于依赖决策，未擅自安装。
-   这是 P1-005 唯一未通过的验收项。
-2. **消费方验证未做**：WebUI 工程尚未开始（P1-016），`workspace:*` 引入方式只做了约定。
+1. **`tsc --noEmit` 已补做（回填）**：前端工程 `lingting-agent-ui/` 落地后，用该工程的 typescript 依赖检查生成物 `dist/*.d.ts`，无类型错误；
+   `workspace:*` 引入亦已实测（`import "@lingting/agent-api"` 可解析，`ApiClient` / `ApiDefinitions` 正常导出）。
+   这是 P1-005 原先唯一未通过的验收项，现已通过。
+2. **消费方调用验证未做**：前端脚手架 `lingting-agent-ui/` 已声明 `"@lingting/agent-api": "workspace:*"`，但尚未在页面中实际调用接口，属 P1-016 范围。
 3. **错误分支验证未做**：方法名重复、`method + path` 重复、`class_name` 非法的报错信息未构造用例验证（框架已实现校验，
    属于框架行为，可在 P1-007 固化时补）。
 4. **生成物头部标记**：`PackageBuilder` 不支持写文件头注释，TS 侧目前没有“自动生成，勿手改”标记；

@@ -77,7 +77,7 @@
     - [x] 参数错误时的响应结构被记录成一份可复制的样例（含状态码与 `R{code,message}` 取值）。
     - **实测结论**：`collect` 必须开启（关闭后无手动挂载路径）；消费路由/元数据的二进制必须引用 `lib_web::web_routes()` 作为链接锚点；`auth` 默认值不触发鉴权（D-014 已定案）；参数与错误响应约束见 D-021。探针接口保留在 `crates/lib-web/src/probe`，探针服务为 `cargo run -p lib-web --example api_probe_server`。
 
-- [ ] **P1-005 技术验证：TypeScript SDK 生成链路（进行中：待 `tsc --noEmit` 校验）**
+- [x] **P1-005 技术验证：TypeScript SDK 生成链路**
 
   - **目标**：确认从服务端 API 定义到可用的 npm 包 TS SDK 全链路成立，包括类型、抽象类与包结构。
   - **具体工作**：
@@ -91,10 +91,10 @@
   - **交付物**：可重复运行的生成流程；生成出的 npm 包；`decisions.md` 中 D-002、D-005、D-018 结论。
   - **验收标准**：
     - [x] 生成物包含 DTO 类型声明与每个接口对应的客户端方法。
-    - [ ] 生成物的静态类型检查通过，且消费方可正常 `import` 并拿到方法签名。（**卡在 `tsc --noEmit`**：本地未安装 typescript，未执行）
+    - [x] 生成物的静态类型检查通过，且消费方可正常 `import` 并拿到方法签名。（静态检查与 `workspace:*` 引入已在前端工程内实测通过；调用级使用归 P1-016）
     - [x] 连续执行两次生成，第二次无文件变化（幂等）。
     - [x] id 字段的类型映射问题已有明确结论（不再存在“TS 标 string、实际是 number”的隐患）。
-    - **实测结论**：生成器为 `cargo run -p lib-web --example gen_ts_sdk`，产物落 `packages/sdk-ts`（不入库，pnpm workspace 消费）；`i64` 经 `auto_type` 标注为 `string`，运行时同样是字符串，标注与 wire 一致；`WebResponse` 类返回在 TS 侧退化为 `Blob`。报告见 `docs/reports/p1-005-ts-sdk.md`。
+    - **实测结论**：生成器为 `cargo run -p lib-web --example gen_ts_sdk`，产物落 `packages/sdk-ts`（不入库，pnpm workspace 消费）；`i64` 经 `auto_type` 标注为 `string`，运行时同样是字符串，标注与 wire 一致；`WebResponse` 类返回在 TS 侧退化为 `Blob`。报告见 `docs/reports/p1-005-ts-sdk.md`；`tsc --noEmit` 与 `workspace:*` 引入已在前端工程 `lingting-agent-ui/` 内实测通过。
 
 - [x] **P1-006 技术验证：framework-proc-rust 生成 Rust Client SDK**
 

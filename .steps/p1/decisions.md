@@ -227,8 +227,9 @@
   4. 无框架（原生 TS + 少量 DOM 操作）。
 - **推荐方案**：方案 1（React + Vite + TS）。
 - **决策理由**：P1 只需要一个最小对话界面，四种方案都能胜任；选 React 是为了后续复杂交互（多会话、工具调用可视化、设置面板）时有最大生态。方案 4 在 P2 之后会迅速失控。
-- **约束**：P1 不引入重型组件库；状态管理用原生 hooks，不引入额外状态库。
-- **状态**：`OPEN`（等确认，若无异议按推荐方案执行）
+- **约束（脚手架落地后修订）**：UI 组件库使用 antd 与 `lingting-react-ui`；路由、请求缓存与轻量状态分别使用 `@tanstack/react-router` / `@tanstack/react-query` / `@tanstack/react-store`，不再限定「原生 hooks、不引入额外状态库」。
+- **状态**：`DECIDED`（技术栈：React + Vite + TypeScript + antd/LRI；工程目录 `lingting-agent-ui/`，同时是 pnpm workspace 根）
+- **备注（裁决后回填）**：前端脚手架 `lingting-agent-ui/` 已落地，依赖含 antd、`lingting-react-ui` 与 `@tanstack/*` 系列，与原「不引入重型组件库、不引入额外状态库」的约束冲突；已裁决**保留当前依赖组合**，约束按本节修订条目执行。
 
 ---
 

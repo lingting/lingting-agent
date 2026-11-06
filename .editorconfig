@@ -11,6 +11,10 @@ trim_trailing_whitespace = true
 [*.{json,yml,yaml,toml}]
 indent_size = 2
 
+# 前端（TS / JS / CSS / HTML）跟随 TS 生态惯例使用 2 空格
+[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]
+indent_size = 2
+
 # Markdown 行尾双空格表示换行，不能被自动清除
 [*.md]
 trim_trailing_whitespace = false
