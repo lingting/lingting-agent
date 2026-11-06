@@ -20,11 +20,10 @@ serde = { workspace = true }
 serde_with = { workspace = true }
 specta = { workspace = true }
 
-framework-proc-auto = { workspace = true }
+framework-proc-auto = { workspace = true, features = ["collect"] }
 framework-web = { workspace = true, features = ["collect"] }
 framework-web-axum = { workspace = true, features = ["collect"] }
-framework-proc-ts = { workspace = true, features = ["collect"] }
-framework-proc-core = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect", "ts", "rust"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

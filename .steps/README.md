@@ -88,11 +88,12 @@ P6 Production Readiness
 
 | 项 | 状态 |
 |----|------|
-| 仓库状态 | 已建立 Cargo Workspace 与 9 个成员 crate 骨架（`bin-agent` + `lib-*` + `types-core` + `service-core`），无业务代码、无前端工程 |
+| 仓库状态 | Cargo Workspace + 9 个成员 crate 骨架（`bin-agent` + `lib-*` + `types-core` + `service-core`）；已有探针 API 服务与 TS / Rust 两份 SDK 生成链路；前端工程与业务代码尚未开始 |
 | Rust 工具链 | rustc 1.98.0 / cargo 1.98.0 |
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
-| framework 版本 | 本地源码 26.11.0；registry 上 `framework-*` 各 crate 同样已发布 26.11.0；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束（`framework-proc-rust` 完成后再补）**，切回 registry 的条件见 `p1/decisions.md` D-015 |
-| P1 | 进行中：P1-001、P1-002、P1-003、P1-004 已完成；下一个 P1-005（TypeScript SDK 生成链路验证） |
+| framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
+| SDK 生成 | `scripts/gen.sh` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `cargo build` / `pnpm install` 之前执行** |
+| P1 | 进行中：P1-001 ~ P1-004、P1-006 已完成；P1-005 进行中（仅差 `tsc --noEmit` 校验）；下一个 P1-007（API 契约单一来源与生成流程固化） |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
 ---

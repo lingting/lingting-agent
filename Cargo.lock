@@ -862,7 +862,6 @@ dependencies = [
  "framework-datetime",
  "framework-proc-auto",
  "framework-proc-core",
- "framework-proc-ts",
  "log",
  "serde",
  "serde_json",
@@ -911,16 +910,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "framework-proc-ts"
-version = "26.11.0"
-dependencies = [
- "framework-proc-core",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "framework-proc-web"
 version = "26.11.0"
 dependencies = [
@@ -937,6 +926,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "framework-core",
+ "framework-proc-core",
  "framework-proc-web",
  "futures-util",
  "inventory",
@@ -1600,6 +1590,9 @@ dependencies = [
  "clap",
  "lib-core",
  "reqwest",
+ "serde",
+ "serde_json",
+ "serde_with",
  "types-core",
 ]
 
@@ -1635,7 +1628,6 @@ dependencies = [
  "anyhow",
  "framework-proc-auto",
  "framework-proc-core",
- "framework-proc-ts",
  "framework-web",
  "framework-web-axum",
  "lib-core",

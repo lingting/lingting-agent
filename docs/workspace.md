@@ -596,8 +596,8 @@ manager-agent -> service-agent
 | `agent-route` | `service-core`、`types-core`、`lib-core` | Rig | `agent-runtime`、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-tool`、`agent-route`、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web` | `lib-web`、业务 Service、Agent Runtime |
-| `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-ts`、`framework-proc-core`（后三者是 `web_api_*` 宏展开的绝对路径依赖，必须直接声明并开 `collect`） | `lib-bin-*`、`bin-*` |
-| `lib-bin-cli` | `lib-core`、`types-core`（经生成的 Rust SDK） | Clap、Reqwest | Agent Runtime、服务端业务实现 |
+| `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除） | `lib-bin-*`、`bin-*` |
+| `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | Clap、Reqwest、Serde、`serde_with` | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui | Agent Runtime、服务端业务实现 |
 | `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |
@@ -683,9 +683,9 @@ flowchart BT
 flowchart BT
     libcore["lib-core"]
     typescore["types-core"] --> libcore
-    sdk["客户端 SDK 生成物（落于 lib-bin-cli）"] --> typescore
+    sdk["Rust SDK 生成物（packages/sdk-rust，经 #[path] 并入 lib-bin-cli）"]
     bincli["lib-bin-cli"] --> libcore
-    bincli --> sdk
+    bincli -.-> sdk
     bintui["lib-bin-tui"] --> bincli
     bintui --> libcore
     binagent["bin-agent"] --> bincli
@@ -695,8 +695,9 @@ flowchart BT
 客户端严格约束：
 
 - 客户端只通过**生成的 SDK** 调用服务端，Transport（reqwest 封装、SSE 解析、超时、重试）由客户端自己实现。
-- 客户端可以引用服务端的 DTO / 契约类型（来自同一份定义），**但不得调用其中的业务逻辑**。
-- 客户端不得 link 服务端执行 Agent 的代码路径。
+- 客户端 DTO 由**同一份服务端定义生成**（`auto_type` 定义快照），Rust 侧自带快照、不依赖服务端 crate；因此客户端不产生对 `lib-web` 的编译期或运行期依赖。
+- 客户端不得调用服务端的业务逻辑，也不得 link 服务端执行 Agent 的代码路径。
+- 生成物落位：`packages/sdk-rust`（由 `lib-bin-cli` 用 `#[path]` 引入）与 `packages/sdk-ts`（pnpm workspace 消费），二者均不入库，生成命令为 `scripts/gen.sh`，必须在 `cargo build` / `pnpm install` 之前执行。
 
 ### 5.3 详细依赖约束
 
@@ -808,6 +809,8 @@ embed-ui = ["dep:rust-embed"]
 | `service-core` | 通用核心业务服务 |
 | `lib-core` | 公共基础能力 |
 
+P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_ts_sdk`、`gen_rust_sdk`）；生成物落 `packages/`（不入库），由 `scripts/gen.sh` 一条命令产出。
+
 P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此 **P1 阶段不创建 `lib-db`**；`service-core -> lib-db` 是 P2 才成立的依赖。同理，P1 的 `lib-web` 尚不存在 `agent-runtime` 依赖，该依赖在 P2 加入。这些差异属于**阶段性依赖裁剪**，不改变目标依赖方向。
 
 P1 阶段不创建任何 `agent-*` Crate：`lib-web` 在 P1 只暴露 Mock 契约接口，Agent 领域 Crate 按第 8.2 节的阶段推进。
@@ -878,7 +881,7 @@ P2 已明确的 Non-goals（Tool / MCP / Skills / Memory）意味着 `agent-cont
 
 以下问题在本文档中已按当前决策给出最小可行的处理方式，但仍需在进入对应阶段前确认：
 
-1. **客户端 SDK 生成物的落位**：生成的 Rust Client SDK 目前归入 `lib-bin-cli`（其职责已包含"生成的 Rust SDK 接入"）。若生成物规模增大需要独立 Crate，属于架构变更，须先更新本文档。
+1. **客户端 SDK 生成物的落位（P1-006 已落定，仍待 P1-007 复核）**：Rust SDK 生成物放 `packages/sdk-rust`，由 `lib-bin-cli` 用 `#[path]` 作为自身模块引入（不建独立 crate、不加 path 依赖、不入库）；TS SDK 放 `packages/sdk-ts`，由 pnpm workspace 引入。若后续要把生成物变成独立 Crate，必须同时解决「path 依赖的 manifest 先于生成存在」的引导死锁（方案：入库该 crate，见 `docs/reports/p1-006-rust-sdk.md` 第 2 节），属架构变更，须先更新本文档。
 2. **`lib-bin-tui -> lib-bin-cli` 依赖**：为保证 TUI 复用同一套 SDK 接入与连接管理，此处补充了该依赖。若后续希望 TUI 不依赖 CLI 命名下的 Crate，需要调整命名或拆分客户端共享层。
 3. **`lib-web-core` 依赖 `types-core`**：用于承载跨端错误契约等通用类型。若希望 `lib-web-core` 完全不依赖业务类型层，需要把这些契约类型另行归位。
 4. **`agent-tool` 是否依赖 `agent-core`**：当前不依赖，以保持 Tool 层与 Agent 领域类型解耦；若 Tool 执行上下文确需引用 Run / Turn 等类型，需重新评估。

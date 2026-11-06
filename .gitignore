@@ -47,6 +47,10 @@ dist/
 .vite/
 *.tsbuildinfo
 
+### 生成的 SDK 包 ###
+# 生成物不入库（D-006 已修订）：packages/ 由生成命令产出，需要时先跑生成命令
+packages/
+
 ### Python ###
 .venv/
 

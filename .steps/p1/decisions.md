@@ -55,6 +55,7 @@
 - **推荐方案**：方案 2。
 - **决策理由**：服务端代码即契约唯一来源，路由与元数据来自同一次宏展开，物理上不可能出现两份不一致的定义；方案 1 违反“禁止两套 API Schema”；方案 3 需要额外维护 spec 与实现的一致性，且服务端生成代码调试体验差。
 - **代价**：受框架宏约束（见 D-008）；框架本身需要小幅扩展（见 D-003、D-013）。
+- **P1-005 验证结论（回填）**：TS 侧直接用框架现成构建器（`TypescriptTypeBuilder` / `TypescriptEnumBuilder` / `TypescriptApiBuilder` / `PackageBuilder`），生成器为 `cargo run -p lib-web --example gen_ts_sdk`，产物落 `packages/sdk-ts`（不入库，pnpm workspace 消费）。生成物只含抽象类，Transport 由 WebUI 自实现。唯一未通过的验收项是 `tsc --noEmit`（本地未安装 typescript），见 `docs/reports/p1-005-ts-sdk.md`。
 - **状态**：`DECIDED`
 
 ---
@@ -104,7 +105,16 @@
   4. DTO 处理需二选一并在 P1-006 结论中确定：**(a)** 生成物只输出方法签名并 `use` 服务端 DTO 类型（要求客户端依赖契约 crate）；**(b)** 生成物自带 DTO 定义。倾向 (a)，避免两份 DTO。
   5. 已知差异必须显式记录：TS 侧 `i64` 映射为 `string`，Rust 侧应为 `i64`；此差异属于类型系统差异，不是契约不一致，但需在 `acceptance.md` A-5 中说明。
   6. 若 `framework-proc-rust` 最终无法覆盖某类接口（例如流式），必须在本文档写明降级方案，不得静默放弃。
-- **状态**：`DECIDED (待验证)` —— 方向已定，具体 API 形态、DTO 策略在 P1-006 中验证后回填本节。
+- **P1-006 验证结论（回填）**：
+  1. **实现形态变更**：本地框架未新增 `framework-proc-rust` crate，而是把 Rust 导出并入 `framework-proc-core` 的 `rust` 特性，提供 `RustApiBuilder` / `RustTypeBuilder` / `RustEnumBuilder` / `CrateBuilder`；同时 `framework-proc-ts` 被上游删除。因此「新增 crate」这一条不再适用，生成器以 `lib-web` 的 example 形式驱动，最终形态归 P1-007。
+  2. **API 形态**：`ApiDefinition` 常量表（name / namespace / method / path / arguments / return_type）+ `ApiClient` trait，必需方法为 `send(definition, body, query) -> Result<Vec<u8>, Self::Error>`，每个接口一个默认方法（参数聚合与 TS 的 `request_value` 一致）。返回值三态：`Void → ()`、`Blob → Vec<u8>`、`Type → 反序列化 DTO`。
+  3. **DTO 策略选 (b)：自带快照定义**。理由：`auto_type` 已提供定义快照，`RustTypeBuilder` 可直接产出真实 DTO；而 (a) 需要客户端 path 依赖服务端契约 crate，`CrateBuilder` 不支持 path 依赖，且会引入「生成的 crate 先于 workspace 存在」的引导死锁。代价是 DTO 存在两份，靠同一份定义 + 生成保证一致。
+  4. **消费方式**：生成物落 `packages/sdk-rust/src/`，不生成 `Cargo.toml`，由 `lib-bin-cli` 用 `#[path]` 作为自身模块引入（详见 D-006 落位）。客户端**不依赖 lib-web**，也不会 link 服务端执行路径。
+  5. **已知差异**：`i64` Rust 侧保持 `i64` + `serde_as(DisplayFromStr)`，TS 侧为 `string`，wire 上双方一致（见 D-018）；`WebResponse`（`Blob`）两侧都只能拿到二进制体，自定义响应头丢失。
+  6. **降级方案**：reqwest Transport 由客户端自行实现 `send`（不生成，不阻塞链路）；流式返回未建模，与 TS 侧一致（D-007 仍为 OPEN）；路径参数由框架层不支持，id 走 body/query（D-008）。
+  7. 生成文件自带 `#![allow(warnings)]`，避免机器生成代码污染 `clippy -D warnings` 门禁。
+  8. 框架缺陷一处已修：`framework-proc-core/src/rust/api_trait.rs` 的 `Blob` 分支缺 `Result` 包装导致生成代码无法编译。
+- **状态**：`DECIDED (P1-006 已验证)` —— 详细证据见 `docs/reports/p1-006-rust-sdk.md`。
 
 ---
 
@@ -132,7 +142,8 @@
 - **推荐方案**：方案 1。
 - **决策理由**：方案 2 不可行（见 D-004）；方案 3 会把 Rust 元数据采集绑定到 Node 环境，且 Rust 侧仍需一次生成；方案 1 让“生成”成为显式、可重复、可 diff 的动作，配合 CI 门禁（P1-019）即可避免漏生成。
 - **配套约束**：生成命令必须幂等；生成失败必须非 0 退出且不落半成品；CI 与本地用同一条命令。
-- **状态**：`DECIDED (待验证)` —— 命令的具体形态（独立 crate 二进制 / `cargo xtask` / `just` 脚本）在 P1-007 落地时确定。
+- **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_rust_sdk` / `gen_ts_sdk`）+ `scripts/gen.sh` 一条命令产出两份 SDK」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。命令的最终形态（独立 api-gen crate / xtask）仍归 P1-007。
+- **状态**：`DECIDED (P1-006 已验证；命令最终形态归 P1-007)`
 
 ---
 
@@ -140,12 +151,16 @@
 
 - **问题**：生成的 TS 包与 Rust 客户端源码是否提交到仓库？
 - **可选方案**：
-  1. 入库（提交生成物），CI 校验“重新生成无 diff”。
-  2. 不入库，构建时生成（每个消费者各自生成）。
-- **推荐方案**：方案 1。
-- **决策理由**：入库后可在 PR 中直接看到 API 变更对 SDK 的影响；CI 一致性检查有可比对的基线；WebUI 的本地开发不需要先编译 Rust 生成器。方案 2 会让前端构建依赖 Rust 工具链，且 diff 不可见。
-- **配套约束**：生成文件头部必须带“自动生成，勿手改”；合并冲突时一律重新生成，不手工合并。
-- **状态**：`DECIDED`
+  1. 入库（提交生成物），CI 校验“重新生成无 diff”。（原方案，已废弃）
+  2. 不入库，生成物仅存在于本地构建产物与工作站内，随生成命令重建。
+- **推荐方案**：方案 2（P1-006 修订）。
+- **决策理由**：生成物完全可由服务端 API 定义重现，来源只有 Rust 定义一处；入库会让每次 API 变更都附带大段机器生成 diff，掩盖真实改动。
+- **落位**：
+  - Rust Client SDK 由 `cargo run -p lib-web --example gen_rust_sdk` 写入 `packages/sdk-rust/src/`，且**不生成 Cargo.toml**：`lib-bin-cli` 用 `#[path = "../../../packages/sdk-rust/src/*.rs"]` 把生成文件当作自己的模块引入，避免「path 依赖的 manifest 先于生成存在」的引导死锁。
+  - TypeScript SDK 由 `cargo run -p lib-web --example gen_ts_sdk` 写入 `packages/sdk-ts/`（pnpm workspace 内消费）。
+  - `packages/` 整体被 `.gitignore` 忽略；`scripts/gen.sh` 一条命令产出两份 SDK，且必须在 `cargo build` / `pnpm install` 之前执行。
+- **配套约束**：生成文件头部必须带“自动生成，勿手改”；生成失败必须非 0 退出且不落半成品；不得手工修改生成物，改 API 定义后重新生成。
+- **状态**：`DECIDED (已修订，改为不入库)`
 
 ---
 
@@ -297,6 +312,7 @@
   - 混用会造成 `inventory` 注册的元数据类型跨版本分裂（不同 `framework-proc-core` 版本 → 两套注册表）。
   - 现在不写 `version` 的理由：P1 期间框架仓库会持续新增/修改 crate（先 `framework-proc-rust`，再优雅关闭入口），每次框架侧版本推进都要同步改本仓库的 `version` 声明，属纯噪音；等改动收敛后一次性补上，防漂移能力不失，维护成本最低。
 - **反例警示**：不同版本的 `framework-proc-core` 同时进入依赖图会导致 `ApiMetadata` 类型不统一、注册表分裂，表现为“接口定义了但生成器看不到”。
+- **P1-006 框架变更（回填）**：本地框架在 26.11.0 之后的提交中**删除了 `framework-proc-ts` crate**，并把 TS / Rust 导出统一并入 `framework-proc-core` 的 `ts` / `rust` 特性（`framework-web` 也提供 `ts` / `rust` 转发特性）。因此本项目移除了 `framework-proc-ts` 依赖；`lib-web` 现声明 `framework-proc-core = { features = ["collect", "ts", "rust"] }`。本文档其他位置出现的 `framework-proc-ts` 描述属 26.11.0 时期的历史记录，不再代表当前依赖。
 
 ### P1 依赖版本矩阵
 
@@ -395,6 +411,7 @@
 - **推荐方案**：P1 采用方案 1；若后续需要数据库自增主键，再在 DTO 边界转为字符串（方案 2 作为备选）。
 - **决策理由**：方案 1 让 TS / Rust / SQLite 三侧表示一致，且不需要记住“哪些字段必须 `auto_type`”这一隐性规则；方案 2 正确但增加了“忘记包装就出错”的陷阱。P1 的 Mock 阶段正好可以低成本确立这个约定。
 - **状态**：`DECIDED`（P1-005 与 P1-010 执行时若发现与框架冲突，回填变更）
+- **P1-005 / P1-006 实测回填**：`auto_type` 的 `i64` 字段在 TS 生成物里是 `string`、在 Rust 生成物里仍是 `i64` + `#[serde_as(as = "DisplayFromStr")]`，两侧 wire 上都是字符串，因此“标注与运行时一致”在方案 2 下成立。探针 DTO 故意保留 `i64`（`ProbeEchoPO.id`、`ProbeQueryPO.size` 等）用于验证该映射；**正式业务 DTO 仍按本决策使用 `String`**。
 
 ---
 
