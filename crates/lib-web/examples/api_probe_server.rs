@@ -3,14 +3,14 @@
 //! 启动后按 `lib_web::probe` 的路径提供服务：
 //!
 //! ```text
-//! cargo run -p lib-web --example api_probe_server            # 默认 127.0.0.1:8799
+//! cargo run -p lib-web --example api_probe_server            # 默认 127.0.0.1:20103
 //! AGENT_PROBE_PORT=9000 cargo run -p lib-web --example api_probe_server
 //! ```
 
 use framework_web_axum::axum_builder;
 
 /// 默认监听端口。
-const DEFAULT_PORT: i32 = 8799;
+const DEFAULT_PORT: i32 = 20103;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
