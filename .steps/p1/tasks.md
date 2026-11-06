@@ -8,7 +8,7 @@
 
 ## Batch A：工程基线与契约可行性
 
-- [ ] **P1-001 仓库与工具链勘察（阻塞：framework-* 获取方式未定，见 decisions.md D-015）**
+- [x] **P1-001 仓库与工具链勘察**
 
   - **目标**：在写任何代码之前，把“当前仓库里到底有什么”和“工具链能做什么”变成书面结论，避免盲目覆盖或误判版本。
   - **具体工作**：
@@ -16,13 +16,13 @@
     2. 记录工具链实测版本：rustc / cargo / node / pnpm / npm；确认 edition 2024 与 `framework-*` 的 `rust-version = 1.98.0` 相匹配。
     3. 核实 `framework-proc-web`、`framework-proc-ts`、`framework-proc-core`、`framework-web`、`framework-web-axum` 的可用版本：本地源码仓库 `D:/code/lingting/lingting-rust-framework` 为 26.11.0 全链路；registry 上同样已发布 26.11.0（本机 cargo 缓存仅到 26.8.150，缓存滞后不等于未发布）。
     4. 确认各平台构建前置（Windows 本机、是否需要交叉编译工具、`cargo-zigbuild` 是否可用）。
-    5. 把结论写入 `docs/reports/p1-001-environment.md`（完整勘察报告），版本矩阵与采纳方式同步到 `decisions.md`，并更新 `.steps/README.md` 的“当前开发进度”。
+    5. 把结论写入 `docs/reports/p1-001-environment.md`（完整勘察报告），版本矩阵的版本事实同步到 `decisions.md`，并更新 `.steps/README.md` 的“当前开发进度”。**获取方式的最终取舍与依赖锁定不在本任务内，由 P1-003 定稿。**
   - **前置依赖**：无
   - **交付物**：`docs/reports/p1-001-environment.md`；`decisions.md` 中新增/更新的版本矩阵记录；`.steps/README.md` 进度表更新。
   - **验收标准**：
-    - [ ] 版本矩阵包含全部 `framework-*` crate 的确定版本与获取方式（registry 版本号 或 path 依赖路径）。
-    - [ ] 明确写出 rustc/cargo/node/pnpm 的实测版本，并指出与 `rust-version = 1.98.0` 的匹配结论。
-    - [ ] 无任何源码或 Cargo 文件被提前创建。
+    - [x] 版本矩阵包含全部 `framework-*` crate 的确定版本（registry 发布版本与本地源码版本一致）。**获取方式（registry / path）的取舍不属于本任务验收范围，归入 P1-003 定稿。**
+    - [x] 明确写出 rustc/cargo/node/pnpm 的实测版本，并指出与 `rust-version = 1.98.0` 的匹配结论。
+    - [x] 无任何源码或 Cargo 文件被提前创建。
 
 - [ ] **P1-002 工程骨架与工具链固定**
 
@@ -31,9 +31,9 @@
     1. 创建 `rust-toolchain.toml`（固定 channel，声明 `rustfmt`、`clippy` 组件）。
     2. 创建 `.gitignore`（覆盖 `target`、`node_modules`、`.venv`、前端构建产物、本地配置文件）。
     3. 创建 `rustfmt.toml` 与 Clippy 基线配置（workspace lints）。
-    4. 建立最小 `Cargo.toml`（仅到“能 `cargo build` 通过”的程度；workspace/crate 结构以 `docs/workspace.md` 为准，本任务只要求骨架可构建）。
+    4. 建立最小 `Cargo.toml`（仅到“能 `cargo build` 通过”的程度；workspace/crate 结构以 `docs/workspace.md` 为准，本任务只要求骨架可构建）。**该 `Cargo.toml` 不引入任何 `framework-*` 依赖，依赖锁定由 P1-003 负责。**
     5. 定义本地开发脚本入口（构建 / 生成 / 检查三类命令，脚本内容与命名保持一致）。
-  - **前置依赖**：P1-001
+  - **前置依赖**：P1-001（已完成）。**不依赖 P1-003，也不依赖 D-015（`framework-*` 获取方式）——本任务不引入 `framework-*` 依赖，OPEN 项不阻塞开工。**
   - **交付物**：`rust-toolchain.toml`、`.gitignore`、`rustfmt.toml`、最小 `Cargo.toml`、开发脚本入口。
   - **验收标准**：
     - [ ] `cargo build` 与 `cargo fmt --check` 在干净环境可执行且通过。
@@ -45,7 +45,7 @@
 
   - **目标**：一次性锁定 P1 所需依赖版本，消除 `framework-*` 内部版本错位带来的不可编译风险。
   - **具体工作**：
-    1. 决定 `framework-*` 获取方式：registry 版本 vs `path` 依赖本地源码仓库。若走 registry，确认 26.11.0 是否全部已发布；若走 path，记录后续切回 registry 的条件。
+    1. 定稿 `framework-*` 获取方式：registry 版本 vs `path` 依赖本地源码仓库（**该决策由 P1-001 归入本任务**）。P1-001 已核实 registry 上 26.11.0 全量已发布、本地源码同为 26.11.0，两条路径都成立；若走 path，记录后续切回 registry 的条件。
     2. 锁定版本：`axum 0.8`、`tokio 1.52`、`clap 4.6`、`reqwest`、`ratatui`、`serde`、`serde_json`、`specta =2.0.0-rc.25`（`framework-proc-core` 硬约束）、`specta-typescript 0.0.12`。
     3. 校验 feature 传递：`framework-web/collect` → `framework-proc-web/collect`、`framework-proc-ts/collect` → `framework-proc-core/collect`，明确哪一侧（服务端 / 生成器）需要显式开启。
     4. 记录 `inventory` 注册机制的副作用（trait object 静态注册、仅 `collect` 下生效）对构建方式的影响。
@@ -56,6 +56,7 @@
     - [ ] `cargo build` 在锁定版本下通过，`Cargo.lock` 已生成。
     - [ ] 不存在同一 `framework-*` crate 的多个版本被同时解析进依赖图（以 `cargo tree -d` 输出为证据）。
     - [ ] 每个锁定版本在 `decisions.md` 中都有“为什么是它”的一句理由。
+    - [ ] `framework-*` 获取方式（registry / path）已在 `decisions.md` 中定稿，D-015 由 `OPEN` 改为 `DECIDED`；若选 path，切回 registry 的条件已写明。
 
 - [ ] **P1-004 技术验证：framework-proc-web 服务端 API 定义**
 
