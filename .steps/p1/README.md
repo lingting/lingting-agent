@@ -103,13 +103,13 @@ P1 的目标不是做出 Agent，而是把「单 Binary + Server/Client + 统一
 优先级（高 → 低）
 1. 命令行参数     --server http://127.0.0.1:20100
 2. 环境变量       AGENT_SERVER_ADDR
-3. 配置文件       <config_dir>/agent/config.toml  [server] addr
+3. 配置文件       <应用根目录>/config.toml  [server] addr
 4. 内置默认值      http://127.0.0.1:20100
 ```
 
 配套约束：
 
-- 配置目录使用跨平台目录约定（Windows `%APPDATA%`，Linux `~/.config`，macOS `~/Library/Application Support`），P1 定名并写入 `decisions.md`。
+- 配置位置由 `framework-core` 的 `ApplicationDirectory` 推导为应用根目录（Windows `%USERPROFILE%\.lingting\agent`），配置文件是根目录下的 `config.toml`；目录命名与位置见 `decisions.md` D-012，服务端已按此落地。
 - 端口冲突时 `agent server` 应报错退出并提示可用端口，不静默改用随机端口（随机端口会破坏客户端默认寻址）。
 - 若后续需要“自动发现”，以 server 写端口文件的方式演进，P1 只预留，不实现。
 

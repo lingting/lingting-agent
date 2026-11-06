@@ -467,6 +467,7 @@ CLI 公共组件，同时承载客户端的共享能力。
 - 生成的 Rust SDK 接入。
 - 客户端连接管理。
 - 客户端错误处理。
+- 配置装载（Server 地址、端口与日志级别，见 `docs/develop.md`）。
 
 边界：不负责 Agent Runtime；不直接调用 LLM Provider；不执行业务逻辑。
 
@@ -495,6 +496,7 @@ Web Server 启动与 WebUI 资源管理。
 - Server Bootstrap。
 - Web Router 启动。
 - API 挂载。
+- 请求日志的 trace id 作用域（`x-trace-id` 的透传由框架分发层负责）。
 - WebUI 静态资源。
 - Graceful Shutdown。
 - Web Server 生命周期。
@@ -597,9 +599,9 @@ manager-agent -> service-agent
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-tool`、`agent-route`、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web` | `lib-web`、业务 Service、Agent Runtime |
 | `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除） | `lib-bin-*`、`bin-*` |
-| `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | Clap、Reqwest、Serde、`serde_with` | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖） |
+| `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | Clap、Reqwest、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber` | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui | Agent Runtime、服务端业务实现 |
-| `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
+| `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `framework-web`、`framework-web-axum`、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |

@@ -31,6 +31,39 @@
 - 端口冲突时直接报错退出，不静默改用随机端口。
 - 端口变更必须同时更新本表与 `.steps/p1/decisions.md` 的 D-022。
 
+## 配置装载
+
+服务端配置按「命令行 > 环境变量 > 配置文件 > 默认值」装载（D-012）。
+
+| 项 | 说明 |
+|---|---|
+| 配置文件 | `<应用根目录>/config.toml`，内容为 `[server]` 下的 `addr` / `port` / `log_level`；文件不存在时全部取默认值 |
+| 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
+| 环境变量 | `AGENT_SERVER_ADDR`（接受 `host` / `host:port` / `http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL` |
+| 默认值 | 监听 `127.0.0.1:20100`，日志级别 `info` |
+| 目录字段 | `lib-core` 的 `AppDirectories`：`data`、`config_file`、`logs_server`、`logs_cli`、`logs_tui` |
+
+约定：
+
+- `--port 0` 视为参数错误：框架对 0 端口会改用随机端口，破坏客户端默认寻址（D-022）。
+- 配置文件解析失败按参数错误处理，错误信息包含文件路径。
+
+## 日志
+
+- 初始化入口只有 `lib_core::logger` 的 `init_server` / `init_cli` / `init_tui`：调用方传入 `LevelFilter`，并让返回的 `LoggingGuard` 存活到进程退出。
+- 目录：服务端 `logs`、CLI `logs-cli`、TUI `logs-tui`，与 `config.toml`、`data/` 同级（D-023）。
+- 服务端与 CLI 同时输出控制台；TUI 只写文件（控制台日志会破坏界面）。
+- 归档保留 2 天，不写 `combined.log`。
+- 文件日志为纯文本，控制台带 ANSI 颜色，两者除颜色外文字一致。
+
+## 退出码
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 正常退出（含 `--help` / `--version`） |
+| 1 | 运行错误（监听失败、运行期错误） |
+| 2 | 参数或配置错误（clap 解析失败、配置文件无法解析、端口为 0 等） |
+
 ## SDK 生成
 
 客户端 SDK（Rust / TypeScript）全部由服务端 API 定义生成，**不允许手写**。

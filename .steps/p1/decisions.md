@@ -41,6 +41,7 @@
 | D-020 | P1 跨平台构建策略 | OPEN |
 | D-021 | 参数提取与错误响应约束 | DECIDED (已实测) |
 | D-022 | 固定端口分配 | DECIDED |
+| D-023 | 日志目录与归档策略 | DECIDED |
 
 ---
 
@@ -261,8 +262,12 @@
 - **推荐方案**：方案 1 为主，方案 3 作为将来“多实例/随机端口”时的扩展，P1 只预留不实现。
 - **决策理由**：方案 1 对开发者与最终用户都直观；方案 2 缺少持久化默认值，用户每次都要传参；方案 3 在 P1 无多实例需求时属于过度设计。
 - **配套约束**：`agent server` 不得静默使用随机端口；端口冲突必须报错退出。
-- **待定**：配置目录名的最终取值（`agent` / `personal-agent`）、配置文件是否与未来 P2 的 SQLite 放在同一目录。
-- **状态**：`DECIDED`（优先级已定；目录命名细节随 P1-008 确定）
+- **P1-008 落地（目录与配置文件）**：
+  1. 应用根目录取 `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`，即 Windows `%USERPROFILE%\.lingting\agent`、Linux/macOS `$HOME/.lingting/agent`；debug 构建取可执行文件同级的 `runtime` 目录。不使用 `%APPDATA%`。
+  2. 配置文件为 `<应用根目录>/config.toml`（`lib-core` 的 `AppDirectories::config_file`），只存路径、不预创建；数据目录为 `<应用根目录>/data`，P2 的 SQLite 预期落该目录，与配置文件不同层级。
+  3. 服务端专属环境变量：`AGENT_SERVER_ADDR`（接受 `host`、`host:port`、`http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL`；配置文件键为 `[server] addr` / `port` / `log_level`；优先级仍是命令行 > 环境变量 > 配置文件 > 默认值，默认 `127.0.0.1:20100`。
+  4. 日志目录与配置/数据同级：`logs`（服务端）、`logs-cli`、`logs-tui`（见 D-023）。
+- **状态**：`DECIDED`（优先级、目录命名与配置文件位置均已定）
 
 ---
 
@@ -324,8 +329,9 @@
 |---|---|---|
 | `framework-*`（core / web / web-axum / proc-*） | `path`（暂不带 `version`，`framework-proc-rust` 完成后补） | 见上：改动需即时生效；`version` 约束推迟到框架改动收敛，避免每轮框架改动都要同步本仓库声明 |
 | `axum` | `0.8` | 必须与 `framework-web-axum` 内部依赖同一大版本，否则同一次构建会出现两个 axum（框架不支持 0.7，0.9 尚未发布） |
-| `tokio` | `1.52`（`rt-multi-thread`、`sync`、`time`、`macros`） | 与框架 workspace 对齐；`net` 由 `framework-web-axum` 自行开启，本仓库不重复声明 |
+| `tokio` | `1.52`（`rt-multi-thread`、`sync`、`time`、`macros`；`lib-bin-web` 额外开 `net`） | 与框架 workspace 对齐；`net` 供 `lib-bin-web` 自建运行时启用 IO driver（`axum::serve` 需要），其余 crate 不重复声明 |
 | `clap` | `4.6`（`derive`） | 4.x 当前维护线；P1 只用 derive 定义子命令，`env` 等 feature 等真正需要时再开 |
+| `toml` | `0.9` | 解析 `<应用根目录>/config.toml`（D-012），只做 serde 反序列化；`serde_json` 无法覆盖 TOML 语法 |
 | `reqwest` | `0.13`（`json`、`stream`） | 客户端 Transport 用；`stream` 是 SSE 增量读取的前提；默认 `default-tls` 已是 rustls，与本机其他 Rust 项目保持一致，避免同机多版本 |
 | `ratatui` | `0.30` | 0.30 是当前稳定线，默认 feature 已含 crossterm 后端，TUI 不额外引后端 crate |
 | `serde` | `1.0`（`derive`） | 与框架 workspace 一致，DTO 序列化与框架元数据共用 |
@@ -480,6 +486,22 @@
   1. 端口冲突必须报错退出，不得静默改用随机端口。
   2. 端口表在 `docs/develop.md` 与本节各留一份，修改时必须同时更新。
   3. API 探针示例的默认端口已对齐到 `20103`（`crates/lib-web/examples/api_probe_server.rs`），仍可被环境变量 `AGENT_PROBE_PORT` 覆盖。
+- **状态**：`DECIDED`
+
+---
+
+## D-023 日志目录与归档策略
+
+- **问题**：服务端、CLI、TUI 的日志如何分目录、保留多久、控制台与文件的格式如何对齐？
+- **背景**：三个运行模式可能同时存在（server 常驻 + CLI/TUI 客户端），共用同一批日志文件会互相覆盖；归档保留过久会长期占用用户目录空间。
+- **决策**：
+  1. 日志目录与配置/数据同级且互不复用：服务端 `logs`、CLI `logs-cli`、TUI `logs-tui`，统一由 `lib-core` 的 `AppDirectories` 提供（`logs_server` / `logs_cli` / `logs_tui`）。
+  2. 归档保留 2 天（框架默认 7 天）；关闭 `combined.log`（与单级别日志重复写盘），只保留单级别文件。
+  3. 控制台输出：服务端与 CLI 开启（stdout），TUI 关闭（会破坏界面渲染）；三者都写各自日志目录。
+  4. 控制台带 ANSI 颜色，文件层独立格式化 span 字段（`framework-core` 的 `FileFields`），两侧除颜色外文字一致。
+  5. 日志初始化入口收敛在 `lib-core` 的 `logger`：`init_server` / `init_cli` / `init_tui`，调用方只传级别并持有返回的守卫。
+- **决策理由**：分目录避免多进程抢同一批文件；2 天归档与关闭 combined 控制用户目录占用；入口收敛避免各入口重复拼装 `LoggingConfig`。
+- **代价**：日志分散在三个目录，排查跨模式问题需分别查看；2 天保留对长期归档场景偏短。
 - **状态**：`DECIDED`
 
 ---

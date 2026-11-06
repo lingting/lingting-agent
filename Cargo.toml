@@ -61,6 +61,7 @@ strum_macros = { version = "0.28" }
 blake3 = { version = "1.8" }
 url = { version = "2.5", features = ["serde"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "macros"] }
+toml = "0.9"
 axum = { version = "0.8" }
 clap = { version = "4.6", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
@@ -103,6 +104,7 @@ quote = { version = "1.0" }
 syn = { version = "2.0", features = ["full"] }
 inventory = "0.3"
 futures-util = "0.3"
+thiserror = "2.0"
 
 # Workspace 级 lint 基线：所有成员 crate 通过 `[lints] workspace = true` 继承。
 [workspace.lints.rust]

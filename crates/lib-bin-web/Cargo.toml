@@ -14,5 +14,11 @@ lib-core = { workspace = true }
 lib-web = { workspace = true }
 lib-web-core = { workspace = true }
 
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+framework-web = { workspace = true }
+framework-web-axum = { workspace = true }
+
 [lints]
 workspace = true
