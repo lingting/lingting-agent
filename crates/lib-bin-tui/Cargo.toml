@@ -1,0 +1,17 @@
+[package]
+name = "lib-bin-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "TUI 公共组件"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-bin-cli = { workspace = true }
+lib-core = { workspace = true }
+
+[lints]
+workspace = true

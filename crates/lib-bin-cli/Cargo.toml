@@ -1,0 +1,17 @@
+[package]
+name = "lib-bin-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CLI 公共组件与客户端共享能力"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+types-core = { workspace = true }
+
+[lints]
+workspace = true

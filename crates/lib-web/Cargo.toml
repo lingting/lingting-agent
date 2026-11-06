@@ -1,0 +1,19 @@
+[package]
+name = "lib-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "服务端 HTTP API"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+lib-web-core = { workspace = true }
+service-core = { workspace = true }
+types-core = { workspace = true }
+
+[lints]
+workspace = true

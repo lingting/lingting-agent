@@ -1,0 +1,13 @@
+[package]
+name = "lib-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "跨 Crate 的公共基础能力"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

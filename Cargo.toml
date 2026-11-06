@@ -1,0 +1,112 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bin-agent",
+    "crates/lib-core",
+    "crates/lib-web-core",
+    "crates/lib-web",
+    "crates/lib-bin-cli",
+    "crates/lib-bin-tui",
+    "crates/lib-bin-web",
+    "crates/types-core",
+    "crates/service-core",
+]
+
+[workspace.package]
+version = "26.11.0"
+edition = "2024"
+rust-version = "1.98.0"
+authors = ["lingting"]
+description = "lingting agent"
+license = "MIT"
+repository = "https://github.com/lingting/lingting-agent"
+
+[workspace.dependencies]
+
+# 内部 crate
+bin-agent = { path = "crates/bin-agent" }
+lib-core = { path = "crates/lib-core" }
+lib-web-core = { path = "crates/lib-web-core" }
+lib-web = { path = "crates/lib-web" }
+lib-bin-cli = { path = "crates/lib-bin-cli" }
+lib-bin-tui = { path = "crates/lib-bin-tui" }
+lib-bin-web = { path = "crates/lib-bin-web" }
+types-core = { path = "crates/types-core" }
+service-core = { path = "crates/service-core" }
+
+framework-bus = { version = "26.11.0" }
+framework-core = { version = "26.11.0" }
+framework-datetime = { version = "26.11.0" }
+framework-startup = { version = "26.11.0" }
+framework-system = { version = "26.11.0" }
+framework-region = { version = "26.11.0" }
+framework-proc-auto = { version = "26.11.0" }
+framework-proc-core = { version = "26.11.0" }
+framework-proc-ts = { version = "26.11.0" }
+framework-timer = { version = "26.11.0" }
+framework-proc-timer = { version = "26.11.0" }
+
+aes = { version = "0.8" }
+base64 = { version = "0.22" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+serde_with = { version = "3.21" }
+specta = { version = "=2.0.0-rc.25", features = ["derive", "function", "bytes"] }
+specta-typescript = { version = "0.0.12" }
+specta-serde = { version = "0.0.12" }
+strum = { version = "0.28" }
+strum_macros = { version = "0.28" }
+blake3 = { version = "1.8" }
+url = { version = "2.5", features = ["serde"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "macros"] }
+axum = { version = "0.8" }
+anyhow = "1.0"
+regex = { version = "1.12" }
+chrono = { version = "0.4" }
+log = { version = "0.4" }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+bytes = { version = "1.11" }
+flate2 = { version = "1.1" }
+cbc = { version = "0.1" }
+cipher = { version = "0.4" }
+rand = { version = "0.8" }
+hmac = { version = "0.12" }
+sha1 = { version = "0.10" }
+md-5 = { version = "0.10" }
+wreq = { version = "0.16", features = ["socks"] }
+rsntp = { version = "4.1", default-features = false }
+sha2 = { version = "0.10" }
+async-trait = { version = "0.1" }
+arc-swap = { version = "1.8" }
+dashmap = { version = "6.1" }
+cef = { version = "149.3.0" }
+tao = { version = "0.35" }
+libc = "0.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sqlx = { version = "0.8", default-features = false, features = ["any", "json", "macros", "runtime-tokio-rustls", "sqlite"] }
+proc-macro2 = { version = "1.0" }
+quote = { version = "1.0" }
+syn = { version = "2.0", features = ["full"] }
+inventory = "0.3"
+futures-util = "0.3"
+
+# Workspace 级 lint 基线：所有成员 crate 通过 `[lints] workspace = true` 继承。
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+

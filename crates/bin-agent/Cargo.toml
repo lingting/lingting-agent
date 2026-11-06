@@ -1,0 +1,19 @@
+[package]
+name = "bin-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "lingting agent 单 Binary 入口"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-bin-cli = { workspace = true }
+lib-bin-tui = { workspace = true }
+lib-bin-web = { workspace = true }
+lib-core = { workspace = true }
+
+[lints]
+workspace = true

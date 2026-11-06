@@ -1,0 +1,18 @@
+[package]
+name = "lib-bin-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Web Server 启动与 WebUI 资源管理"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+lib-web = { workspace = true }
+lib-web-core = { workspace = true }
+
+[lints]
+workspace = true

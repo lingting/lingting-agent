@@ -1,0 +1,16 @@
+[package]
+name = "types-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "通用领域类型"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+
+[lints]
+workspace = true

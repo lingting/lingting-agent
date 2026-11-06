@@ -1,0 +1,17 @@
+[package]
+name = "service-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "通用核心业务服务"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+types-core = { workspace = true }
+
+[lints]
+workspace = true
