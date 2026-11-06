@@ -116,23 +116,24 @@
     - [x] 若某项能力最终未实现，必须在 `decisions.md` 中明确降级方案（例如退回 OpenAPI 生成），不得静默放弃。
     - **实测结论**：生成器为 `cargo run -p lib-web --example gen_rust_sdk`，产物落 `packages/sdk-rust/src`（不入库、不生成 `Cargo.toml`，`lib-bin-cli` 用 `#[path]` 引入）；DTO 走“自带快照定义”策略；已知差异与未实现项（reqwest Transport 实现、流式返回、路径参数）见 `docs/reports/p1-006-rust-sdk.md` 与 D-003。
 
-- [ ] **P1-007 API 契约单一来源与生成流程固化**
+- [x] **P1-007 API 契约单一来源与生成流程固化**
 
   - **目标**：把 P1-004 ~ P1-006 的验证结果固化成“唯一来源 + 一条命令 + CI 可校验”的正式流程。
   - **具体工作**：
-    1. 确定 API 定义的唯一来源位置（服务端 API 定义 + DTO 定义），并规定：任何 API 变更必须先改这里。
-    2. 固化生成命令（如 `cargo run -p <api-gen>` 或 `cargo xtask gen-sdk`），一条命令同时产出 TS SDK 与 Rust SDK。
-    3. 规定生成物落盘位置、是否入库、包名与版本号规则、生成物头部标记（“自动生成，勿手改”）。
-    4. 规定生成失败的构建行为：生成器失败必须让命令以非 0 退出，不得写出半成品。
-    5. 规定 API 命名规范：path 前缀（如 `/api/`）、资源命名、动作动词（`create` / `list` / `cancel`）、DTO 命名后缀（`*Params` / `*VO`）、SSE 事件命名。
-    6. 规定 API 版本管理初版策略（path 前缀 `/api/v1` 或 header，二选一并记录；P1 只需预留，不实现多版本并存）。
-    7. 更新 `decisions.md` 中 D-004、D-005、D-006 的状态。
+    1. 唯一来源：服务端 `#[web_api_*]` handler 与 `#[auto_type]` / `#[auto_enum]` DTO，位于 `crates/lib-web/src/`；任何 API 变更必须先改这里。
+    2. 固化生成命令：根 `Makefile` 的 `make gen`，一条命令顺序产出 TS SDK 与 Rust SDK；`scripts/` 已删除，Makefile 是唯一命令入口。
+    3. 生成物落位 `packages/sdk-rust/src`（`#[path]` 引入）与 `packages/sdk-ts`（pnpm workspace 消费）；**不入库**，因此不存在“提交生成物”步骤；npm 包名 `@lingting/agent-api`，版本由 `CARGO_PKG_VERSION` 同步 workspace 版本；Rust 侧头部写“自动生成，请勿手动修改”，TS 侧为框架写入的 Specta do-not-edit 标记。
+    4. 失败行为：全部校验与源码构建先于写盘完成；写盘先落同级暂存目录（`.gen-tmp`），成功后才整体替换目标目录；失败以非 0 退出并保留上一次产物。
+    5. 命名规范：path 前缀 `api/`（不带版本段）；资源段小写单数名词、多词用 `-`；动作动词固定为 `create` / `update` / `delete` / `get` / `list` / `cancel`；请求体 `*PO`、查询参数 `*Params`、响应 `*VO`、枚举 `<业务名>Kind`；SSE 事件 P1 未建模（D-007），事件名字段统一 `event`。规范写入 `docs/develop.md`「API 契约规范」。
+    6. 版本策略：P1 不做版本化，path 保持 `api/...`，不预留 `/api/v1`；将来引入多版本时用 path 前缀而非请求头（D-019 已 DECIDED）。
+    7. `decisions.md` 的 D-004、D-005、D-006、D-019 已回填并置为 DECIDED。
   - **前置依赖**：P1-005、P1-006
-  - **交付物**：生成命令；命名规范与版本策略文档化条目；生成物目录约定。
+  - **交付物**：`Makefile` 生成入口；`docs/develop.md`「API 契约规范」；`docs/reports/p1-007-api-contract.md`；生成物目录约定。
   - **验收标准**：
-    - [ ] 单命令可从零产出两份 SDK，过程中不需要任何手工步骤。
-    - [ ] 文档写清了“改 API 的完整步骤”（改定义 → 跑生成 → 提交生成物）。
-    - [ ] 生成器在元数据非法时以非 0 退出。
+    - [x] 单命令 `make gen` 可从零产出两份 SDK，过程中不需要任何手工步骤。
+    - [x] 文档写清了“改 API 的完整步骤”（改定义 → 跑生成 → `make check` / `make build`；生成物不入库，无提交生成物步骤）。
+    - [x] 生成器在元数据非法时以非 0 退出（校验先于写盘，失败保留上一次产物）。
+  - **实测结论**：`make gen` 连续执行幂等；暂存目录 `.gen-tmp` 成功后清理、失败时旧产物保持可用；`make check` 通过。详见 `docs/reports/p1-007-api-contract.md`。
 
 ---
 
@@ -339,7 +340,7 @@
   - **具体工作**：
     1. 实现一致性检查命令：重新生成 → 与工作区生成物比对 → 有差异即失败并输出 diff 摘要。
     2. 把检查接入构建/CI 流水线（Rust 检查 + 生成物一致性 + 前端静态类型检查）。
-    3. 明确失败提示文案：指出“API 定义已变更，请运行 <命令> 重新生成并提交”。
+    3. 明确失败提示文案：指出“API 定义已变更，请运行 `make gen` 重新生成”（生成物不入库，不提示提交）。
     4. 规定生成物的 merge 策略（生成物冲突时重新生成，不手工合并）。
     5. 记录 CI 步骤与本地步骤的等价性（同一命令，避免“本地过 CI 不过”）。
   - **前置依赖**：P1-007、P1-018

@@ -8,6 +8,10 @@ indent_style = space
 indent_size = 4
 trim_trailing_whitespace = true
 
+# Makefile 的 recipe 必须用 tab 缩进
+[Makefile]
+indent_style = tab
+
 [*.{json,yml,yaml,toml}]
 indent_size = 2
 

@@ -1,5 +1,5 @@
 # pnpm workspace：WebUI 工程与仓库内生成的 npm 包共用一套依赖解析。
-# 生成的 SDK 包位于 ../packages/（不入库，先跑 `scripts/gen.sh`），
+# 生成的 SDK 包位于 ../packages/（不入库，先跑 `make gen`），
 # WebUI 通过 `"<包名>": "workspace:"` 引入。
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.6

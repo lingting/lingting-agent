@@ -39,7 +39,7 @@
 
 - **Cargo Workspace 骨架**：`bin-agent` + `lib-*` + `types-core` + `service-core` 共 9 个成员 crate，无业务逻辑。
 - **服务端 API 探针**：7 个探针接口，`cargo run -p lib-web --example api_probe_server` 可启动。
-- **客户端 SDK 生成链路**：`scripts/gen.sh` 从服务端 API 定义生成 Rust 与 TypeScript 两份 SDK（`packages/sdk-rust`、`packages/sdk-ts`，均不入库）。
+- **客户端 SDK 生成链路**：`make gen` 由服务端 API 定义生成 Rust 与 TypeScript 两份 SDK（`packages/sdk-rust`、`packages/sdk-ts`，均不入库）。
 - **尚未实现**：CLI / TUI / WebUI 的实际功能、Agent Runtime、持久化、鉴权与业务接口。
 
 ## 文档索引

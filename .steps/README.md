@@ -92,8 +92,8 @@ P6 Production Readiness
 | Rust 工具链 | rustc 1.98.0 / cargo 1.98.0 |
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
 | framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
-| SDK 生成 | `scripts/gen.sh` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `cargo build` / `pnpm install` 之前执行** |
-| P1 | 进行中：P1-001 ~ P1-006 已完成；下一个 P1-007（API 契约单一来源与生成流程固化） |
+| SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
+| P1 | 进行中：P1-001 ~ P1-007 已完成；下一个 P1-008（Server 运行时骨架） |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
 ---

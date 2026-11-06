@@ -1,5 +1,20 @@
 # 开发规范
 
+## 开发命令（Makefile）
+
+根目录 `Makefile` 是唯一命令入口，不再提供 `scripts/` 脚本；需在 Git Bash 中执行（recipe 使用 POSIX sh）。
+
+| 命令 | 作用 |
+|------|------|
+| `make gen` | 由服务端 API 定义生成 Rust / TS 两份客户端 SDK（产物落 `packages/`，不入库） |
+| `make build` | 编译 workspace 全部成员；`ARGS` 透传，如 `make build ARGS="--release"` |
+| `make check` | `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings`，不执行测试 |
+| `make fmt` | `cargo fmt --all` |
+| `make clean-gen` | 删除生成物目录 `packages/` |
+| `make ui-install` / `make ui-dev` / `make ui-build` / `make ui-lint` | 在 `lingting-agent-ui/` 内执行对应 pnpm 脚本 |
+
+`make help` 的文本放在 `.make/help.txt`：make 在 Windows 上按 ANSI 代码页解析 Makefile，中文写在 Makefile 的 recipe 里会变成乱码。
+
 ## 固定端口
 
 项目各进程一律使用固定端口，不使用随机端口。
@@ -22,20 +37,50 @@
 
 | 项 | 说明 |
 |---|---|
-| 生成命令 | `scripts/gen.sh`（内部依次执行 `cargo run -p lib-web --example gen_rust_sdk` 与 `gen_ts_sdk`） |
+| 生成命令 | `make gen`（内部依次执行 `cargo run -p lib-web --example gen_rust_sdk` 与 `gen_ts_sdk`） |
 | Rust 产物 | `packages/sdk-rust/src/{types,enums,api}.rs`，由 `lib-bin-cli` 用 `#[path]` 作为自身模块引入 |
 | TS 产物 | `packages/sdk-ts/`（npm ESM 包），由 `lingting-agent-ui/pnpm-workspace.yaml` 的 `../packages/*` 引入 |
-| 是否入库 | **不入库**（`packages/` 被 `.gitignore` 忽略，D-006 已修订） |
-| 生成文件头 | 自动生成标记 + `#![allow(warnings)]`，禁止手改 |
+| 是否入库 | **不入库**（`packages/` 被 `.gitignore` 忽略，D-006）；改 API 后重新生成即可，没有“提交生成物”步骤 |
+| 生成文件头 | Rust 侧写“自动生成，请勿手动修改” + `#![allow(warnings)]`；TS 侧由框架写入 Specta 的 do-not-edit 标记 |
+| 失败行为 | 校验与源码构建先于写盘完成；写盘先落同级暂存目录（`.gen-tmp`），成功后才整体替换目标目录，失败以非 0 退出并保留上一次产物 |
 
 执行顺序约束（重要）：
 
-1. 干净 checkout 后**先**跑 `scripts/gen.sh`，再 `cargo build`；否则 `lib-bin-cli` 编译期找不到生成文件，报
+1. 干净 checkout 后**先**跑 `make gen`，再 `make build`；否则 `lib-bin-cli` 编译期找不到生成文件，报
    `couldn't read .../packages/sdk-rust/src/api.rs`。
-2. 前端侧同样先 `scripts/gen.sh`，再在 `lingting-agent-ui/` 内执行 `pnpm install`；否则 `workspace:*` 解析不到 `packages/sdk-ts`。
+2. 前端侧同样先 `make gen`，再 `make ui-install`；否则 `workspace:*` 解析不到 `packages/sdk-ts`。
 3. 改了服务端 API 定义（`crates/lib-web` 下的 DTO / handler）后必须重新生成，不得手改生成物。
 
-生成器当前是 `lib-web` 的 example（临时形态），命令与产物的最终形态由 `.steps/p1/tasks.md` P1-007 固化。
+生成器当前是 `lib-web` 的 example（`crates/lib-web/examples/gen_{rust,ts}_sdk.rs`，输出目录处理在 `examples/support/sdk_out.rs`）；命令入口已由 P1-007 固化为根 `Makefile`。
+
+## API 契约规范
+
+**单一来源**：服务端 `#[web_api_*]` 标注的 handler 与 `#[auto_type]` / `#[auto_enum]` 标注的 DTO，全部位于 `crates/lib-web/src/`。客户端 SDK 完全由此生成，不存在第二份手写 API 定义。任何 API 变更先改这里。
+
+### 改 API 的完整步骤
+
+1. 改 `crates/lib-web/src/` 下的 handler 与 DTO。
+2. `make gen` 重新生成两份 SDK；生成失败按提示修定义，不手改生成物。
+3. `make check`（格式 + Clippy）与 `make build`（生成代码参与编译）通过。
+4. 前端侧 `make ui-install` / `make ui-lint`；生成物不入库，提交里只有 API 定义与消费方代码。
+
+### 命名规范
+
+| 项 | 规范 |
+|---|---|
+| path 前缀 | 统一 `api/` 开头，不带版本段（见下） |
+| path 资源段 | 小写单数名词，多词用 `-` 连接，如 `api/probe/echo` |
+| path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel`，不造同义动词 |
+| 元数据名 | 由 handler 函数名（snake_case）派生，两侧 SDK 的标识符同源派生，不手工改 |
+| 请求 DTO | 请求体 `*PO`，查询参数 `*Params` |
+| 响应 DTO | `*VO` |
+| 枚举 | `<业务名>Kind`（与框架 `RCodeKind` 一致），生成侧为同名结构 + `<NAME>_ALL` / `<NAME>_MAP` 映射 |
+| 字段 | camelCase；id 用 `String`（D-018）；`i64` 在 wire 上以字符串传输（D-018）；查询参数不出现 `bool`（D-021） |
+| SSE 事件 | P1 尚未建模（D-007）：事件端点按 `Blob` 返回，事件类型由服务端枚举生成到两侧 SDK，事件名字段统一 `event` |
+
+### API 版本管理
+
+P1 不引入版本段：path 保持 `api/...`，不预留 `/api/v1`。将来需要多版本并存时采用 path 前缀（`api/v2/...`），不采用请求头版本化；届时按路径整体重排一次（D-019）。
 
 ## 前端工程
 
@@ -45,11 +90,11 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 |---|---|
 | 工程目录 | `lingting-agent-ui/`（`pnpm-workspace.yaml` 在该目录内，`packages` 指向 `../packages/*`） |
 | 技术栈 | React + Vite + TypeScript，UI 组件用 antd 与 `lingting-react-ui`（LRI） |
-| 依赖安装 | 先跑 `scripts/gen.sh`，再在 `lingting-agent-ui/` 内执行 `pnpm install` |
-| 开发启动 | 在 `lingting-agent-ui/` 内执行 `pnpm dev`（固定端口 20101，见本文件端口表） |
+| 依赖安装 | 先跑 `make gen`，再执行 `make ui-install` |
+| 开发启动 | `make ui-dev`（内部在 `lingting-agent-ui/` 执行 `pnpm dev`，固定端口 20101，见本文件端口表） |
 | 后端代理 | 开发服务器把 `^/api/` 代理到 `http://127.0.0.1:20102`，不做路径重写（后端路由自带 `api/` 前缀） |
 | SDK 引入 | 依赖项 `"@lingting/agent-api": "workspace:*"`，指向生成的 `packages/sdk-ts` |
-| 代码检查 | `pnpm run lint`（`vp fmt` + `vp lint --fix` + `tsc --noEmit`，全部在前端目录内执行） |
+| 代码检查 | `make ui-lint`（内部执行 `pnpm run lint`：`vp fmt` + `vp lint --fix` + `tsc --noEmit`） |
 | 缩进 | 2 空格（根 `.editorconfig` 的 `[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]` 段；`[*]` 默认 4 空格只用于 Rust 等） |
 
 ## 待补充

@@ -1,6 +1,6 @@
-//! 由服务端 API 元数据生成 Rust Client SDK 模块（P1-006）。
+//! 由服务端 API 元数据生成 Rust Client SDK 模块（P1-007 固化）。
 //!
-//! 运行：`cargo run -p lib-web --example gen_rust_sdk`
+//! 运行：`make gen`（内部执行 `cargo run -p lib-web --example gen_rust_sdk`）。
 //!
 //! 生成物写入 `packages/sdk-rust/src/`（可用环境变量 `AGENT_SDK_RUST_OUT_DIR` 覆盖），包含
 //! `types.rs`（DTO 定义快照）、`enums.rs`（枚举运行时信息）与 `api.rs`（接口定义 + `ApiClient` trait）。
@@ -19,6 +19,10 @@ use framework_proc_core::{
     RustApiBuilder, RustBuilder, RustEnumBuilder, RustTypeBuilder, api_metadata_iter, enum_metadata_iter,
     type_metadata_iter,
 };
+
+/// 生成器共用的暂存目录与整体替换逻辑（P1-007）。
+#[path = "support/sdk_out.rs"]
+mod sdk_out;
 
 /// 生成物默认输出目录（相对 workspace 根）。
 const DEFAULT_OUT_DIR: &str = "packages/sdk-rust/src";
@@ -57,18 +61,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .type_import_from(TYPES_PATH)
         .build()?;
 
-    fs::create_dir_all(&out_dir)?;
-    write_module(&out_dir, "types", &types.code)?;
-    write_module(&out_dir, "api", &api.code)?;
-    if enums.code.trim().is_empty() {
-        // 枚举被移除时同步清理，保证重复生成后目录内容一致。
-        if out_dir.join("enums.rs").exists() {
-            fs::remove_file(out_dir.join("enums.rs"))?;
-        }
-    } else {
-        write_module(&out_dir, "enums", &enums.code)?;
+    // 先写暂存目录：全部生成成功后再整体替换目标目录，失败时保留上一次的有效产物。
+    let staging = sdk_out::prepare_staging(&out_dir)?;
+    write_module(&staging, "types", &types.code)?;
+    write_module(&staging, "api", &api.code)?;
+    if !enums.code.trim().is_empty() {
+        write_module(&staging, "enums", &enums.code)?;
     }
-    format_modules(&out_dir)?;
+    format_modules(&staging)?;
+    sdk_out::commit_staging(&staging, &out_dir)?;
     println!(
         "生成完成 → {}（由 lib-bin-cli 用 #[path] 引入，不生成 Cargo.toml）",
         out_dir.display()
@@ -89,7 +90,7 @@ fn out_dir() -> PathBuf {
 /// `-D warnings`，因此生成代码不会成为 fmt / clippy / build 的告警来源（真正的编译错误仍会暴露）。
 fn header() -> String {
     [
-        "// 本文件由 `cargo run -p lib-web --example gen_rust_sdk` 自动生成，请勿手动修改。",
+        "// 本文件由 `make gen` 自动生成，请勿手动修改。",
         "// 服务端 API 定义变更后重新执行生成命令；生成物不入库。",
         "",
         "#![allow(warnings)]",

@@ -1,5 +1,7 @@
 # P1-006 Rust Client SDK 生成验证报告
 
+> 命令入口说明：本报告中的 `scripts/gen.sh` / `scripts/check.sh` 是 P1-007 之前的入口，P1-007 起统一为根 `Makefile` 的 `make gen` / `make check`。
+
 本报告是 P1-006 的交付物。结论分三类，逐条标注：
 
 - **实测**：实际执行生成 / 构建命令得到的结论。

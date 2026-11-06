@@ -23,7 +23,7 @@
 | D-002 | TypeScript SDK 生成方式 | DECIDED (已核实) |
 | D-003 | Rust Client SDK 生成方式（新增 `framework-proc-rust`） | DECIDED (待验证) |
 | D-004 | API Schema 唯一来源与元数据获取方式 | DECIDED |
-| D-005 | 代码生成时机 | DECIDED (待验证) |
+| D-005 | 代码生成时机 | DECIDED (P1-007 已固化) |
 | D-006 | 生成物是否纳入版本控制 | DECIDED |
 | D-007 | SSE 与 SDK 的类型化支持 | OPEN |
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
@@ -37,7 +37,7 @@
 | D-016 | 单 Binary 的功能裁剪与体积权衡 | OPEN |
 | D-017 | P1 是否引入 SQLite | DECIDED |
 | D-018 | `i64` 账号/ID 的跨语言表示 | DECIDED |
-| D-019 | API 版本管理策略 | OPEN |
+| D-019 | API 版本管理策略 | DECIDED |
 | D-020 | P1 跨平台构建策略 | OPEN |
 | D-021 | 参数提取与错误响应约束 | DECIDED (已实测) |
 | D-022 | 固定端口分配 | DECIDED |
@@ -128,7 +128,8 @@
   3. 服务端运行时额外提供 `GET /_api/metadata` 接口，由外部脚本抓取后生成（可行但引入运行期依赖，生成需要先启动服务器）。
 - **推荐方案**：方案 1。
 - **决策理由**：唯一来源是 Rust 源码；生成不依赖运行中的服务；生成器就是普通可执行程序，任何环境都能跑；方案 2 技术上不成立；方案 3 把“生成”绑定到“能启动服务器”，在 CI 与首次搭建时很别扭（可作为将来的调试辅助手段，不作为主链路）。
-- **状态**：`DECIDED`
+- **P1-007 回填**：唯一来源固定为 `crates/lib-web/src/` 的 `#[web_api_*]` handler 与 `#[auto_type]` / `#[auto_enum]` DTO；生成入口固定为根 `Makefile` 的 `make gen`；命名与流程规范写在 `docs/develop.md`「API 契约规范」。
+- **状态**：`DECIDED (P1-007 已固化来源与入口)`
 
 ---
 
@@ -142,8 +143,9 @@
 - **推荐方案**：方案 1。
 - **决策理由**：方案 2 不可行（见 D-004）；方案 3 会把 Rust 元数据采集绑定到 Node 环境，且 Rust 侧仍需一次生成；方案 1 让“生成”成为显式、可重复、可 diff 的动作，配合 CI 门禁（P1-019）即可避免漏生成。
 - **配套约束**：生成命令必须幂等；生成失败必须非 0 退出且不落半成品；CI 与本地用同一条命令。
-- **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_rust_sdk` / `gen_ts_sdk`）+ `scripts/gen.sh` 一条命令产出两份 SDK」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。命令的最终形态（独立 api-gen crate / xtask）仍归 P1-007。
-- **状态**：`DECIDED (P1-006 已验证；命令最终形态归 P1-007)`
+- **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_rust_sdk` / `gen_ts_sdk`）顺序执行」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。
+- **P1-007 回填**：命令入口固化为根 `Makefile` 的 `make gen`（不再使用 `scripts/*.sh`，`scripts/` 已删除）；生成器形态仍是 `lib-web` 的 example，不新增独立 crate。失败行为落实为「全部校验与源码构建先于写盘完成；写盘先落同级暂存目录 `.gen-tmp`，成功后整体替换目标目录」，失败以非 0 退出且保留上一次产物。
+- **状态**：`DECIDED (P1-006 已验证；P1-007 已固化命令入口与失败行为)`
 
 ---
 
@@ -158,9 +160,10 @@
 - **落位**：
   - Rust Client SDK 由 `cargo run -p lib-web --example gen_rust_sdk` 写入 `packages/sdk-rust/src/`，且**不生成 Cargo.toml**：`lib-bin-cli` 用 `#[path = "../../../packages/sdk-rust/src/*.rs"]` 把生成文件当作自己的模块引入，避免「path 依赖的 manifest 先于生成存在」的引导死锁。
   - TypeScript SDK 由 `cargo run -p lib-web --example gen_ts_sdk` 写入 `packages/sdk-ts/`（pnpm workspace 内消费）。
-  - `packages/` 整体被 `.gitignore` 忽略；`scripts/gen.sh` 一条命令产出两份 SDK，且必须在 `cargo build` / `pnpm install` 之前执行。
-- **配套约束**：生成文件头部必须带“自动生成，勿手改”；生成失败必须非 0 退出且不落半成品；不得手工修改生成物，改 API 定义后重新生成。
-- **状态**：`DECIDED (已修订，改为不入库)`
+  - `packages/` 整体被 `.gitignore` 忽略；`make gen` 一条命令产出两份 SDK，且必须在 `make build` / `make ui-install` 之前执行。
+- **配套约束**：生成文件头部必须带“自动生成，勿手改”；生成失败必须非 0 退出且不落半成品；不得手工修改生成物，改 API 定义后重新生成；**不存在“提交生成物”步骤**，API 变更的提交只包含定义与消费方代码。
+- **P1-007 回填**：命令入口由 `scripts/gen.sh` 改为根 `Makefile` 的 `make gen`；生成物落位不变，仍不入库；`tasks.md` 中“改定义 → 跑生成 → 提交生成物”的表述已修正为“改定义 → 跑生成”，不再有提交生成物的环节。
+- **状态**：`DECIDED (已修订为不入库；P1-007 已固化命令入口)`
 
 ---
 
@@ -423,9 +426,10 @@
   1. path 前缀（`/api/v1/...`）。
   2. 请求头（`x-api-version`）。
   3. P1 不做版本化，`/api/...` 直接演进。
-- **推荐方案**：P1 采用方案 1 的形式预留，但**不实现多版本并存**（即 v1 只是路径的一部分，尚无 v2 处理器）。
-- **决策理由**：本地 single-user 阶段没有并行版本需求，但路径里留一个版本段成本极低，将来引入 v2 时不必重排全部 path；方案 2 对 SSE 与静态资源场景更麻烦。
-- **状态**：`OPEN`（确认是否值得在 P1 就加 `v1`，或留到 P2 一次到位）
+- **决策**：P1 采用方案 3 —— 不做版本化，path 保持 `api/...`，**不预留** `/api/v1`。
+- **决策理由**：本地 single-user 阶段没有并行版本需求；预留无处理器的 `v1` 段会让所有 path、前端代理与探针用例都背上一个当期无收益的常量。将来确实需要多版本并存时再用方案 1（path 前缀，如 `api/v2/...`）并整体重排一次，成本主要是机械改动；方案 2（请求头）在 SSE 与静态资源场景更麻烦，不作为备选。
+- **P1-007 回填**：P1 的 7 个探针接口全部是 `api/probe/...`，保持不变；`docs/develop.md`「API 契约规范」已记录“path 不带版本段”的现行约定。
+- **状态**：`DECIDED`
 
 ---
 
