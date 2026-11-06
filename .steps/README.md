@@ -92,7 +92,7 @@ P6 Production Readiness
 | Rust 工具链 | rustc 1.98.0 / cargo 1.98.0 |
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
 | framework 版本 | 本地源码 26.11.0；registry 上 `framework-*` 各 crate 同样已发布 26.11.0；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束（`framework-proc-rust` 完成后再补）**，切回 registry 的条件见 `p1/decisions.md` D-015 |
-| P1 | 进行中：P1-001、P1-002、P1-003 已完成；下一个 P1-004（`framework-proc-web` 服务端 API 定义验证） |
+| P1 | 进行中：P1-001、P1-002、P1-003、P1-004 已完成；下一个 P1-005（TypeScript SDK 生成链路验证） |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
 ---

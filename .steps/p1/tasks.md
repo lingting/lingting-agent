@@ -59,7 +59,7 @@
     - [x] 每个锁定版本在 `decisions.md` 中都有“为什么是它”的一句理由。
     - [x] `framework-*` 获取方式（registry / path）已在 `decisions.md` 中定稿，D-015 由 `OPEN` 改为 `DECIDED`；若选 path，切回 registry 的条件已写明。
 
-- [ ] **P1-004 技术验证：framework-proc-web 服务端 API 定义**
+- [x] **P1-004 技术验证：framework-proc-web 服务端 API 定义**
 
   - **目标**：用最小代价确认 `web_api` 宏在真实工程里的行为边界，特别是路径、参数、返回值、路由收集四件事。
   - **具体工作**：
@@ -72,9 +72,10 @@
   - **前置依赖**：P1-003
   - **交付物**：验证用临时 API 定义（验证完成后保留为契约基线，或按结构讨论结果迁移）；`decisions.md` 结论条目。
   - **验收标准**：
-    - [ ] 3 个接口都能被实际 HTTP 调用并返回预期响应。
-    - [ ] 明确指出 REST 风格路径（如 `/api/sessions/{id}`）是否可用，并给出 P1 的替代方案（query 参数 / body 字段）。
-    - [ ] 参数错误时的响应结构被记录成一份可复制的样例（含状态码与 `R{code,message}` 取值）。
+    - [x] 3 个接口都能被实际 HTTP 调用并返回预期响应（探针共 7 个，见 `docs/reports/p1-004-api-probe.md`）。
+    - [x] 明确指出 REST 风格路径（如 `/api/sessions/{id}`）是否可用，并给出 P1 的替代方案（query 参数 / body 字段）。
+    - [x] 参数错误时的响应结构被记录成一份可复制的样例（含状态码与 `R{code,message}` 取值）。
+    - **实测结论**：`collect` 必须开启（关闭后无手动挂载路径）；消费路由/元数据的二进制必须引用 `lib_web::web_routes()` 作为链接锚点；`auth` 默认值不触发鉴权（D-014 已定案）；参数与错误响应约束见 D-021。探针接口保留在 `crates/lib-web/src/probe`，探针服务为 `cargo run -p lib-web --example api_probe_server`。
 
 - [ ] **P1-005 技术验证：TypeScript SDK 生成链路**
 

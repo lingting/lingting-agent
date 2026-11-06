@@ -1632,13 +1632,19 @@ dependencies = [
 name = "lib-web"
 version = "26.11.0"
 dependencies = [
+ "anyhow",
+ "framework-proc-auto",
  "framework-proc-core",
  "framework-proc-ts",
  "framework-web",
  "framework-web-axum",
  "lib-core",
  "lib-web-core",
+ "serde",
+ "serde_with",
  "service-core",
+ "specta",
+ "tokio",
  "types-core",
 ]
 

@@ -32,13 +32,14 @@
 | D-011 | TUI 与 Server 的连接管理 | OPEN |
 | D-012 | Server 地址配置与发现 | DECIDED |
 | D-013 | 优雅关闭实现方式 | OPEN |
-| D-014 | 鉴权策略 | OPEN |
+| D-014 | 鉴权策略 | DECIDED (已实测) |
 | D-015 | `framework-*` 依赖引入方式与版本矩阵 | DECIDED (已核实) |
 | D-016 | 单 Binary 的功能裁剪与体积权衡 | OPEN |
 | D-017 | P1 是否引入 SQLite | DECIDED |
 | D-018 | `i64` 账号/ID 的跨语言表示 | DECIDED |
 | D-019 | API 版本管理策略 | OPEN |
 | D-020 | P1 跨平台构建策略 | OPEN |
+| D-021 | 参数提取与错误响应约束 | DECIDED (已实测) |
 
 ---
 
@@ -179,6 +180,9 @@
 - **推荐方案**：方案 1。
 - **决策理由**：方案 2 放弃路由收集与统一 trace/错误处理，代价大于收益；方案 3 属于框架能力扩展，P1 不必承担。方案 1 的代价是 API 风格偏 RPC，但一致性好、生成器无需理解路径参数。
 - **落地约定**：路径采用 `api/<资源>/<动作>` 形式（如 `api/session/create`、`api/session/messages`），资源 id 通过 body/query 传递。
+- **P1-004 实测补充（详见 `docs/reports/p1-004-api-probe.md`）**：
+  - 精确匹配已确认：`/api/probe/void/` 与 `/api/probe/void` 等价；方法与路径不匹配都返回 404，没有 405。
+  - 关闭 `collect` 后手动挂载在本框架版本**不可行**：`WebRouter` 没有插入路由的 API，宏生成的 `build_<fn>_route` 是 `pub(crate)`，且 `framework-web-axum` 在未开 `collect` 时自身无法编译。P1 固定开启 `collect`，并把“路由收集 + 链接锚点”收在 `lib_web::web_routes()`。
 - **状态**：`DECIDED`
 
 ---
@@ -268,7 +272,8 @@
 - **推荐方案**：方案 1，同时把“未来引入 token 时的改动面”记录下来（需要中间件 + 客户端配置项）。
 - **决策理由**：P1 目标是架构闭环，不是安全模型；方案 2 会牵动 SDK（需要 header 注入约定）与配置格式；方案 3 是伪认证，容易误导后续开发。
 - **风险**：默认 `login()` 未显式覆盖时，本地调用会被拒绝且错误信息可能晦涩——P1-004 必须实测并记录。
-- **状态**：`OPEN`（等 P1-004 实测结论后定案，倾向方案 1）
+- **实测结论（P1-004）**：默认 `login()` 的接口在没有任何身份信息时正常返回 200——`framework-web-axum` 的默认路由包装器直接 `route.invoke()`，不读取 `auth`，只有自定义 `WebRouteWrapper` 才会校验。“默认值导致本地调用被拒绝且报错晦涩”的风险不成立。
+- **状态**：`DECIDED`（方案 1；是否显式写 `AuthRule::anonymous()` 不影响功能，正式 API 统一显式声明，鉴权留到后续阶段）
 
 ---
 
@@ -418,6 +423,23 @@
 
 ---
 
+## D-021 参数提取与错误响应约束
+
+- **问题**：`web_api` 的参数提取与错误响应在实际运行中约束到什么程度，P1 的 API 定义该怎么写？
+- **背景（P1-004 实测，详见 `docs/reports/p1-004-api-probe.md`）**：
+  - 查询参数（`Query<T>`）由 `query_json()` 组装，所有值都是 JSON 字符串：`String` 可用；`i64` 因 `auto_type` 注入 `DisplayFromStr` 可用；`bool` 不可用，返回 400 `查询参数转换失败`；查询键名大小写敏感且必须与 serde 名（camelCase）一致，否则被静默忽略。
+  - 请求体（`Json<T>`）不校验 `content-type`；未知字段静默忽略（未启用 `deny_unknown_fields`）；`i64` 传 JSON 数字直接 400。
+  - 错误响应固定为 `{"code": <HTTP 状态码>, "message": "<对外消息>"}`：参数类错误的 message 是固定文案（`请求参数转换失败` / `查询参数转换失败` / `请求体不是有效的 JSON`），不含字段名；业务侧 `WebError::parameter(msg, ...)` 的 msg 原样返回。
+  - 路由不存在与方法不匹配都返回 404 `请求接口不存在`。
+- **落地约定**：
+  1. GET 的查询 DTO 只放字符串类字段；布尔与数值入参用字符串表达，或在 DTO 上自定义 `deserialize_with`。
+  2. 对外 DTO 一律沿用 `auto_type`，`i64` 以字符串传输（与 D-018 一致），客户端不得发送数字。
+  3. 客户端只依赖 `code` 做分支，不得依赖参数错误的 `message` 文案。
+  4. 每个消费路由或元数据的二进制都必须引用 `lib_web::web_routes()` 作为链接锚点，否则 `inventory` 注册项被链接器丢弃、接口全部 404（P1-004 实测：未引用时收集到 0 条路由，引用后 7 条）。
+- **状态**：`DECIDED`
+
+---
+
 ## 假设清单（未验证）
 
 | ID | 假设 | 影响 | 何时验证 |
@@ -426,7 +448,7 @@
 | A-2 | 生成的 Rust 客户端可以引用服务端 DTO 类型而不产生循环依赖（契约 crate 独立于业务 crate） | 影响 D-003 的 DTO 策略 (a)/(b) | P1-006 |
 | A-3 | `framework-web-axum` 的 `AxumBuilder` 与静态资源 fallback 可以共存（框架用 `fallback` 做 dispatch，需确认不会与 SPA fallback 冲突） | 影响 P1-012 的实现方式 | P1-012 |
 | A-4 | SSE 经 `WebBody::Stream` 在 Windows + 浏览器 / reqwest 下不被缓冲（无 `Transfer-Encoding` 或反代缓冲问题） | 影响流式体验 | P1-011 |
-| A-5 | `inventory` 注册在 Windows 的动态链接场景下工作正常（proc-macro + static 注册的已知坑） | 若失败，元数据收集链路需要换方案 | P1-005 |
+| A-5 | ~~`inventory` 注册在 Windows 的动态链接场景下工作正常~~ **已验证（P1-004）**：静态链接下可用，但消费方必须显式引用 crate 符号作为链接锚点，否则注册项被链接器丢弃 | 生成器与服务启动都必须先引用 `lib_web::web_routes()`，否则接口与元数据为空 | 已验证 |
 | A-6 | WebUI 的 SSE 消费可用 `EventSource`（原生），无需为 POST + SSE 引入 fetch stream | 影响 WebUI 传输实现（`EventSource` 只支持 GET） | P1-016 |
 
 > A-6 需要特别注意：`EventSource` 只能发 GET 且不能带自定义 header/body，而 `RunEvent` 流通常由 POST 触发。若确认必须 POST，则 WebUI 需用 `fetch` + `ReadableStream` 手动解析 SSE，这会直接影响 D-007 的落地方式。
