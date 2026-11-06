@@ -248,7 +248,7 @@
 - **背景（已核实）**：`framework-web-axum` 公开 API 只有 `axum_builder(...)`、`AxumBuilder::with_cors`、`bind()`、`AxumServer::context()`、`router()`、`run(wrapper)`；`run` 持续运行且“重复调用返回错误”，**没有任何 shutdown 信号或 handle 的入口**。源码中无 shutdown 相关实现。
 - **可选方案**：
   1. 向上游 `lingting-rust-framework` 增加 `run_with_shutdown(shutdown_future)`（或返回 `AxumServerHandle` 用于关闭），本仓库直接使用。
-  2. 本仓库绕开 `AxumServer::run`，用 `build_router_with(...)` 拿到 axum `Router`，自行 `axum::serve(...).with_graceful_shutdown(...)`。
+  2. 本仓库绕开 `AxumServer::run`，自行调用 `axum::serve(...).with_graceful_shutdown(...)`。**已核实**：`build_router_with` 是 `pub(crate)`，公开的 `build_router(wrapper)` 只返回框架自有 `WebRouter`（不是 axum `Router`），因此该方案同样要求上游先暴露入口，否则需要在本仓库复制 dispatch 逻辑。
   3. P1 接受非优雅关闭（Ctrl+C 直接退出）。
 - **推荐方案**：方案 1；若上游改动周期不可控，退化为方案 2。
 - **决策理由**：方案 1 是“正确修在框架里”，其他使用该框架的项目也会受益，且不需要在本仓库复制服务启动逻辑；方案 2 会分散关停职责（路由由框架组装、serve 由本仓库启动），埋下行为差异；方案 3 不满足 P1 验收 S-8/S-9。
@@ -277,7 +277,7 @@
 - **问题**：P1 如何引入 `framework-*`？
 - **背景（已核实）**：
   - 本地源码仓库 `D:/code/lingting/lingting-rust-framework` 为 workspace 统一版本 **26.11.0**，`edition 2024`、`rust-version 1.98.0`。
-  - 本机 registry 缓存中：`framework-proc-core` 有 26.11.0 / 26.8.151 / 26.8.150；`framework-proc-ts` 有 26.11.0 / 26.8.150 / 26.8.151；而 `framework-proc-web`、`framework-web`、`framework-web-axum` **只有 26.8.150**。
+  - registry 发布状态（已按 crates.io 稀疏索引核实）：`framework-core`、`framework-proc-core`、`framework-proc-ts`、`framework-proc-web`、`framework-web`、`framework-web-axum` **均已发布 26.11.0**，且 feature 定义（`collect` 链）与本地源码一致。本机 cargo 缓存对 web 三件套只到 26.8.150，属缓存滞后，不代表未发布。
   - `framework-proc-core` 硬约束 `specta = "=2.0.0-rc.25"`、`specta-typescript = "0.0.12"`。
 - **可选方案**：
   1. 全部走 `path` 依赖本地 `lingting-rust-framework`（版本必然一致，改动即时可见）。
@@ -286,7 +286,7 @@
 - **推荐方案**：方案 1 起步（P1 期间大概率需要改 `framework-proc-rust` 与 `framework-web-axum`）；在 26.11.0 全部发布且改动合入后切回方案 2。
 - **决策理由**：P1 依赖对框架的两处改动（新增 `framework-proc-rust`、可能新增 shutdown 入口），path 依赖是唯一能让改动即时生效的方式；混用会造成 trait/类型跨版本不兼容（`inventory` 注册的元数据类型必须唯一）。
 - **反例警示**：不同版本的 `framework-proc-core` 同时进入依赖图会导致 `ApiMetadata` 类型不统一、注册表分裂，表现为“接口定义了但生成器看不到”。
-- **状态**：`OPEN`（P1-003 需确认 registry 上 web 系列 26.11.0 的发布状态，再确定最终方案）
+- **状态**：`OPEN`（registry 26.11.0 已全量发布，P1-003 只需在 path / registry 之间做最终取舍）
 
 ---
 

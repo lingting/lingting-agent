@@ -381,6 +381,8 @@ agent status
 
 ### 3.4 通用基础库
 
+`lib-bin-cli` / `lib-bin-tui` / `lib-bin-web` 都是 **Library Crate，不是可执行 Binary**：它们只向 `bin-*` 提供组装所需的能力，自身不产生可执行文件。
+
 #### lib-core
 
 跨 Crate 的公共基础能力。

@@ -38,7 +38,7 @@ P1 的目标不是做出 Agent，而是把「单 Binary + Server/Client + 统一
 | Tool / MCP / Skills | P3 / P4 / P5 |
 | 用户认证体系、多用户隔离 | 未排期（P1 只保留 `AuthRule` 预留位） |
 | WebUI 设计精修、组件库选型定稿 | P1 只做最小可用界面 |
-| Cargo Workspace / Crate / 模块目录结构定稿 | 路线图之后单独讨论 |
+| Cargo Workspace / Crate 结构变更 | 结构以 `docs/workspace.md` 为准，P1 不新增或重命名 Crate |
 | 微服务、消息队列、远程部署编排 | 不引入 |
 
 > 关键约束：P1 的 Mock API 必须**结构与真实 API 一致**（同一套 DTO、同一套错误码、同一套 SSE 事件枚举），P2 接入真实 LLM 时只替换实现，不改契约。否则 P1 的 SDK 生成验证没有意义。

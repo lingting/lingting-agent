@@ -2,7 +2,7 @@
 
 本目录是本项目的分阶段开发路线图。**P1 详细到可直接执行，P2–P6 只做阶段级规划。**
 
-本次路线图不包含任何代码实现，也不确定 Cargo Workspace / Crate / Rust 模块 / 前端组件结构，这些在 P1 正式启动前单独讨论。
+本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构仍待 P1-016 前确认。
 
 ---
 
@@ -88,10 +88,10 @@ P6 Production Readiness
 
 | 项 | 状态 |
 |----|------|
-| 仓库状态 | 空仓库（仅 `.git`，无任何提交，无源码、无文档） |
+| 仓库状态 | 非空仓库，仅文档（`docs/`、`.steps/`、`README.md`、`AGENTS.md`）；无源码、无 Cargo 文件、无前端工程 |
 | Rust 工具链 | rustc 1.98.0 / cargo 1.98.0 |
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
-| framework 版本 | 本地源码 26.11.0 全链路；registry 缓存中 `framework-proc-web` / `framework-web` / `framework-web-axum` 仅到 26.8.150，需在 P1-003 确认发布版本 |
+| framework 版本 | 本地源码 26.11.0；registry 上 `framework-*` 各 crate 同样已发布 26.11.0（本机 cargo 缓存只到 26.8.150，缓存滞后不代表未发布）；获取方式待定（D-015） |
 | P1 | 未开始 |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
@@ -103,7 +103,7 @@ P6 Production Readiness
 2. **执行任务**：按 `p1/tasks.md` 的依赖顺序取任务。任务分为若干批次（Batch），同一批次内可以并行，批次之间必须按顺序。
 3. **验收**：每个阶段结束时对照该阶段的 `acceptance.md`（P2–P6 为 README 中的“阶段验收方向”）逐条确认。
 4. **细化后续阶段**：P2 在 P1 验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`。P3–P6 同理，禁止提前细化。
-5. **结构设计**：Cargo Workspace、Crate 划分、Rust 模块结构、前端组件结构在 P1 启动前单独讨论并新增决策记录，不写入本路线图。
+5. **结构设计**：Cargo Workspace、Crate 划分与依赖方向以 `docs/workspace.md` 为准；前端工程结构在 P1-016 前确认。
 
 ---
 

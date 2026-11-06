@@ -8,17 +8,17 @@
 
 ## Batch A：工程基线与契约可行性
 
-- [ ] **P1-001 仓库与工具链勘察**
+- [ ] **P1-001 仓库与工具链勘察（阻塞：framework-* 获取方式未定，见 decisions.md D-015）**
 
   - **目标**：在写任何代码之前，把“当前仓库里到底有什么”和“工具链能做什么”变成书面结论，避免盲目覆盖或误判版本。
   - **具体工作**：
-    1. 确认仓库状态（本路线图创建时为空仓库：仅有 `.git`，无提交、无源码、无文档），记录仍需保留的历史信息是否存在（远程、分支、`.gitignore`）。
+    1. 确认仓库状态（当前仅文档：`docs/`、`.steps/`、根目录 `README.md` / `AGENTS.md`；无源码、无 Cargo 文件、无 `.gitignore`），记录远程、分支与需要保留的历史信息。
     2. 记录工具链实测版本：rustc / cargo / node / pnpm / npm；确认 edition 2024 与 `framework-*` 的 `rust-version = 1.98.0` 相匹配。
-    3. 核实 `framework-proc-web`、`framework-proc-ts`、`framework-proc-core`、`framework-web`、`framework-web-axum` 的可用版本：本地源码仓库 `D:/code/lingting/lingting-rust-framework` 为 26.11.0 全链路；registry 缓存中 `framework-proc-web` / `framework-web` / `framework-web-axum` 仅见 26.8.150。
+    3. 核实 `framework-proc-web`、`framework-proc-ts`、`framework-proc-core`、`framework-web`、`framework-web-axum` 的可用版本：本地源码仓库 `D:/code/lingting/lingting-rust-framework` 为 26.11.0 全链路；registry 上同样已发布 26.11.0（本机 cargo 缓存仅到 26.8.150，缓存滞后不等于未发布）。
     4. 确认各平台构建前置（Windows 本机、是否需要交叉编译工具、`cargo-zigbuild` 是否可用）。
-    5. 把结论写入 `decisions.md`（版本矩阵与采纳方式），并同步更新 `.steps/README.md` 的“当前开发进度”。
+    5. 把结论写入 `docs/reports/p1-001-environment.md`（完整勘察报告），版本矩阵与采纳方式同步到 `decisions.md`，并更新 `.steps/README.md` 的“当前开发进度”。
   - **前置依赖**：无
-  - **交付物**：`decisions.md` 中新增/更新的版本矩阵记录；`.steps/README.md` 进度表更新。
+  - **交付物**：`docs/reports/p1-001-environment.md`；`decisions.md` 中新增/更新的版本矩阵记录；`.steps/README.md` 进度表更新。
   - **验收标准**：
     - [ ] 版本矩阵包含全部 `framework-*` crate 的确定版本与获取方式（registry 版本号 或 path 依赖路径）。
     - [ ] 明确写出 rustc/cargo/node/pnpm 的实测版本，并指出与 `rust-version = 1.98.0` 的匹配结论。
@@ -31,7 +31,7 @@
     1. 创建 `rust-toolchain.toml`（固定 channel，声明 `rustfmt`、`clippy` 组件）。
     2. 创建 `.gitignore`（覆盖 `target`、`node_modules`、`.venv`、前端构建产物、本地配置文件）。
     3. 创建 `rustfmt.toml` 与 Clippy 基线配置（workspace lints）。
-    4. 建立最小 `Cargo.toml`（仅到“能 `cargo build` 通过”的程度；**具体 workspace/crate 划分等结构讨论后再定**，本任务只要求骨架可构建）。
+    4. 建立最小 `Cargo.toml`（仅到“能 `cargo build` 通过”的程度；workspace/crate 结构以 `docs/workspace.md` 为准，本任务只要求骨架可构建）。
     5. 定义本地开发脚本入口（构建 / 生成 / 检查三类命令，脚本内容与命名保持一致）。
   - **前置依赖**：P1-001
   - **交付物**：`rust-toolchain.toml`、`.gitignore`、`rustfmt.toml`、最小 `Cargo.toml`、开发脚本入口。

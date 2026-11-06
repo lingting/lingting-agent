@@ -37,7 +37,7 @@
 
 ### 已实现能力
 
-暂无。当前仓库仅有 `.steps/` 路线图文档，没有源码、没有 Cargo Workspace、没有可运行的 Binary。
+暂无。当前仓库仅有文档（`docs/` 架构与规范、`.steps/` 路线图），没有源码、没有 Cargo Workspace、没有可运行的 Binary。
 
 ## 文档索引
 
@@ -46,3 +46,4 @@
 | [docs/workspace.md](docs/workspace.md) | Workspace 架构和依赖规范 |
 | [docs/develop.md](docs/develop.md) | 开发规范 |
 | [.steps/README.md](.steps/README.md) | 项目开发路线图 |
+| [docs/reports/p1-001-environment.md](docs/reports/p1-001-environment.md) | P1-001 仓库与开发环境勘察报告 |
