@@ -13,5 +13,8 @@ publish = false
 lib-core = { workspace = true }
 types-core = { workspace = true }
 
+# Mock 事件流生产任务：定时投递事件 + 用通道向消费方投递事件。
+tokio = { workspace = true }
+
 [lints]
 workspace = true

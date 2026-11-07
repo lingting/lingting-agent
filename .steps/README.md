@@ -93,7 +93,7 @@ P6 Production Readiness
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
 | framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
 | SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
-| P1 | 进行中：P1-001 ~ P1-009 已完成；下一个 P1-010（Mock 会话业务 API） |
+| P1 | 进行中：P1-001 ~ P1-011 已完成（含 SSE 事件流的运行期验收）；下一个 P1-012（CORS、静态资源与 WebUI 兜底路由） |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
 ---

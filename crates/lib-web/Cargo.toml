@@ -19,6 +19,9 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_with = { workspace = true }
 specta = { workspace = true }
+# SSE 适配：`WebBody::Stream` 需要 `BoxStream` 与 `Bytes`（`session/stream.rs`）。
+bytes = { workspace = true }
+futures-util = { workspace = true }
 
 framework-proc-auto = { workspace = true, features = ["collect"] }
 framework-web = { workspace = true, features = ["collect"] }

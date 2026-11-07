@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
-use types_core::session::{Message, Run, SessionSummary};
+use types_core::session::{Message, Run, RunStatus, SessionSummary};
 
 /// 会话内存存储。
 #[derive(Default)]
@@ -85,5 +85,45 @@ impl Store {
         let run = inner.runs.get_mut(run_id)?;
         update(run);
         Some(run.clone())
+    }
+
+    /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；状态不满足时返回 `None`，保证同一 Run 只有一个生产方。
+    pub(crate) fn start_run(&self, run_id: &str, now_millis: i64) -> Option<Run> {
+        let mut inner = self.lock();
+        let run = inner.runs.get_mut(run_id)?;
+        if !matches!(run.status, RunStatus::Queued) {
+            return None;
+        }
+        run.status = RunStatus::Running;
+        run.updated_at_ms = now_millis;
+        Some(run.clone())
+    }
+
+    /// 完成 Run：写入助手消息、更新会话统计并把 Run 落成 `COMPLETED`（同一次加锁内完成）。
+    pub(crate) fn complete_run(
+        &self,
+        run_id: &str,
+        message: Message,
+        input_tokens: i64,
+        output_tokens: i64,
+        now_millis: i64,
+    ) {
+        let mut inner = self.lock();
+        if let Some(session) = inner.sessions.get_mut(&message.session_id) {
+            session.message_count += 1;
+            session.updated_at_ms = now_millis;
+        }
+        inner
+            .messages
+            .entry(message.session_id.clone())
+            .or_default()
+            .push(message);
+        if let Some(run) = inner.runs.get_mut(run_id) {
+            run.status = RunStatus::Completed;
+            run.updated_at_ms = now_millis;
+            run.finished_at_ms = Some(now_millis);
+            run.input_tokens = Some(input_tokens);
+            run.output_tokens = Some(output_tokens);
+        }
     }
 }

@@ -106,13 +106,13 @@
 |---|---|
 | path 前缀 | 统一 `api/` 开头，不带版本段（见下） |
 | path 资源段 | 小写单数名词，多词用 `-` 连接，如 `api/probe/echo` |
-| path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel`，不造同义动词 |
+| path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel` / `stream`，不造同义动词 |
 | 元数据名 | 由 handler 函数名（snake_case）派生，两侧 SDK 的标识符同源派生，不手工改 |
 | 请求 DTO | 请求体 `*PO`，查询参数 `*Params` |
 | 响应 DTO | `*VO` |
 | 枚举 | `<业务名>Kind`（与框架 `RCodeKind` 一致），生成侧为同名结构 + `<NAME>_ALL` / `<NAME>_MAP` 映射 |
 | 字段 | camelCase；id 用 `String`（D-018）；`i64` 在 wire 上以字符串传输（D-018）；查询参数不出现 `bool`（D-021） |
-| SSE 事件 | P1 尚未建模（D-007）：事件端点按 `Blob` 返回，事件类型由服务端枚举生成到两侧 SDK，事件名字段统一 `event` |
+| SSE 事件 | 端点是 `GET` + 查询参数，动作段用 `stream`；返回 `WebResponse::stream`，元数据里是 `Blob`（D-007），SDK 只导出 path 常量，事件类型由服务端枚举 + DTO 生成到两侧 SDK。判别字段统一 `event`，取值 snake_case，与 SSE 的 `event:` 行同值；帧编码用 `lib-web-core` 的 `sse` 模块，不手拼字符串（D-026） |
 
 ### 统一错误响应
 

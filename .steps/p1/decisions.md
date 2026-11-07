@@ -25,7 +25,7 @@
 | D-004 | API Schema 唯一来源与元数据获取方式 | DECIDED |
 | D-005 | 代码生成时机 | DECIDED (P1-007 已固化) |
 | D-006 | 生成物是否纳入版本控制 | DECIDED |
-| D-007 | SSE 与 SDK 的类型化支持 | OPEN |
+| D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011) |
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
 | D-009 | WebUI 静态资源嵌入方案 | OPEN |
 | D-010 | WebUI 技术栈 | OPEN |
@@ -44,6 +44,7 @@
 | D-023 | 日志目录与归档策略 | DECIDED |
 | D-024 | 统一错误响应与错误码分配 | DECIDED |
 | D-025 | P1 Mock 会话契约与 P2 替换点 | DECIDED |
+| D-026 | P1 Streaming 契约（RunEvent + SSE） | DECIDED |
 
 ---
 
@@ -184,7 +185,8 @@
 - **推荐方案**：P1 采用方案 1；把方案 2 作为框架演进项，在 P2 前评估。
 - **决策理由**：方案 3 会破坏“路由与元数据来自同一次定义”的一致性，且需为鉴权、trace、错误处理做重复实现；方案 2 是正确终局，但需要同时改 `framework-proc-ts` 元数据枚举、`TypescriptApiBuilder` 与新的 `framework-proc-rust`，属于跨仓库的协议级改动，放进 P1 会拖住主线。方案 1 能在 P1 内跑通全链路，并把“事件契约”保持在单一来源（服务端事件枚举 → 生成两侧类型）。
 - **P1 必须接受的不完美**：SSE 路径的 path 仍需人工出现在客户端代码里（因元数据不表达流式）。**缓解**：让 SSE 端点 path 也由生成物导出为常量（元数据里它已是 `Blob` 接口，可导出其 path），客户端不手写字面量。
-- **状态**：`OPEN` —— 若方案 1 的缓解手段不足以满足“客户端零手写 path”，则升级到方案 2，并在 P1-011 之前定案。
+- **P1-011 定案**：采用方案 1。缓解手段已验证 —— 生成物导出 `RUN_STREAM.path`（Rust）与 `ApiDefinitions.runStream.path`（TS），客户端不手写 path 字面量；事件类型来自生成的 `RunEvent` / `RunEventKind`。方案 2 仍是正确终局，留作框架演进项（P2 前评估）。具体事件契约与断线语义见 D-026。
+- **状态**：`DECIDED`（P1-011）
 
 ---
 
@@ -608,6 +610,38 @@
   - SDK：Rust 生成物中 6 个方法随 `lib-bin-cli` 编译通过；TS 生成物在 `tsc --noEmit --strict --skipLibCheck false packages/sdk-ts/dist/index.d.ts` 下无错误。
 - **状态**：`DECIDED`
 
+
+---
+
+## D-026 P1 Streaming 契约（RunEvent + SSE）
+
+- **问题**：P1 的流式接口怎么定义，事件类型如何跨语言共享，断线与取消时 Run 处于什么状态，P2 替换哪一层？
+- **背景**：
+  - D-007 要求“事件契约单一来源”，但 `auto_type` 只支持具名字段结构体、`auto_enum` 只产出字符串联合，因此 serde 内部标签枚举（每个事件一个载荷结构体）无法生成到两侧 SDK。
+  - `EventSource` 只支持 GET 且不能带自定义 header/body（A-6），若要复用原生实现，流式端点必须是 GET + 查询参数。
+  - 框架的 `WebResponse::stream` 接受 `BoxStream<'static, Result<Bytes, std::io::Error>>`，`framework-web-axum` 的分发层用 `Body::from_stream` 直接转成流式响应，中间没有缓冲层。
+- **决策**：
+  1. **端点**：`GET api/run/stream?runId=`（`RunStreamParams { runId }`），动作段新增固定动词 `stream`。
+  2. **事件建模**：`RunEvent` 是扁平结构体（`auto_type`），判别字段 `event: RunEventKind`（`auto_enum`，serde 与 strum 都是 `snake_case`），其余载荷字段为 `Option`。P2 追加事件只增加枚举值，不改已有语义。
+  3. **帧编码**：落在 `lib-web-core` 的 `sse` 模块（`frame` / `json_frame` + content-type 与响应头常量）；`lib-web` 的 `session/stream.rs` 只做“事件 → 帧”的适配；`service-core` 的 `session/stream.rs` 只产出 `RunEvent`。
+  4. **状态推进**：订阅即 `QUEUED → RUNNING`（`Store::start_run` 带状态守卫，保证一个 Run 只有一个生产方），`run_completed` 之前先落库助手消息与终态。
+  5. **断线**：HTTP 流被 drop → 通道关闭 → 生产任务停止并把 Run 落成 `CANCELLED`（带 `finishedAtMs`），不写半成品助手消息。
+  6. **取消**：流式期间 `api/run/cancel` 把 Run 置 `CANCELLED`，生产方在下一段增量前发现状态变化即停止推送，不再覆盖终态。
+  7. **心跳**：等待增量的间隙超过 15 秒补一条 `heartbeat`；Mock 的增量间隔是 120ms，正常情况下不会触发，P2 接真实 token 流后才生效。
+- **D-007 定案**：采用方案 1（SSE 端点按 `Blob` 进元数据 + 客户端自实现消费）。缓解手段已验证可行 —— 生成物同时导出 `RUN_STREAM: ApiDefinition { path: "api/run/stream" }`（Rust）与 `ApiDefinitions.runStream.path`（TS），客户端不需要手写 path 字面量；事件类型来自生成的 `RunEvent` / `RunEventKind`。方案 2（框架新增 `ApiReturnType::Stream`）留作框架演进项，P2 前再评估。
+- **代价与遗留**：
+  1. `run_failed` 在 P1 没有产出方（Mock 不会失败），只有契约与文档；P2 接真实执行后启用。
+  2. 事件流不做断点续传与事件回放：中途断开只能重新发消息（P1 无持久化，续传本来也无意义）。
+  3. `inputTokens` / `outputTokens` 在 Mock 下是字符数估算，不是真实分词。
+  4. SSE 的 `id:` 是 `seq` 的十进制文本，而 `data` 里的 `seq` 因 D-018 是字符串，两者语义相同、表现不同。
+- **实测回填（2026-11-07）**：
+  - 正常流：`curl -N` 收到 19 帧（`run_started` + 17 × `message_delta` + `run_completed`），按约 120ms 逐个到达；响应用 `transfer-encoding: chunked`、无 `content-length`，直连未被缓冲（A-4 的直连部分成立，浏览器 / 反代场景留给 P1-016）；`content-type`、`cache-control`、`x-accel-buffering`、`x-trace-id` 均符合预期。
+  - 终态一致性：`run_completed` 到达后 `api/run/get` 即 `COMPLETED`（含 `finishedAtMs` 与 token 估算），`api/message/list` 多出一条 `ASSISTANT` 消息。
+  - 断线：`curl --max-time 0.6` 中途退出 → Run 变 `CANCELLED`（带 `finishedAtMs`），未写助手消息，服务端日志无 panic。
+  - 取消：流式期间 `api/run/cancel` → 事件在下一段增量前停止（7 帧后 EOF），Run 保持 `CANCELLED`，不会被 `run_completed` 覆盖。
+  - 负向用例：重复订阅 400 `Run 当前状态为 COMPLETED，不可订阅事件流`；未知 Run 404 `Run 不存在：999`。两条在日志里表现为框架的 `Web 请求异常`（`category=参数转换` / `路由不存在`），属既有观感问题，响应体与状态码正确。
+- **状态**：`DECIDED`
+
 ---
 
 ## 假设清单（未验证）
@@ -617,8 +651,10 @@
 | A-1 | `framework-proc-rust` 可在不修改 `framework-proc-core` 的前提下，只靠公开的 `ApiMetadata` 完成 Rust 代码生成 | 若不可行，需向上游暴露更多元数据（如泛型参数的完整路径） | P1-006 |
 | A-2 | 生成的 Rust 客户端可以引用服务端 DTO 类型而不产生循环依赖（契约 crate 独立于业务 crate） | 影响 D-003 的 DTO 策略 (a)/(b) | P1-006 |
 | A-3 | `framework-web-axum` 的 `AxumBuilder` 与静态资源 fallback 可以共存（框架用 `fallback` 做 dispatch，需确认不会与 SPA fallback 冲突） | 影响 P1-012 的实现方式 | P1-012 |
-| A-4 | SSE 经 `WebBody::Stream` 在 Windows + 浏览器 / reqwest 下不被缓冲（无 `Transfer-Encoding` 或反代缓冲问题） | 影响流式体验 | P1-011 |
+| A-4 | SSE 经 `WebBody::Stream` 在 Windows + 浏览器 / reqwest 下不被缓冲（无 `Transfer-Encoding` 或反代缓冲问题） | 影响流式体验 | **直连已验证（P1-011）**：`curl -N` 下事件按约 120ms 逐个到达、`chunked` 无缓冲，响应头为 `cache-control: no-cache` / `x-accel-buffering: no`；浏览器与反代场景留待 P1-016 |
 | A-5 | ~~`inventory` 注册在 Windows 的动态链接场景下工作正常~~ **已验证（P1-004）**：静态链接下可用，但消费方必须显式引用 crate 符号作为链接锚点，否则注册项被链接器丢弃 | 生成器与服务启动都必须先引用 `lib_web::web_routes()`，否则接口与元数据为空 | 已验证 |
 | A-6 | WebUI 的 SSE 消费可用 `EventSource`（原生），无需为 POST + SSE 引入 fetch stream | 影响 WebUI 传输实现（`EventSource` 只支持 GET） | P1-016 |
 
 > A-6 需要特别注意：`EventSource` 只能发 GET 且不能带自定义 header/body，而 `RunEvent` 流通常由 POST 触发。若确认必须 POST，则 WebUI 需用 `fetch` + `ReadableStream` 手动解析 SSE，这会直接影响 D-007 的落地方式。
+
+> A-6 后续（P1-011）：事件流端点已定为 `GET api/run/stream?runId=`（D-026），原生 `EventSource` 可用；P1-016 只需验证浏览器侧的实际行为（含中断与错误事件）。

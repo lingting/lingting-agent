@@ -5,13 +5,15 @@
 //!
 //! Handler 只做“参数解包 + 业务调用 + 错误映射”，业务规则全部在 `service-core`。
 
+use crate::session::stream;
 use anyhow::Result;
-use framework_web::{Json, Query, WebError, web_api_get, web_api_post};
+use framework_web::{Json, Query, WebError, WebResponse, web_api_get, web_api_post};
+use lib_web_core::sse;
 use service_core::holder;
 use service_core::session::SessionError;
 use types_core::session::{
-    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
-    SessionSummary,
+    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStreamParams,
+    SessionCreatePO, SessionSummary,
 };
 
 /// 创建会话。
@@ -48,6 +50,20 @@ pub async fn run_get(params: Query<RunGetParams>) -> Result<Run> {
 #[web_api_post(path = "api/run/cancel")]
 pub async fn run_cancel(params: Json<RunCancelPO>) -> Result<Run> {
     holder::session().cancel_run(params.0).map_err(api_error)
+}
+
+/// 订阅 Run 的事件流：`text/event-stream`，每条事件是 `RunEvent`。
+///
+/// 只有 `QUEUED` 的 Run 可以订阅，订阅即把它推进到 `RUNNING`（D-026）。
+/// 元数据里本接口是 `Blob`（D-007）：SDK 只导出 path 常量，SSE 的消费由客户端自己实现，
+/// 事件类型用生成的 `RunEvent` 反序列化，`event:` 行等于 `event` 字段的取值。
+#[web_api_get(path = "api/run/stream")]
+pub async fn run_stream(params: Query<RunStreamParams>) -> Result<WebResponse> {
+    let events = holder::session().subscribe_run(params.0).map_err(api_error)?;
+    let mut response = WebResponse::stream(200, sse::CONTENT_TYPE, stream::body(events));
+    response.headers.set(sse::HEADER_CACHE_CONTROL, sse::VALUE_NO_CACHE);
+    response.headers.set(sse::HEADER_NO_BUFFERING, sse::VALUE_NO_BUFFERING);
+    Ok(response)
 }
 
 /// 把业务错误映射成统一的错误响应（D-024）。

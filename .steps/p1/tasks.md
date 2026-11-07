@@ -195,7 +195,7 @@
     - **实测结论**：契约类型落在 `crates/types-core/src/session/`（`auto_type` / `auto_enum`，`framework-proc-auto/collect` 已在 `types-core` 开启），Mock 业务在 `service-core/src/session/`（`Mutex<HashMap>` 存储 + 进程级 `holder`），Handler 在 `crates/lib-web/src/session/api.rs`；接口共 6 条（`api/session/create`、`api/session/list`、`api/message/list`、`api/message/create`、`api/run/get`、`api/run/cancel`）。`make gen` 后 17 条接口（11 条探针 + 6 条会话）同时进入两份 SDK：TS 侧方法为 `sessionCreate` / `sessionList` / `messageList` / `messageCreate` / `runGet` / `runCancel`，Rust 侧为同名 snake_case，`Vec<SessionSummary>` 映射为 `SessionSummary[]`，枚举为 `RunStatus`（`QUEUED`/`RUNNING`/`COMPLETED`/`CANCELLED`/`FAILED`）与 `MessageRole`。
     - **运行期验证（已执行）**：`bin-agent server` 启动后逐条调用，20 项检查全部通过 —— 创建会话（显式标题 / 默认标题 `新会话` / 默认模型 `mock-model` / 显式模型）、发消息返回 `USER` 消息与 `QUEUED` 的 Run 且 `message.runId` 指向该 Run、两个会话各自只看到自己的消息、会话 `messageCount` 与 `updatedAtMs` 倒序正常、`api/run/get` 查到 `QUEUED`、`api/run/cancel` 变为 `CANCELLED` 且 `finishedAtMs` 有值、状态持久化、重复取消返回 400、未知会话（含发消息时）与未知 Run 返回 404、空白内容返回 400、缺字段返回 400 且错误体只有 `{code,message}`；服务端日志无 panic、无 500，参数错误与业务错误的 `error_chain` 不再重复同一句话。SDK 侧：Rust 生成物中 6 个方法随 `lib-bin-cli` 编译通过，TS 生成物 `dist/index.d.ts` 在 `tsc --noEmit --strict`（`skipLibCheck: false`）下通过；客户端 Transport 实现属 P1-014 / P1-016，本节只验证生成物可调用。契约与 P2 替换点见 D-025。
 
-- [ ] **P1-011 Mock SSE 流式响应**
+- [x] **P1-011 Mock SSE 流式响应**
 
   - **目标**：建立 Streaming 契约与端到端通路，使 P2 的 LLM token 流只需替换事件生产方。
   - **具体工作**：
@@ -207,9 +207,11 @@
   - **前置依赖**：P1-010
   - **交付物**：`RunEvent` 契约；SSE 接口；流式取消行为。
   - **验收标准**：
-    - [ ] `curl -N` 能看到连续事件，事件以 `run_completed` 结束。
-    - [ ] 客户端中途断开后，服务端日志无 panic，且进行中的任务被清理。
-    - [ ] 事件枚举与字段在文档中有完整表格，P2 可直接复用。
+    - [x] `curl -N` 能看到连续事件，事件以 `run_completed` 结束。
+    - [x] 客户端中途断开后，服务端日志无 panic，且进行中的任务被清理。
+    - [x] 事件枚举与字段在文档中有完整表格，P2 可直接复用。
+    - **实测结论**：契约类型落在 `crates/types-core/src/session/event.rs`（`RunEventKind` 为 `auto_enum`，serde / strum 均为 `snake_case`；`RunEvent` 为 `auto_type` 扁平结构体），入参 `RunStreamParams` 在 `request.rs`；接口为 `GET api/run/stream?runId=`（新增动作动词 `stream`，D-026）。分层：`service-core/src/session/stream.rs` 只产出 `RunEvent`（`mpsc` + 生产任务），`lib-web/src/session/stream.rs` 把事件映射成 SSE 帧，`lib-web-core/src/sse.rs` 负责 `id` / `event` / `data` 编码与响应头常量。Mock 节奏：助手回复按 4 字符切分、每段间隔 120ms，`inputTokens` / `outputTokens` 按字符数估算。
+    - **运行期验证（已执行）**：`bin-agent server --port 20100` 起服务后，`curl -N` 收到 19 帧（`run_started` + 17 × `message_delta` + `run_completed`），事件按约 120ms 逐个到达、`transfer-encoding: chunked`（无 `content-length`，A-4 直连未被缓冲）；响应头含 `content-type: text/event-stream; charset=utf-8`、`cache-control: no-cache`、`x-accel-buffering: no`，`x-trace-id` 正常回写。`run_completed` 后 `api/run/get` 为 `COMPLETED`（`finishedAtMs`、token 用量齐全），`api/message/list` 多出一条 `ASSISTANT` 消息且 `messageCount` 递增。断线（`curl --max-time 0.6` 中途退出）后 Run 变为 `CANCELLED` 且带 `finishedAtMs`，只有 `USER` 消息、没有半成品助手消息，日志无 panic。流式期间 `api/run/cancel` 后事件停止推送（7 帧后 EOF）、Run 保持 `CANCELLED`、不写助手消息。重复订阅返回 400 `Run 当前状态为 COMPLETED，不可订阅事件流`，未知 Run 返回 404 `Run 不存在：999`；全程日志只有这两条预期业务错误，无 panic。SDK：`make gen` 后接口总数 18 条，Rust 生成物导出 `RUN_STREAM.path = api/run/stream`（返回 `Vec<u8>`）与 `RunEvent` / `RunEventKind`，TS 生成物导出 `ApiDefinitions.runStream.path` 与同名类型，`tsc --noEmit --strict --skipLibCheck false` 通过。契约、断线语义与 P2 替换点见 D-026，`run_failed` 在 P1 无产出方（Mock 不会失败）。
 
 - [ ] **P1-012 CORS、静态资源与 WebUI 兜底路由**
 

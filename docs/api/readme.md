@@ -9,7 +9,7 @@
 | 文档 | 领域 | 内容 |
 |---|---|---|
 | [probe.md](probe.md) | probe（探针与探活） | 技术验证探针、错误响应样例、`health` / `version` 探活，共 11 条 |
-| [session.md](session.md) | session（会话） | Mock 会话 / 消息 / Run 业务接口，共 6 条 |
+| [session.md](session.md) | session（会话） | Mock 会话 / 消息 / Run 业务接口与 SSE 事件流，共 7 条 |
 
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 
@@ -20,7 +20,7 @@
 | 项 | 约定 |
 |---|---|
 | 基础地址 | 默认 `http://127.0.0.1:20100`；开发环境服务端 `20102`，探针服务 `20103`（见 `docs/develop.md` 端口表） |
-| path | 统一 `api/` 开头，**不带版本段**；资源段小写单数，动作段只用 `create` / `update` / `delete` / `get` / `list` / `cancel` |
+| path | 统一 `api/` 开头，**不带版本段**；资源段小写单数，动作段只用 `create` / `update` / `delete` / `get` / `list` / `cancel` / `stream` |
 | 路径参数 | 无路径占位符（D-008）：会话、Run 等 ID 只能走查询参数或请求体 |
 | 方法错配 | 与路径不存在同为 404，**没有 405**，调用方无法从状态码区分「路径错」与「方法错」 |
 | 大小写 | path 与查询参数名大小写敏感，查询参数名为 camelCase 字段名 |
@@ -33,6 +33,7 @@
 | `Void` | 204，无响应体 | `GET api/probe/void` |
 | 载荷类型 / `Result<T>` | `{"code":200,"message":"Success","data":<载荷>}`，由 `R<T>` 包装 | 绝大多数接口 |
 | `WebResponse` / `WebResponseOf<T>` | 自定义状态码与响应头；元数据中被标记为 `Blob` | `GET api/probe/response` |
+| `WebResponse` + `WebBody::Stream` | `text/event-stream`，一帧一条事件（不经 `R<T>` 包装） | `GET api/run/stream` |
 
 ### 错误响应
 

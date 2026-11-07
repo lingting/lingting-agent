@@ -1656,10 +1656,12 @@ name = "lib-web"
 version = "26.11.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "framework-proc-auto",
  "framework-proc-core",
  "framework-web",
  "framework-web-axum",
+ "futures-util",
  "lib-core",
  "lib-web-core",
  "serde",
@@ -1675,6 +1677,8 @@ name = "lib-web-core"
 version = "26.11.0"
 dependencies = [
  "lib-core",
+ "serde",
+ "serde_json",
  "types-core",
 ]
 
@@ -2822,6 +2826,7 @@ name = "service-core"
 version = "26.11.0"
 dependencies = [
  "lib-core",
+ "tokio",
  "types-core",
 ]
 

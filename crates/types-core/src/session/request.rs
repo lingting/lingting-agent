@@ -42,3 +42,12 @@ pub struct RunCancelPO {
     /// 目标 Run ID。
     pub run_id: String,
 }
+
+/// 订阅 Run 事件流的查询参数。
+///
+/// 用 GET 而非 POST：浏览器 `EventSource` 只支持 GET（A-6）。
+#[auto_type]
+pub struct RunStreamParams {
+    /// 目标 Run ID。
+    pub run_id: String,
+}

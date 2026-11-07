@@ -13,5 +13,9 @@ publish = false
 lib-core = { workspace = true }
 types-core = { workspace = true }
 
+# SSE 帧编码用到的序列化依赖（`sse` 模块）。
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

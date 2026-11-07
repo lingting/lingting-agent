@@ -3,15 +3,18 @@
 //! Mock 的行为边界：
 //!
 //! - 发送消息只写入用户消息与 `queued` 的 Run，不产出助手回复；
-//!   回复内容与状态推进由 P1-011 的 SSE 流负责（P2 由 Agent Runtime 负责）。
+//!   回复内容与状态推进由 `subscribe_run` 启动的 Mock 事件流负责（P2 由 Agent Runtime 负责）。
 //! - 取消只允许 `queued` / `running` 的 Run。
 
-use crate::session::SessionError;
+use std::sync::Arc;
+
 use crate::session::store::Store;
+use crate::session::stream;
+use crate::session::{RunEventStream, SessionError};
 use lib_core::{id, time};
 use types_core::session::{
     Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStatus,
-    SessionCreatePO, SessionSummary,
+    RunStreamParams, SessionCreatePO, SessionSummary,
 };
 
 /// 未指定标题时的默认会话标题。
@@ -21,8 +24,8 @@ const DEFAULT_MODEL: &str = "mock-model";
 
 /// 会话业务服务。
 pub struct SessionService {
-    /// 会话存储；P2 换成 Repository。
-    store: Store,
+    /// 会话存储；P2 换成 Repository。事件流生产任务需要共享同一份存储，因此用 `Arc`。
+    store: Arc<Store>,
 }
 
 impl Default for SessionService {
@@ -34,7 +37,9 @@ impl Default for SessionService {
 impl SessionService {
     /// 创建会话服务实例。
     pub fn new() -> Self {
-        Self { store: Store::new() }
+        Self {
+            store: Arc::new(Store::new()),
+        }
     }
 
     /// 创建会话。
@@ -131,6 +136,37 @@ impl SessionService {
     /// 查询 Run。
     pub fn get_run(&self, params: RunGetParams) -> Result<Run, SessionError> {
         self.require_run(&params.run_id)
+    }
+
+    /// 订阅 Run 的事件流：把 `QUEUED` 的 Run 推进到 `RUNNING`，并启动 Mock 生产任务。
+    ///
+    /// 同一个 Run 只允许订阅一次：只有 `QUEUED` 可以订阅，其余状态返回参数错误（D-026）。
+    pub fn subscribe_run(&self, params: RunStreamParams) -> Result<RunEventStream, SessionError> {
+        let now_millis = time::now_millis();
+        let run = self.store.start_run(&params.run_id, now_millis).ok_or_else(|| {
+            // 推进失败时再读一次，区分「Run 不存在」与「状态不满足」。
+            match self.store.run(&params.run_id) {
+                Some(run) => SessionError::Invalid(format!("Run 当前状态为 {}，不可订阅事件流", run.status)),
+                None => SessionError::NotFound(format!("Run 不存在：{}", params.run_id)),
+            }
+        })?;
+        let prompt = self
+            .store
+            .messages(&run.session_id)
+            .and_then(|messages| {
+                messages.into_iter().find(|message| {
+                    message.run_id.as_deref() == Some(run.id.as_str()) && matches!(message.role, MessageRole::User)
+                })
+            })
+            .map(|message| message.content)
+            .ok_or_else(|| SessionError::Internal(format!("Run {} 找不到对应的用户消息", run.id)))?;
+        let assistant_message_id = next_id()?;
+        Ok(stream::spawn(
+            Arc::clone(&self.store),
+            run,
+            prompt,
+            assistant_message_id,
+        ))
     }
 
     /// 取会话；不存在时返回未找到错误。
