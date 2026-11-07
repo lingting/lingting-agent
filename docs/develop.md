@@ -125,6 +125,20 @@
 
 `ApiError` 当前落在 `lib-web` 以便随 SDK 生成导出；将来 `lib-web-core` 落实 Error Mapping 时可整体迁入（见 D-024 与 `docs/workspace.md` 的 `lib-web-core` 职责）。
 
+### 会话业务接口（P1 Mock）
+
+P1-010 起的会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`，契约类型在 `types-core` 的 `session` 模块；P2 只替换实现、不改契约。接口清单、Mock 行为边界、错误映射与 P2 替换点见 `.steps/p1/decisions.md` D-025。
+
+| 方法 | path | 入参 | 返回 |
+|---|---|---|---|
+| POST | `api/session/create` | `SessionCreatePO` | `SessionSummary` |
+| GET | `api/session/list` | 无 | `SessionSummary[]` |
+| GET | `api/message/list` | `MessageListParams` | `Message[]` |
+| POST | `api/message/create` | `MessageSendPO` | `MessageSendVO` |
+| GET | `api/run/get` | `RunGetParams` | `Run` |
+| POST | `api/run/cancel` | `RunCancelPO` | `Run` |
+
+约定：会话与 Run 的 ID 走查询参数或请求体（无路径占位符）；`messageCount`、token 用量与 `*Ms` 时间戳按 D-018 以字符串传输；业务失败的 404（会话/Run 不存在）与 400（参数或状态不满足规则）由 `SessionError` 映射，错误体仍是统一的 `{code,message}`。
 ### API 版本管理
 
 P1 不引入版本段：path 保持 `api/...`，不预留 `/api/v1`。将来需要多版本并存时采用 path 前缀（`api/v2/...`），不采用请求头版本化；届时按路径整体重排一次（D-019）。

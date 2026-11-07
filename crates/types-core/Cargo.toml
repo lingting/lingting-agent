@@ -12,5 +12,15 @@ publish = false
 [dependencies]
 lib-core = { workspace = true }
 
+# 宏展开使用绝对路径 `::framework_proc_auto` / `::framework_proc_core` / `::serde` /
+# `::serde_with` / `::specta` / `::strum_macros`，因此必须都是直接依赖；
+# `collect` 让 `#[auto_type]` / `#[auto_enum]` 产出类型元数据，SDK 生成器才看得到 DTO（D-015）。
+framework-proc-auto = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect"] }
+serde = { workspace = true }
+serde_with = { workspace = true }
+specta = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 [lints]
 workspace = true

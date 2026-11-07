@@ -819,6 +819,8 @@ P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此
 
 P1 阶段不创建任何 `agent-*` Crate：`lib-web` 在 P1 只暴露 Mock 契约接口，Agent 领域 Crate 按第 8.2 节的阶段推进。
 
+Session / Message / Run 的契约类型在 P1 是**阶段裁剪**：它们落在 `types-core` 的 `session` 模块（P2 建 `agent-core` 后按 6.2 整体迁移，类型名与字段不变），Mock 业务与内存存储落在 `service-core` 的 `session` 模块，`lib-web` 的 `session` 模块只做 Handler 与错误映射。详见 `.steps/p1/decisions.md` D-025。
+
 ### 8.2 后续阶段创建范围
 
 | 阶段 | 新增 Crate |

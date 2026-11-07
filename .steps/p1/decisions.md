@@ -43,6 +43,7 @@
 | D-022 | 固定端口分配 | DECIDED |
 | D-023 | 日志目录与归档策略 | DECIDED |
 | D-024 | 统一错误响应与错误码分配 | DECIDED |
+| D-025 | P1 Mock 会话契约与 P2 替换点 | DECIDED |
 
 ---
 
@@ -556,6 +557,55 @@
 
   启动时刻由 `lib_web::probe::startup()` 提供：服务端启动时调用 `mark_startup()` 记录（`lib-bin-web` 与探针示例均已接入），未显式记录时退化为首次访问时刻。两个接口的载荷都由 `R{code,message,data}` 包装（与其余 `Type` 返回一致）。
 - **代价**：`code` 与 HTTP 状态码同值，无法用 `code` 同时表达“哪一类业务失败”；细分业务错误码需要框架先支持自定义 code（跨仓库改动），P1 不做。
+- **状态**：`DECIDED`
+
+---
+
+## D-025 P1 Mock 会话契约与 P2 替换点
+
+- **问题**：P1 的 Mock 会话 / 消息 / Run 接口，契约放在哪些 Crate、接口怎么切、Mock 行为边界在哪，P2 接入真实实现时改哪一层？
+- **背景**：
+  - P1 不创建任何 `agent-*` Crate（`docs/workspace.md` 8.1），而第六节把 Message / Run 归 `agent-core`；`lib-web` 在 P1 只暴露 Mock 契约接口。
+  - P1 不引入 SQLite（D-017），会话存储是内存 Mock。
+  - `web_api` 的路径不支持占位符（D-008），GET 最多一个参数对象、查询参数值全部来自字符串（D-021），`i64` 在 wire 上以字符串传输（D-018）。
+- **决策**：
+  1. **类型归属**：Session / Message / Run 的契约类型（含 `*PO` / `*Params` / `*VO` / 枚举）落在 `types-core` 的 `session` 模块（`crates/types-core/src/session/`），`framework-proc-auto/collect` 在 P1-010 开启。这是**阶段裁剪**：P2 建 `agent-core` 后按 `docs/workspace.md` 6.2 整体迁移，类型名与字段不变，生成物只是 namespace 变化。
+  2. **业务归属**：Mock 业务在 `service-core`（`session/{service,store,error}.rs` + `holder/`），Handler 只做参数解包、业务调用与错误映射，`lib-web` 不承载业务规则。
+  3. **命名**：按 `docs/develop.md` 的契约规范 —— 请求体 `*PO`、查询参数 `*Params`、响应 `*VO`、枚举 `<业务名>` + `auto_enum`（wire 值为 `SCREAMING_SNAKE_CASE`）。tasks.md 里 `CreateSessionParams` / `SendMessageParams` 的写法以本条为准（`SessionCreatePO` / `MessageSendPO`）。
+  4. **ID 与数值**：id 一律 `String`（雪花 ID 转字符串，`lib_core::id::next_id`）；数量、token 用量、时间戳键（`*_ms`）用 `i64`，wire 上是字符串，TS 侧为 `string`（D-018）。
+- **接口清单（P1-010 起 6 条，动作段只用固定动词）**：
+
+  | 方法 | path | 入参 | 返回 | 说明 |
+  |---|---|---|---|---|
+  | POST | `api/session/create` | `SessionCreatePO { title?, model? }` | `SessionSummary` | 缺省标题为“新会话”，缺省模型为 `mock-model` |
+  | GET | `api/session/list` | 无 | `SessionSummary[]` | 按 `updatedAtMs` 倒序 |
+  | GET | `api/message/list` | `MessageListParams { sessionId }` | `Message[]` | 按写入顺序；会话不存在返回 404 |
+  | POST | `api/message/create` | `MessageSendPO { sessionId, content }` | `MessageSendVO { message, run }` | 写入用户消息并创建 `QUEUED` 的 Run |
+  | GET | `api/run/get` | `RunGetParams { runId }` | `Run` | Run 不存在返回 404 |
+  | POST | `api/run/cancel` | `RunCancelPO { runId }` | `Run` | 只允许取消 `QUEUED` / `RUNNING`，否则 400 |
+
+- **Mock 行为边界**：发送消息不产出助手回复、不推进 Run 状态（P1-011 的 SSE 流负责 `QUEUED → RUNNING → COMPLETED` 与助手消息，P2 换成 Agent Runtime）。会话隔离由存储的“消息按 sessionId 分桶”保证，没有跨会话读取入口。
+- **错误映射（补齐 D-024 的业务侧用法）**：`service-core` 的 `SessionError` 只表达业务语义，由 `lib-web` 映射 —— `NotFound` → 404、`Invalid`（参数或状态不满足规则）→ 400、`Internal` → 500 且对外固定文案，细节只进日志。
+- **P2 替换点**：
+
+  | P1 位置 | P2 处理 |
+  |---|---|
+  | `service-core/src/session/store.rs`（`Mutex<HashMap>`） | 换成 Repository（`service-core` 的 `repository` 模块 + `lib-db` / SQLite） |
+  | `service-core/src/session/service.rs` | 换成真实 Run 状态机（由 `agent-runtime` 驱动），方法签名与错误语义保持不变 |
+  | `service-core/src/holder/mod.rs`（进程级单例） | 改为 `lib-bin-web` 启动时构造并注入，移除单例 |
+  | `types-core/src/session/` | 迁入 `agent-core`（同名字段），DTO 不另起一套 |
+  | `lib-web/src/session/api.rs` | 不改；契约变更只走“改定义 → `make gen`” |
+
+- **代价与遗留**：
+  1. Mock 的 Run 永远停在 `QUEUED`（除非被取消），列表里会看到未完成的 Run；P1-011 接入流式后才会推进到 `COMPLETED`。
+  2. 会话列表没有分页与筛选，P2 需要时按 `PaginationParams` 补接口，属于新增而非修改。
+  3. 运行期行为（创建会话、发消息、列表互不可见、取消 Run）已按本条命令逐条实测（见下“实测回填”），但 P1 不写自动化测试，回归靠人工重跑。
+- **实测回填（2026-11-07）**：
+  - 环境：`cargo build` 后 `./target/debug/bin-agent.exe server --port 20100`（日志目录 `~/.lingting/agent/logs`），逐条调用上述 6 个接口，20 项检查全部通过：显式/默认标题与模型、发消息返回 `USER` 消息 + `QUEUED` Run、`message.runId` 关联、两会话消息互不可见、`messageCount` 与 `updatedAtMs` 倒序、`run/get`、`run/cancel` 到 `CANCELLED` 且 `finishedAtMs` 有值、状态持久化、重复取消 400、未知会话（含发消息）/未知 Run 404、空白内容 400、缺字段 400；错误体始终只有 `{code,message}`，日志无 panic、无 500。
+  - 验证中发现并修复：`SessionError::Invalid` 原先同一句文案既作对外 `message` 又作内部 `source`，日志出现重复的 `error_chain=… -> …`；改为 `source` 只写分类文案后变为 `消息内容不能为空 -> 会话业务参数或状态不满足规则`。
+  - 已知日志观感问题（不改）：业务 404 在框架日志里仍标 `category=路由不存在`（`WebErrorKind::NotFound` 的固定标签），响应体与状态码不受影响。
+  - 验证工具注意：Git Bash 下 `curl -d '{"title":"中文"}'` 会把中文按 GBK 字节发出，服务端返回 400 `请求体不是有效的 JSON`（属调用方编码问题，非实现缺陷）；需要用 `--data-binary @file` 或 UTF-8 环境发送。
+  - SDK：Rust 生成物中 6 个方法随 `lib-bin-cli` 编译通过；TS 生成物在 `tsc --noEmit --strict --skipLibCheck false packages/sdk-ts/dist/index.d.ts` 下无错误。
 - **状态**：`DECIDED`
 
 ---
