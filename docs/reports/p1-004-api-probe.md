@@ -28,18 +28,18 @@
 | 位置 | 作用 |
 |---|---|
 | `crates/lib-web/src/probe/dto.rs` | 探针 DTO，全部用 `auto_type` 标注（camelCase + `i64` 按字符串 + `Option` 可省略），可被 SDK 生成器导出 |
-| `crates/lib-web/src/probe/api.rs` | 7 个探针接口 |
+| `crates/lib-web/src/probe/api.rs` | 探针接口（P1-004 时 7 条，P1-009 起 11 条） |
 | `crates/lib-web/src/router.rs` | `web_routes()`：路由收集 + 链接锚点 |
 | `crates/lib-web/examples/api_probe_server.rs` | 探针服务，P1-005 / P1-006 生成 SDK 后从这里联调 |
 
 启动方式：
 
 ```text
-cargo run -p lib-web --example api_probe_server              # 127.0.0.1:8799
+cargo run -p lib-web --example api_probe_server              # 127.0.0.1:20103
 AGENT_PROBE_PORT=9000 cargo run -p lib-web --example api_probe_server
 ```
 
-启动日志会打印收集到的路由数：`probe server listening on http://127.0.0.1:8799 (7 routes)`。
+启动日志会打印收集到的路由数：`probe server listening on http://127.0.0.1:20103 (11 routes)`。
 
 ### 探针接口清单
 
@@ -52,6 +52,8 @@ AGENT_PROBE_PORT=9000 cargo run -p lib-web --example api_probe_server
 | `GET api/probe/fail` | `Query<ProbeQueryPO>` | `Result<ProbeQueryVO>` | 业务错误的状态码与响应体 |
 | `GET api/probe/response` | 无 | `WebResponse` | 自定义响应头 + 元数据 `Blob` |
 | `GET api/probe/response_of` | 无 | `WebResponseOf<ProbeQueryVO>` | 自定义响应头 + 类型化载荷 |
+
+> P1-009 追加 `GET api/probe/internal`、`GET api/probe/panic`（错误分类样例）与 `GET api/probe/health`、`GET api/probe/version`（探活），现共 11 条；接口清单、错误码与样例见 `decisions.md` D-024。
 
 ---
 

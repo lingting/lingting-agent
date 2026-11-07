@@ -159,7 +159,7 @@
     - [x] 请求头带 `x-trace-id` 时，响应头回显同一值，且日志中出现该值。
     - [x] Ctrl+C 能退出进程（此时允许非优雅，优雅关闭由 P1-013 负责）。
 
-- [ ] **P1-009 统一错误响应与健康检查**
+- [x] **P1-009 统一错误响应与健康检查**
 
   - **目标**：所有接口共享一套错误语义，并有一个最小健康检查接口供客户端探活。
   - **具体工作**：
@@ -171,9 +171,10 @@
   - **前置依赖**：P1-008
   - **交付物**：`ApiError` 契约与映射表；`health` / `version` 接口；错误码清单。
   - **验收标准**：
-    - [ ] 至少 4 类错误（参数、404、内部、panic）各有可复现的样例响应，且结构一致。
-    - [ ] 错误码清单存在且每条有含义说明。
-    - [ ] 错误响应体不包含 panic 消息、文件路径等内部信息。
+    - [x] 至少 4 类错误（参数、404、内部、panic）各有可复现的样例响应，且结构一致。
+    - [x] 错误码清单存在且每条有含义说明。
+    - [x] 错误响应体不包含 panic 消息、文件路径等内部信息。
+    - **实测结论**：`code` 与 HTTP 状态码同值（框架 `WebResponse::error_body` 固定，业务码需改框架，P1 不做）；契约类型 `ApiError` 落在 `crates/lib-web/src/error.rs`（`auto_type`，已进入 TS / Rust SDK）；`health` / `version` 按用户要求直接扩展探针模块（`api/probe/health`、`api/probe/version`，载荷 `ProbeHealthVO` / `ProbeVersionVO`，协议版本常量 `lib_web::probe::PROTOCOL_VERSION`），启动时刻由 `probe::mark_startup()` 在服务启动时记录；`internal` / `panic` 两条样例接口补齐错误分类验证；错误码清单与 curl 复现样例见 D-024。注意裸 `anyhow!` 错误（`WebErrorKind::Message`）会把原始 message 原样对外。
 
 - [ ] **P1-010 Mock 会话业务 API**
 

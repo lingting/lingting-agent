@@ -50,5 +50,28 @@ pub struct ProbeQueryVO {
     /// 生效的数量。
     pub size: i64,
     /// 生效的排序方向。
+    /// 生效的排序方向。
     pub desc: bool,
+}
+
+/// 健康检查结果（`api/probe/health`）。
+#[auto_type]
+pub struct ProbeHealthVO {
+    /// 服务版本。
+    pub version: String,
+    /// API 协议版本。
+    pub protocol_version: String,
+    /// 服务启动时间（Unix 毫秒）。
+    pub started_at_ms: i64,
+    /// 已运行时长（毫秒）。
+    pub uptime_ms: i64,
+}
+
+/// 版本信息（`api/probe/version`）。
+#[auto_type]
+pub struct ProbeVersionVO {
+    /// 服务版本。
+    pub version: String,
+    /// API 协议版本。
+    pub protocol_version: String,
 }

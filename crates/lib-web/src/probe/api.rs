@@ -3,7 +3,8 @@
 //! 覆盖 `web_api` 的返回值形态（`Void` / `Type` / `Result<T>` / `WebResponse` / `WebResponseOf<T>`）、
 //! 参数提取（`Json<T>` / `Query<T>`）、`auth` 显式声明与错误响应。
 
-use crate::probe::dto::{ProbeEchoPO, ProbeEchoVO, ProbeQueryPO, ProbeQueryVO};
+use crate::probe::dto::{ProbeEchoPO, ProbeEchoVO, ProbeHealthVO, ProbeQueryPO, ProbeQueryVO, ProbeVersionVO};
+use crate::probe::{PROTOCOL_VERSION, SERVICE_VERSION, startup};
 use anyhow::Result;
 use framework_web::{AuthRule, Json, Query, WebError, WebResponse, WebResponseOf, web_api_get, web_api_post};
 
@@ -69,6 +70,43 @@ pub async fn probe_response_of() -> WebResponseOf<ProbeQueryVO> {
     let mut response = WebResponseOf::from_t(probe_result(ProbeQueryPO::default()), None);
     response.headers.set(PROBE_HEADER, "web-response-of");
     response
+}
+
+/// 触发内部错误：验证对外只回固定文案，内部细节（source 链、路径）只进日志。
+#[web_api_get(path = "api/probe/internal")]
+pub async fn probe_internal() -> Result<ProbeQueryVO> {
+    Err(WebError::internal(
+        "探针内部错误",
+        "探针内部细节：sql=select * from session, path=D:/data/agent.db",
+    )
+    .into())
+}
+
+/// 触发 panic：验证 `catch_panic` 兜底后响应体不含 panic 消息与堆栈。
+#[web_api_get(path = "api/probe/panic")]
+pub async fn probe_panic() -> ProbeQueryVO {
+    panic!("探针 panic：此消息不应出现在响应体中");
+}
+
+/// 健康检查：客户端探活入口，返回服务版本、协议版本、启动时间与运行时长。
+#[web_api_get(path = "api/probe/health", auth = AuthRule::anonymous())]
+pub async fn probe_health() -> ProbeHealthVO {
+    let startup = startup();
+    ProbeHealthVO {
+        version: SERVICE_VERSION.to_string(),
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        started_at_ms: startup.started_at_ms(),
+        uptime_ms: startup.uptime_ms(),
+    }
+}
+
+/// 版本信息：客户端核对服务版本与 API 协议版本。
+#[web_api_get(path = "api/probe/version", auth = AuthRule::anonymous())]
+pub async fn probe_version() -> ProbeVersionVO {
+    ProbeVersionVO {
+        version: SERVICE_VERSION.to_string(),
+        protocol_version: PROTOCOL_VERSION.to_string(),
+    }
 }
 
 /// 把查询参数整理成结果载荷。

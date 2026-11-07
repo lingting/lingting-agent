@@ -15,6 +15,8 @@ const DEFAULT_PORT: i32 = 20103;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 链接锚点：不引用 lib-web 的符号时，注册项会被链接器丢弃，路由全部 404。
+    // 记录启动时刻，供 health 接口返回启动时间与运行时长。
+    lib_web::probe::mark_startup();
     let routes = lib_web::web_routes();
     let port = std::env::var("AGENT_PROBE_PORT")
         .ok()

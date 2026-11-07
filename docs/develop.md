@@ -111,6 +111,20 @@
 | 字段 | camelCase；id 用 `String`（D-018）；`i64` 在 wire 上以字符串传输（D-018）；查询参数不出现 `bool`（D-021） |
 | SSE 事件 | P1 尚未建模（D-007）：事件端点按 `Blob` 返回，事件类型由服务端枚举生成到两侧 SDK，事件名字段统一 `event` |
 
+### 统一错误响应
+
+所有失败响应由框架统一生成（`framework-web` 的 `WebResponse::from_error`），业务代码不手写错误响应体。
+
+| 项 | 约定 |
+|---|---|
+| 响应结构 | `{"code": <HTTP 状态码>, "message": "<对外消息>"}`；`code` 与状态码同值，4xx 为客户端错误、5xx 为服务端错误，已分配取值只追加不复用 |
+| 契约类型 | `ApiError { code, message }` 定义在 `crates/lib-web/src/error.rs`（`auto_type`），随生成进入两侧 SDK；客户端解析错误体只用它，不手写重复定义 |
+| 错误分类 | 只用 `WebError::parameter` / `not_found` / `unauthorized` / `forbidden` / `internal` 表达，映射表与错误码清单见 `p1/decisions.md` D-024 |
+| 内部细节 | 堆栈、SQL、文件路径、第三方错误一律放进 `WebError::internal(msg, source)` 的 `source`，只进日志；**禁止**用裸 `anyhow!` 携带内部细节（会归入 `WebErrorKind::Message` 并原样对外） |
+| 探活接口 | `GET api/probe/health`（版本、协议版本、启动时间、运行时长）与 `GET api/probe/version`（版本、协议版本），均显式 `AuthRule::anonymous()` |
+
+`ApiError` 当前落在 `lib-web` 以便随 SDK 生成导出；将来 `lib-web-core` 落实 Error Mapping 时可整体迁入（见 D-024 与 `docs/workspace.md` 的 `lib-web-core` 职责）。
+
 ### API 版本管理
 
 P1 不引入版本段：path 保持 `api/...`，不预留 `/api/v1`。将来需要多版本并存时采用 path 前缀（`api/v2/...`），不采用请求头版本化；届时按路径整体重排一次（D-019）。

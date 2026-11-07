@@ -42,6 +42,7 @@
 | D-021 | 参数提取与错误响应约束 | DECIDED (已实测) |
 | D-022 | 固定端口分配 | DECIDED |
 | D-023 | 日志目录与归档策略 | DECIDED |
+| D-024 | 统一错误响应与错误码分配 | DECIDED |
 
 ---
 
@@ -434,7 +435,7 @@
   3. P1 不做版本化，`/api/...` 直接演进。
 - **决策**：P1 采用方案 3 —— 不做版本化，path 保持 `api/...`，**不预留** `/api/v1`。
 - **决策理由**：本地 single-user 阶段没有并行版本需求；预留无处理器的 `v1` 段会让所有 path、前端代理与探针用例都背上一个当期无收益的常量。将来确实需要多版本并存时再用方案 1（path 前缀，如 `api/v2/...`）并整体重排一次，成本主要是机械改动；方案 2（请求头）在 SSE 与静态资源场景更麻烦，不作为备选。
-- **P1-007 回填**：P1 的 7 个探针接口全部是 `api/probe/...`，保持不变；`docs/develop.md`「API 契约规范」已记录“path 不带版本段”的现行约定。
+- **P1-007 回填**：P1 的探针接口全部是 `api/probe/...`，保持不变（P1-009 起共 11 条，见 D-024）；`docs/develop.md`「API 契约规范」已记录“path 不带版本段”的现行约定。
 - **状态**：`DECIDED`
 
 ---
@@ -502,6 +503,59 @@
   5. 日志初始化入口收敛在 `lib-core` 的 `logger`：`init_server` / `init_cli` / `init_tui`，调用方只传级别并持有返回的守卫。
 - **决策理由**：分目录避免多进程抢同一批文件；2 天归档与关闭 combined 控制用户目录占用；入口收敛避免各入口重复拼装 `LoggingConfig`。
 - **代价**：日志分散在三个目录，排查跨模式问题需分别查看；2 天保留对长期归档场景偏短。
+- **状态**：`DECIDED`
+
+---
+
+## D-024 统一错误响应与错误码分配
+
+- **问题**：所有接口的错误响应结构、HTTP 状态码与 `code` 如何分配，错误码清单如何维护，客户端探活接口返回什么？
+- **背景（已核实源码 + P1-004 实测）**：
+  - `framework-web` 的 `WebResponse::from_error` 固定输出 `{"code": <HTTP 状态码>, "message": "<对外消息>"}`，`code` 直接取 `WebError::status()`，与 HTTP 状态码同值；框架没有独立业务码的传参入口（`web_api` 的返回值要么是 `anyhow::Result<T>`，要么是 `WebResponse` / `WebResponseOf<T>`）。
+  - `WebError::public_message()` 对 `Internal` / `ReturnConversion` / `Panic` 固定返回 `服务器内部错误`；原始 message、source 链、`Location` 与 backtrace 只经 `WebError::log` 进日志。
+  - 注意例外：`WebErrorKind::Message`（裸 `anyhow` 错误被归一化后的分类）**不**走固定文案，会把原始 message 对外输出。
+- **决策**：
+  1. `code` 与 HTTP 状态码保持一致，不引入独立业务码（用户确认）。段位：4xx 客户端错误、5xx 服务端错误；**已分配的取值只追加、不复用**，新增错误（含后续阶段的业务错误）先在本表登记再落地。
+  2. 契约类型 `ApiError { code: u32, message: String }` 定义在 `lib-web`（`crates/lib-web/src/error.rs`，`auto_type`），进入 SDK 生成物（TS `ApiError`，Rust `ApiError`），客户端解析错误体只依赖它，不手写重复定义。
+  3. 错误分类由框架统一映射，业务侧只用 `WebError::parameter` / `not_found` / `unauthorized` / `forbidden` / `internal` 表达，**不手写错误响应体**、不自行返回 `WebResponse` 拼错误 JSON。
+  4. 携带内部细节（SQL、路径、第三方错误）一律走 `WebError::internal(msg, source)` 的 `source`，不放进 `msg`；禁止用裸 `anyhow!("...")` 承载内部细节（会被归入 `Message` 分类并原样对外）。
+- **错误码清单（P1 已分配）**：
+
+| 分类（`WebErrorKind`） | 构造 / 触发方式 | HTTP | `code` | 对外 `message` | 备注 |
+|---|---|---|---|---|---|
+| `Parameter` | `WebError::parameter` / `Json<T>`、`Query<T>` 提取失败 | 400 | 400 | 调用方 message 或框架固定文案（`请求参数转换失败` / `查询参数转换失败` / `请求体不是有效的 JSON`） | 不含字段名与解析器细节 |
+| `Unauthorized` | `WebError::unauthorized` | 401 | 401 | 调用方 message | P1 未启用鉴权，暂无样例 |
+| `Forbidden` | `WebError::forbidden` | 403 | 403 | 调用方 message | P1 未启用鉴权，暂无样例 |
+| `NotFound` | `WebError::not_found` / 路由不存在 / 方法不匹配 | 404 | 404 | 调用方 message 或 `请求接口不存在` | |
+| `Message` | 裸 `anyhow` 错误归一化 | 500 | 500 | **原始 message** | 会外泄内部细节，业务代码禁止用它携带细节 |
+| `ReturnConversion` | 返回值 JSON 序列化失败 | 500 | 500 | `服务器内部错误` | |
+| `Internal` | `WebError::internal(msg, source)` | 500 | 500 | `服务器内部错误` | 细节（含 `msg`）只进日志 |
+| `Panic` | handler 内 panic，由 `catch_panic` 兜底 | 500 | 500 | `服务器内部错误` | panic 消息与堆栈只进日志 |
+
+- **可复现样例（探针服务 `cargo run -p lib-web --example api_probe_server`，默认 `127.0.0.1:20103`）**：
+
+  ```text
+  curl -i "http://127.0.0.1:20103/api/probe/fail?size=1000"   # 400 参数错误
+    → {"code":400,"message":"size 超出探针允许范围"}
+  curl -i "http://127.0.0.1:20103/api/probe/missing"          # 404 未找到
+    → {"code":404,"message":"请求接口不存在"}
+  curl -i "http://127.0.0.1:20103/api/probe/internal"         # 500 内部错误
+    → {"code":500,"message":"服务器内部错误"}
+  curl -i "http://127.0.0.1:20103/api/probe/panic"            # 500 panic
+    → {"code":500,"message":"服务器内部错误"}
+  ```
+
+  四类响应结构完全一致（`code` + `message`），且都不含 panic 消息、SQL、文件路径。
+- **探测接口（P1-009 起 11 条，取代 D-019 中“7 个探针接口”的表述）**：`api/probe/{void,echo,query,typed,fail,response,response_of,internal,panic,health,version}`。新增的四条按用户要求直接扩展探针模块，不另建业务 API；`health` 与 `version` 均显式 `AuthRule::anonymous()`（探活必须在鉴权之前可用）。
+- **`health` / `version` 契约**：
+
+  | 接口 | 路径 | 载荷 | 说明 |
+  |---|---|---|---|
+  | 健康检查 | `GET api/probe/health` | `ProbeHealthVO { version, protocolVersion, startedAtMs, uptimeMs }` | 客户端探活；`version` 取 workspace 版本，`protocolVersion` 取 `lib_web::probe::PROTOCOL_VERSION`（当前 `"1"`），时间为 Unix 毫秒（按 D-018 以字符串传输） |
+  | 版本信息 | `GET api/probe/version` | `ProbeVersionVO { version, protocolVersion }` | 仅版本，不依赖时钟，便于客户端做兼容性判断 |
+
+  启动时刻由 `lib_web::probe::startup()` 提供：服务端启动时调用 `mark_startup()` 记录（`lib-bin-web` 与探针示例均已接入），未显式记录时退化为首次访问时刻。两个接口的载荷都由 `R{code,message,data}` 包装（与其余 `Type` 返回一致）。
+- **代价**：`code` 与 HTTP 状态码同值，无法用 `code` 同时表达“哪一类业务失败”；细分业务错误码需要框架先支持自定义 code（跨仓库改动），P1 不做。
 - **状态**：`DECIDED`
 
 ---

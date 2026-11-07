@@ -446,6 +446,8 @@ Web 基础能力（参考 `lingting-ai-gateway` 的 `lib-web-core`）。
 - Request / Response Handler。
 - SSE Endpoint。
 - API Metadata 收集。
+- 统一错误响应契约（`ApiError`，`auto_type`，随 SDK 生成导出；映射规则见 `docs/develop.md` 与 D-024）。
+- 探活接口 `health` / `version`（P1 位于探针模块）。
 - Web Router 组装。
 - 与服务端 API SDK 生成机制集成。
 

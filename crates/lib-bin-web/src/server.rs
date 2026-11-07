@@ -24,6 +24,8 @@ pub fn serve(host: &str, port: u16) -> Result<()> {
 }
 
 async fn run(host: &str, port: u16) -> Result<()> {
+    // 记录启动时刻，供 health 接口返回启动时间与运行时长。
+    lib_web::probe::mark_startup();
     // 链接锚点：不引用路由收集函数时，inventory 注册项会被链接器丢弃，接口会全部 404。
     let routes = lib_web::web_routes();
     info!(count = routes.len(), "已收集的接口数量");
