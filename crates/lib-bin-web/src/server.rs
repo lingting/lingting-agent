@@ -1,5 +1,6 @@
 //! Server 启动：绑定监听地址、挂载 Web 路由，并让请求日志带上 trace id。
 
+use crate::{cors, webui};
 use anyhow::{Context, Result};
 use framework_web::{WebRoute, use_web};
 use framework_web_axum::{WebRouteWrapper, axum_builder};
@@ -30,8 +31,16 @@ async fn run(host: &str, port: u16) -> Result<()> {
     let routes = lib_web::web_routes();
     info!(count = routes.len(), "已收集的接口数量");
 
+    // WebUI 静态资源与 SPA 兜底：只接管路由未命中的 GET，api/ 前缀仍归框架的 404。
+    let webui = webui::WebUiAssets::new(webui::DIRECTORY);
+    webui.log_ready();
+
     // 端口冲突等绑定失败在此返回，由调用方转换为可读错误与退出码（不做随机端口回退）。
-    let server = axum_builder(host, i32::from(port)).bind().await?;
+    let server = axum_builder(host, i32::from(port))
+        .with_cors(cors::resolve)
+        .push_interceptor(Arc::new(webui))
+        .bind()
+        .await?;
     info!("listening on {}", server.context().address());
     server.run(Some(trace_wrapper())).await
 }

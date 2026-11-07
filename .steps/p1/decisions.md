@@ -45,6 +45,7 @@
 | D-024 | 统一错误响应与错误码分配 | DECIDED |
 | D-025 | P1 Mock 会话契约与 P2 替换点 | DECIDED |
 | D-026 | P1 Streaming 契约（RunEvent + SSE） | DECIDED |
+| D-027 | CORS、静态资源与 WebUI 兜底路由 | DECIDED |
 
 ---
 
@@ -220,7 +221,7 @@
   3. 构建期生成 Rust 源码（自研 codegen，把文件写成 `&[u8]` 常量）。
 - **推荐方案**：方案 1。
 - **决策理由**：debug 与 release 行为差异正好满足“开发指向本地目录、发布嵌入”的双模式需求；方案 2 在开发时需要重新编译 Rust，体验差；方案 3 是重复制造 `rust-embed`。
-- **待确认**：`rust-embed` 与 `framework-web` 的 `WebResponse` 集成是否需要额外的 MIME 推断逻辑（`WebResponse` 无内建 MIME 表）。
+- **待确认**：`rust-embed` 与 `framework-web` 的 `WebResponse` 集成是否需要额外的 MIME 推断逻辑（`WebResponse` 无内建 MIME 表）。**P1-012 回填**：MIME 推断已在静态资源拦截器中实现（按扩展名映射，未识别按 `application/octet-stream`），P1-017 直接复用，不再需要额外推断逻辑。
 - **状态**：`OPEN`
 
 ---
@@ -644,13 +645,36 @@
 
 ---
 
+## D-027 CORS、静态资源与 WebUI 兜底路由
+
+- **问题**：WebUI 如何通过浏览器访问 Server API；静态资源与 SPA fallback 如何与框架的统一分发共存；API 的 404 语义如何不被兜底路由破坏。
+- **背景（已核实）**：
+  - `framework-web-axum` 用 `fallback(any(dispatch))` 接管全部请求，`WebRouter` 按方法 + 路径精确匹配，未命中返回 `not_found("请求接口不存在")`；`OPTIONS` 在 dispatch 里直接返回 `WebResponse::empty()`（204），不进入路由查找。
+  - 上游 `69cfaf6`（路由拦截器支持）新增 `framework_web::WebInterceptor` 与 `AxumBuilder::push_interceptor`：拦截器在路由查找之后、路由执行之前运行，`should_intercept` 能拿到 `Option<Arc<WebRoute>>`（未命中为 `None`），`WebInterceptResult::Respond` 可提前结束请求。**A-3 假设解除**：静态托管不需要修改框架，也不需要复制 dispatch。
+  - `WebResponse` 没有内建 MIME 表，`content-type` / `content-length` 需自行设置；`WebResponse::empty()` 是 204 + 空体，可直接改写状态码、响应头与响应体。
+- **决策**：
+  1. CORS 由 `AxumBuilder::with_cors` 提供，白名单固定为本地回环来源：`http://127.0.0.1:20100`、`http://localhost:20100`、`http://127.0.0.1:20101`、`http://localhost:20101`（端口见 D-022）。`access-control-allow-origin` 回显白名单中的请求来源，不使用 `*`；允许方法 `GET, POST, PUT, PATCH, DELETE, OPTIONS`；允许头 `content-type, x-trace-id`；暴露 `x-trace-id`；预检缓存 600 秒；来源不在白名单时不输出任何 CORS 头。
+  2. `OPTIONS` 保持框架的 204 语义，预检所需的 CORS 头由同一个 `with_cors` 回调补齐，不在拦截器里重复处理。
+  3. 静态资源用拦截器实现（`lib-bin-web` 的 `webui::WebUiAssets`），只接管「路由未命中 + GET + 非 `api/` 前缀」的请求，命中后提前返回文件响应。
+  4. 路径隔离：`api` 与 `api/...` 永不进入静态查找，未命中仍是框架的 API 404 `{code,message}`；其余 GET 带扩展名视为资源（缺失返回 404 文本），不带扩展名视为前端路由并回落 `index.html`；非 GET 一律不进入静态托管。
+  5. P1 静态目录固定为 `lingting-agent-ui/dist`（相对进程工作目录），启动时记录目录状态；`index.html` 缺失时前端路由返回 503 文本，不伪装成 API 404。P1-017 切换为编译期嵌入，对外接口不变。
+  6. 资源响应头：`content-type` 按扩展名映射（未识别按 `application/octet-stream`），并设置 `content-length`；`index.html` 用 `no-cache`，其余产物用 `public, max-age=31536000, immutable`（Vite 产物文件名带内容哈希）。
+- **代价与遗留**：
+  1. 静态文件读取使用同步 `std::fs`，大文件或慢盘会占用一个 Tokio worker；P1 只托管前端小文件，P1-017 嵌入后不再读盘，暂不引入异步 IO。
+  2. 未输出 `Vary: Origin`（`AxumCors` 无该字段）；本地单用户场景不涉及共享缓存，暂不处理。
+  3. CORS 白名单是编译期常量，不随 `--addr` / `--port` 变化；按 D-022 修改端口时必须同步改常量。
+- **运行期回填（P1-012）**：`make ui-build` 后 `bin-agent server --port 20100` 实测：白名单 Origin 的 `OPTIONS` 返回 204 且带全部 `access-control-*` 头，非白名单 Origin 的预检与实际请求都不输出 CORS 头；白名单 Origin 的 `GET api/probe/health` 返回 200 且带 allow-origin；`api/*` 未命中（含带扩展名的 `api/unknown.js`）与非 GET 的非 API 路径均返回 404 `{"code":404,"message":"请求接口不存在"}`；`/` 与未知前端路由返回 200 `text/html`（与 `dist/index.html` 一致）；`dist/assets/*` 的 `content-type` 与缓存头符合预期；`assets/missing.js`、`/../Cargo.toml`、`/%2e%2e/Cargo.toml` 均 404 文本且未泄露文件；无 `dist` 时前端路由返回 503 文本，两次运行日志均无 panic。已知观感问题：`api/*` 未命中会写一条框架 `Web 请求异常 category=路由不存在` 的 ERROR 日志（与 D-024 记录的既有行为一致）。
+- **状态**：`DECIDED`
+
+---
+
 ## 假设清单（未验证）
 
 | ID | 假设 | 影响 | 何时验证 |
 |----|------|------|----------|
 | A-1 | `framework-proc-rust` 可在不修改 `framework-proc-core` 的前提下，只靠公开的 `ApiMetadata` 完成 Rust 代码生成 | 若不可行，需向上游暴露更多元数据（如泛型参数的完整路径） | P1-006 |
 | A-2 | 生成的 Rust 客户端可以引用服务端 DTO 类型而不产生循环依赖（契约 crate 独立于业务 crate） | 影响 D-003 的 DTO 策略 (a)/(b) | P1-006 |
-| A-3 | `framework-web-axum` 的 `AxumBuilder` 与静态资源 fallback 可以共存（框架用 `fallback` 做 dispatch，需确认不会与 SPA fallback 冲突） | 影响 P1-012 的实现方式 | P1-012 |
+| A-3 | ~~`framework-web-axum` 的 `AxumBuilder` 与静态资源 fallback 可以共存~~ **已验证（P1-012）**：上游 `69cfaf6` 的路由拦截器（`WebInterceptor` + `push_interceptor`）可在路由未命中时提前返回响应，与 `fallback(any(dispatch))` 共存，无需修改框架或用 SPA fallback 替换 dispatch | 静态资源与 WebUI 兜底由拦截器实现，`api/` 前缀保持 API 404（D-027） | 已验证 |
 | A-4 | SSE 经 `WebBody::Stream` 在 Windows + 浏览器 / reqwest 下不被缓冲（无 `Transfer-Encoding` 或反代缓冲问题） | 影响流式体验 | **直连已验证（P1-011）**：`curl -N` 下事件按约 120ms 逐个到达、`chunked` 无缓冲，响应头为 `cache-control: no-cache` / `x-accel-buffering: no`；浏览器与反代场景留待 P1-016 |
 | A-5 | ~~`inventory` 注册在 Windows 的动态链接场景下工作正常~~ **已验证（P1-004）**：静态链接下可用，但消费方必须显式引用 crate 符号作为链接锚点，否则注册项被链接器丢弃 | 生成器与服务启动都必须先引用 `lib_web::web_routes()`，否则接口与元数据为空 | 已验证 |
 | A-6 | WebUI 的 SSE 消费可用 `EventSource`（原生），无需为 POST + SSE 引入 fetch stream | 影响 WebUI 传输实现（`EventSource` 只支持 GET） | P1-016 |

@@ -500,7 +500,8 @@ Web Server 启动与 WebUI 资源管理。
 - Web Router 启动。
 - API 挂载。
 - 请求日志的 trace id 作用域（`x-trace-id` 的透传由框架分发层负责）。
-- WebUI 静态资源。
+- WebUI 静态资源与 SPA 兜底（拦截器实现，`api/` 前缀保持 API 404）。
+- CORS 白名单（仅本地回环来源）。
 - Graceful Shutdown。
 - Web Server 生命周期。
 
@@ -604,7 +605,7 @@ manager-agent -> service-agent
 | `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体） | `lib-bin-*`、`bin-*` |
 | `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | Clap、Reqwest、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber` | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui | Agent Runtime、服务端业务实现 |
-| `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `framework-web`、`framework-web-axum`、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
+| `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |

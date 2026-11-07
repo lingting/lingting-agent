@@ -213,7 +213,7 @@
     - **实测结论**：契约类型落在 `crates/types-core/src/session/event.rs`（`RunEventKind` 为 `auto_enum`，serde / strum 均为 `snake_case`；`RunEvent` 为 `auto_type` 扁平结构体），入参 `RunStreamParams` 在 `request.rs`；接口为 `GET api/run/stream?runId=`（新增动作动词 `stream`，D-026）。分层：`service-core/src/session/stream.rs` 只产出 `RunEvent`（`mpsc` + 生产任务），`lib-web/src/session/stream.rs` 把事件映射成 SSE 帧，`lib-web-core/src/sse.rs` 负责 `id` / `event` / `data` 编码与响应头常量。Mock 节奏：助手回复按 4 字符切分、每段间隔 120ms，`inputTokens` / `outputTokens` 按字符数估算。
     - **运行期验证（已执行）**：`bin-agent server --port 20100` 起服务后，`curl -N` 收到 19 帧（`run_started` + 17 × `message_delta` + `run_completed`），事件按约 120ms 逐个到达、`transfer-encoding: chunked`（无 `content-length`，A-4 直连未被缓冲）；响应头含 `content-type: text/event-stream; charset=utf-8`、`cache-control: no-cache`、`x-accel-buffering: no`，`x-trace-id` 正常回写。`run_completed` 后 `api/run/get` 为 `COMPLETED`（`finishedAtMs`、token 用量齐全），`api/message/list` 多出一条 `ASSISTANT` 消息且 `messageCount` 递增。断线（`curl --max-time 0.6` 中途退出）后 Run 变为 `CANCELLED` 且带 `finishedAtMs`，只有 `USER` 消息、没有半成品助手消息，日志无 panic。流式期间 `api/run/cancel` 后事件停止推送（7 帧后 EOF）、Run 保持 `CANCELLED`、不写助手消息。重复订阅返回 400 `Run 当前状态为 COMPLETED，不可订阅事件流`，未知 Run 返回 404 `Run 不存在：999`；全程日志只有这两条预期业务错误，无 panic。SDK：`make gen` 后接口总数 18 条，Rust 生成物导出 `RUN_STREAM.path = api/run/stream`（返回 `Vec<u8>`）与 `RunEvent` / `RunEventKind`，TS 生成物导出 `ApiDefinitions.runStream.path` 与同名类型，`tsc --noEmit --strict --skipLibCheck false` 通过。契约、断线语义与 P2 替换点见 D-026，`run_failed` 在 P1 无产出方（Mock 不会失败）。
 
-- [ ] **P1-012 CORS、静态资源与 WebUI 兜底路由**
+- [x] **P1-012 CORS、静态资源与 WebUI 兜底路由**
 
   - **目标**：让 WebUI 能通过浏览器访问 Server API，并为 P1-017 的资源嵌入准备好托管入口。
   - **具体工作**：
@@ -225,9 +225,10 @@
   - **前置依赖**：P1-009
   - **交付物**：CORS 配置；静态资源托管与 fallback 路由；路径隔离规则。
   - **验收标准**：
-    - [ ] 浏览器来源下 API 调用不被 CORS 拦截，非允许来源被拒绝。
-    - [ ] 访问未知前端路由返回 `index.html`，访问未知 API 路径返回 API 404 结构。
-    - [ ] OPTIONS 预检响应包含正确的 `access-control-*` 头。
+    - [x] 浏览器来源下 API 调用不被 CORS 拦截，非允许来源被拒绝。
+    - [x] 访问未知前端路由返回 `index.html`，访问未知 API 路径返回 API 404 结构。
+    - [x] OPTIONS 预检响应包含正确的 `access-control-*` 头。
+    - **运行期验证（已执行）**：`make ui-build` 产出 `lingting-agent-ui/dist` 后启动 `bin-agent server --port 20100`。预检 `OPTIONS api/probe/void`（`Origin: http://127.0.0.1:20101`）返回 204，带 `access-control-allow-origin` / `allow-methods` / `allow-headers` / `expose-headers` / `max-age`；非白名单 Origin 的预检与实际请求都不输出任何 `access-control-*`。`GET api/probe/health`（白名单 Origin）返回 200 且带 allow-origin。`GET api/probe/not-exist`、`GET api/unknown.js`、`POST chat/abc` 均返回 404 `{"code":404,"message":"请求接口不存在"}`。`GET /` 与 `GET /chat/abc` 返回 200 `text/html` 且与 `dist/index.html` 字节一致（`cache-control: no-cache`）。`GET assets/index-*.js|css` 返回 200 对应 `content-type` 与 `public, max-age=31536000, immutable`。`GET assets/missing.js`、`--path-as-is /../Cargo.toml` 与 `/%2e%2e/Cargo.toml` 均返回 404 文本且未泄露文件。无 dist 目录时前端路由返回 503 文本，启动日志告警，两次运行均无 panic。
 
 - [ ] **P1-013 优雅关闭与生命周期**
 

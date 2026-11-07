@@ -1621,6 +1621,7 @@ name = "lib-bin-web"
 version = "26.11.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "framework-web",
  "framework-web-axum",
  "lib-core",
