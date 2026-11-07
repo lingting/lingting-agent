@@ -6,6 +6,7 @@
 
 - Workspace 架构与依赖关系以 `docs/workspace.md` 为准。
 - 开发规范以 `docs/develop.md` 为准。
+- 接口文档入口为 `docs/api/readme.md`，按领域一文件（`docs/api/<领域>.md`）。
 - 阶段开发计划以 `.steps/README.md` 及对应阶段文档为准。
 
 ## 强制约束

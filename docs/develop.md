@@ -90,12 +90,15 @@
 
 **单一来源**：服务端 `#[web_api_*]` 标注的 handler 与 `#[auto_type]` / `#[auto_enum]` 标注的 DTO，全部位于 `crates/lib-web/src/`。客户端 SDK 完全由此生成，不存在第二份手写 API 定义。任何 API 变更先改这里。
 
+**接口文档**：人类可读的接口说明（领域划分、接口清单、参数表与样例）放在 `docs/api/`，入口是 `docs/api/readme.md`，按领域一文件（`probe.md`、`session.md`）。它只做说明、不构成第二份契约，与代码不一致时以代码为准；改接口时同步对应领域文档。
+
 ### 改 API 的完整步骤
 
 1. 改 `crates/lib-web/src/` 下的 handler 与 DTO。
-2. `make gen` 重新生成两份 SDK；生成失败按提示修定义，不手改生成物。
-3. `make check`（格式 + Clippy）与 `make build`（生成代码参与编译）通过。
-4. 前端侧 `make ui-install` / `make ui-lint`；生成物不入库，提交里只有 API 定义与消费方代码。
+2. 同步 `docs/api/` 中对应领域文档（接口清单、参数表、样例）；新增领域时同时登记到 `docs/api/readme.md` 的索引表。
+3. `make gen` 重新生成两份 SDK；生成失败按提示修定义，不手改生成物。
+4. `make check`（格式 + Clippy）与 `make build`（生成代码参与编译）通过。
+5. 前端侧 `make ui-install` / `make ui-lint`；生成物不入库，提交里只有 API 定义与消费方代码。
 
 ### 命名规范
 
@@ -127,18 +130,10 @@
 
 ### 会话业务接口（P1 Mock）
 
-P1-010 起的会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`，契约类型在 `types-core` 的 `session` 模块；P2 只替换实现、不改契约。接口清单、Mock 行为边界、错误映射与 P2 替换点见 `.steps/p1/decisions.md` D-025。
-
-| 方法 | path | 入参 | 返回 |
-|---|---|---|---|
-| POST | `api/session/create` | `SessionCreatePO` | `SessionSummary` |
-| GET | `api/session/list` | 无 | `SessionSummary[]` |
-| GET | `api/message/list` | `MessageListParams` | `Message[]` |
-| POST | `api/message/create` | `MessageSendPO` | `MessageSendVO` |
-| GET | `api/run/get` | `RunGetParams` | `Run` |
-| POST | `api/run/cancel` | `RunCancelPO` | `Run` |
+P1-010 起的会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`，契约类型在 `types-core` 的 `session` 模块；P2 只替换实现、不改契约。接口清单、参数表、载荷字段与样例见 `docs/api/session.md`；Mock 行为边界、错误映射与 P2 替换点见 `.steps/p1/decisions.md` D-025。
 
 约定：会话与 Run 的 ID 走查询参数或请求体（无路径占位符）；`messageCount`、token 用量与 `*Ms` 时间戳按 D-018 以字符串传输；业务失败的 404（会话/Run 不存在）与 400（参数或状态不满足规则）由 `SessionError` 映射，错误体仍是统一的 `{code,message}`。
+
 ### API 版本管理
 
 P1 不引入版本段：path 保持 `api/...`，不预留 `/api/v1`。将来需要多版本并存时采用 path 前缀（`api/v2/...`），不采用请求头版本化；届时按路径整体重排一次（D-019）。
