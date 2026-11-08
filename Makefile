@@ -16,7 +16,7 @@ CROSS_TARGET ?= x86_64-unknown-linux-gnu
 EXE := $(if $(filter Windows_NT,$(OS)),.exe,)
 
 .DEFAULT_GOAL := help
-.PHONY: help gen build release release-cross check fmt test clean-gen ui-install ui-dev ui-build ui-lint ui-e2e-install
+.PHONY: help gen gen-check build release release-cross check ci fmt test clean-gen ui-install ui-dev ui-build ui-check ui-lint ui-e2e-install
 
 help:
 	@cat .make/help.txt
@@ -47,6 +47,18 @@ release-cross: gen
 check:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
+
+# 生成物重建门禁（P1-019）：清空 packages/ → 重建两份 SDK → 校验产物完整与可编译。
+# 逻辑与中文提示在 scripts/gen-check.sh（Makefile 在 Windows 上按 ANSI 代码页解析，recipe 内不写中文）。
+gen-check:
+	sh scripts/gen-check.sh
+
+# 前端静态类型检查：只读不写（make ui-lint 会 --fix，不适合 CI）。
+ui-check:
+	cd $(UI_DIR) && pnpm exec tsc --noEmit
+
+# CI 门禁：CI 流水线与本地用的是同一条命令（见 .github/workflows/ci.yml）。
+ci: gen-check check ui-check
 
 fmt:
 	cargo fmt --all

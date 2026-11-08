@@ -1,0 +1,48 @@
+# CI 门禁（P1-019）：与本地走完全相同的命令，不在 workflow 里写复杂逻辑。
+#
+# 检查内容全部收在 Makefile / scripts/ 里：
+#   make gen        生成两份 SDK（前端安装依赖的前置：pnpm workspace 指向 ../packages/*）
+#   make ui-install 安装前端依赖
+#   make ci         gen-check + check + ui-check（重建门禁 + 格式/Clippy + 前端类型检查）
+#
+# 说明：workspace 目前以 path 引入同级仓库 ../lingting-rust-framework（D-015），发布前会切换为
+# version 引入；本 workflow 不为该本地路径做任何检出处理。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      # 工具链版本由 rust-toolchain.toml 固定（1.98.0，含 rustfmt / clippy）。
+      - name: 安装 Rust 工具链
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+          cache-dependency-path: lingting-agent-ui/pnpm-lock.yaml
+
+      - name: 生成 SDK
+        run: make gen
+
+      - name: 安装前端依赖
+        run: make ui-install
+
+      - name: 检查（与本地同一条命令）
+        run: make ci

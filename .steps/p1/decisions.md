@@ -49,6 +49,7 @@
 | D-028 | 优雅关闭与生命周期 | DECIDED |
 | D-029 | CLI 命令结构与客户端 Transport | DECIDED |
 | D-030 | 前端测试分层与执行入口 | DECIDED (P1-016) |
+| D-031 | 生成物重建门禁与 CI 形态 | DECIDED (P1-019) |
 
 ---
 
@@ -153,6 +154,7 @@
 - **配套约束**：生成命令必须幂等；生成失败必须非 0 退出且不落半成品；CI 与本地用同一条命令。
 - **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_sdk`，内部顺序执行 Rust 与 TS 两个生成器）」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。
 - **P1-007 回填**：命令入口固化为根 `Makefile` 的 `make gen`（不再使用 `scripts/*.sh`，`scripts/` 已删除）；生成器形态仍是 `lib-web` 的 example，不新增独立 crate。失败行为落实为「全部校验与源码构建先于写盘完成；写盘先落同级暂存目录 `.gen-tmp`，成功后才提交目标目录」，失败以非 0 退出且保留上一次产物；提交前逐字节比对内容，与上次完全一致时只删暂存目录、不写盘（避免刷新 mtime 让下游重编译），有任一差异则整体替换目录。
+- **P1-019 回填**：配套约束「CI 与本地用同一条命令」落地为 `make ci`（`gen-check` + `check` + `ui-check`），CI 流水线仅做检出与依赖安装后调用它，见 D-031。
 - **状态**：`DECIDED (P1-006 已验证；P1-007 已固化命令入口与失败行为)`
 
 ---
@@ -761,6 +763,27 @@
   2. 前端构建在准备阶段只做一次，用例执行期间不再更新产物；产物比源码新时直接复用（mtime 比较），因此改前端后首次运行会重建。
   3. `make test` 每次都跑 `gen`，生成物重写会让 cargo 重建 `bin-agent`，Windows 对新 exe 的首次加载约 1.1 秒（第二次 86ms），这是隔离用例耗时波动的主因。
 - **状态**：`DECIDED`（P1-016）
+
+---
+## D-031 生成物重建门禁与 CI 形态
+
+- **问题**：生成物不入库（D-006），怎么让「没有生成物」或「生成失败」在本地与 CI 都变成一次明确的失败；门禁命令放哪、失败提示写在哪、CI 与本地如何保证等价。
+- **可选方案**：
+  1. 把重建并进 `make check`，让现有检查入口天然覆盖生成物。
+  2. 独立 `make gen-check`（清空 → 重建 → 校验产物 → 编译校验），再由 `make ci` 串联 `gen-check` / `check` / `ui-check`，CI 只调 `make ci`。
+  3. 对生成物取哈希与缓存比对（生成物不入库，没有基线；哈希也无法证明「可编译」）。
+- **决策**：采用方案 2。
+  1. **判据三条**：`make gen` 非 0 退出、关键产物缺失或为空、`cargo check --workspace --all-targets` 失败，任一命中即失败；不做 git diff 比对（无基线，见 D-006）。
+  2. **不并入 `make check`**：`check` 保持「fmt + clippy」的轻量语义；重建门禁会清空 `packages/` 并让下游 cargo 必然重编，不该成为每次检查的固定成本。
+  3. **前端静态类型检查单独成目标**：`ui-check` = `pnpm exec tsc --noEmit`（只读）；`ui-lint` 带 `--fix`，不能用于门禁。
+  4. **复杂逻辑进 `scripts/`**：`scripts/gen-check.sh` 承载四步流程与全部中文提示，Makefile recipe 与 workflow 各留一行命令 —— make 在 Windows 上按 ANSI 代码页解析 Makefile，recipe 内写中文会乱码。P1-007 删掉 `scripts/` 只是当时的命令收敛结论，不构成限制。
+  5. **CI 与本地同一组命令**：workflow 只做检出、工具链与依赖安装，然后 `make gen` → `make ui-install` → `make ci`；本地照抄这三条即可复现，不存在「本地过 CI 不过」的第二套逻辑。
+  6. **framework 依赖不进 CI 逻辑**：当前 path 引入同级仓库（D-015），发布前改为 version；workflow 不为该本地路径做任何检出处理。
+- **代价与遗留**：
+  1. `gen-check` 每次都清空并重建 `packages/`，下游 cargo 必然重编一次（Windows 上 `bin-agent` 首次加载约 1.1 秒，见 D-030），耗时高于普通 `check`。
+  2. 门禁只证明「生成器与生成物自洽且可编译」，不校验生成物内容是否符合某个历史基线。
+  3. CI 目前只在 ubuntu-latest 上跑 Rust 检查与前端类型检查，不含 `make test`（测试执行不进门禁，见全局测试约束）。
+- **状态**：`DECIDED`（P1-019）
 
 ---
 ## 假设清单（未验证）

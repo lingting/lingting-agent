@@ -377,7 +377,7 @@
     - **跨平台结论**（回填 D-020）：Windows 为第一目标且已验收；Linux 走 `cargo-zigbuild` 交叉编译（x86_64 gnu / musl 已运行验证，aarch64 gnu 仅编译通过）；macOS 交叉编译需要 Apple SDK 与签名，本机不可行，走 CI 的 macOS runner，P1 不做，归属 P6 发布阶段。
     - **无开发工具环境**（X-6）：仅把 `bin-agent.exe` 拷到空目录（无 `dist`、无 `lingting-agent-ui`、无 SDK 生成物），`env PATH='C:/Windows/system32'` 下 `--version` 正常；`server` 启动后 `/`、`/assets/index-*.js`、`/assets/index-*.css` 均 200 且解压后与 `dist` 内文件逐字节一致，`/chat/abc` 回落入口页；`status` / `run` 走同一 binary 正常，`tui` 在 release 下可正常渲染。
 
-- [ ] **P1-019 API 一致性与生成物重建门禁**
+- [x] **P1-019 API 一致性与生成物重建门禁**
 
   - **目标**：让“没有生成物”或“生成失败”变成构建失败，而不是依赖人工记忆；生成物不入库，因此不做 git diff 比对，也不存在过期 diff 检测。
   - **具体工作**：
@@ -388,9 +388,16 @@
   - **前置依赖**：P1-007、P1-018
   - **交付物**：重建检查命令；CI 配置；失败提示与处理约定。
   - **验收标准**：
-    - [ ] 生成物缺失或生成失败时，检查命令以非 0 退出并给出可操作提示。
-    - [ ] 重新生成后检查通过。
-    - [ ] 本地与 CI 使用完全相同的检查命令。
+    - [x] 生成物缺失或生成失败时，检查命令以非 0 退出并给出可操作提示。
+    - [x] 重新生成后检查通过。
+    - [x] 本地与 CI 使用完全相同的检查命令。
+  - **实现结论（2026-11-11）**：
+    - **门禁命令**：`make gen-check` → `scripts/gen-check.sh`，四步固定顺序：清空 `packages/`（从零重建，覆盖“缺生成物”场景）→ `make gen` → 校验 10 份关键产物存在且非空 → `cargo check --workspace --all-targets`（生成物经 `lib-bin-cli` 的 `#[path]` 参与编译）。任一步失败即非 0 退出，提示统一为「缺少生成物或生成失败，请运行 `make gen` 重新生成」，另附当步的具体处理建议（编译失败时明确要求改定义/生成器、不手改生成物）。
+    - **不做 git diff 比对**：生成物不入库（D-006），不存在“已提交版本”可比；判据只有「生成成功 + 产物完整 + 可编译」三条（D-031）。
+    - **检查串联**：`make ci` = `gen-check` + `check`（fmt + clippy）+ `ui-check`（`pnpm exec tsc --noEmit`，只读不写；`make ui-lint` 带 `--fix`，不适合门禁）。`make check` 保持轻量不变，不因门禁变慢。
+    - **文案落位**：中文提示只写在 `scripts/gen-check.sh`（UTF-8，sh 执行不乱码），Makefile recipe 内不写中文 —— Windows 上 make 按 ANSI 代码页解析 Makefile。P1-007 的“不再提供 `scripts/`”只是当时的命令收敛结论，不构成限制，本次按“复杂逻辑不进 Makefile / workflow”重建 `scripts/`。
+    - **CI**：新增 `.github/workflows/ci.yml`（ubuntu-latest，`master` 与 PR），只做检出 + 工具链/依赖安装，随后执行 `make gen` → `make ui-install` → `make ci`，与本地完全同一组命令；复杂逻辑不下沉到 workflow。framework 目前以 path 引入同级仓库（D-015），发布前改为 version，workflow 不为它做检出处理。
+    - **实测**：`make gen-check` 从零重建后通过（`cargo check` 通过）；`make ci` 通过（fmt / clippy `-D warnings` / `tsc --noEmit` 全绿）。失败路径用 `AGENT_SDK_RUST_OUT_DIR` 把 Rust 产物导到别处复现：脚本在产物校验步报「产物缺失或为空：sdk-rust/src/api.rs …」并退出 1。
 
 - [ ] **P1-020 P1 端到端 Mock 闭环验收与结论回填**
 
