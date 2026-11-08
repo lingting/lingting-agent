@@ -49,6 +49,9 @@ impl Server {
             .arg("--log-level")
             .arg("warn")
             .env(ENV_HOME, &log_dir)
+            // 静态资源目录（`lingting-agent-ui/dist`）按服务端进程工作目录解析，固定到仓库根目录，
+            // 否则从其他目录跑测试时 WebUI 会 503。
+            .current_dir(crate::paths::repo_root()?)
             .stdin(Stdio::null())
             .stdout(Stdio::from(output))
             .stderr(Stdio::from(errors))

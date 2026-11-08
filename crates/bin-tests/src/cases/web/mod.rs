@@ -5,6 +5,7 @@
 
 mod assets;
 mod cors;
+mod e2e;
 mod fallback;
 mod sdk_only;
 #[cfg(debug_assertions)]
@@ -59,6 +60,12 @@ pub(crate) fn cases() -> Vec<Case> {
             kind: CaseKind::Shared,
             prep: &[],
             run: ui::ui,
+        },
+        Case {
+            name: "web.e2e",
+            kind: CaseKind::Isolated,
+            prep: WEB_UI,
+            run: e2e::e2e,
         },
     ];
     // 关闭探针只在 debug 构建注册（release 不包含），对应用例也只在 debug 存在。

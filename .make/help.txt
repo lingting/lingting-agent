@@ -7,4 +7,5 @@ make clean-gen   删除生成物目录 packages/
 make ui-install  安装前端依赖（需先 make gen）
 make ui-dev      启动前端开发服务器（固定端口 20101）
 make ui-build    构建前端产物
+make ui-e2e-install  安装 Playwright 的 chromium（端到端用例用）
 make ui-lint     前端格式化 + lint + 类型检查

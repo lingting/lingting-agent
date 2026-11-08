@@ -303,7 +303,7 @@
       - 回归结果：`bin-tests` 的 `tui.*` 共 11 个用例、`--all` 全量 16 个用例全部通过，连续多轮结果一致。
     - **验收状态**：`T-1` ~ `T-9` 全部通过；其中 T-7 由人工在真实终端验证，其余各项由 `bin-tests` 用例或静态检索覆盖。
 
-- [ ] **P1-016 WebUI 最小对话界面（进行中）**
+- [x] **P1-016 WebUI 最小对话界面**
 
   - **目标**：浏览器中能完成“发问 → 看流式回答”的最小闭环，且全部调用走生成的 TS SDK。
   - **具体工作**：
@@ -315,13 +315,14 @@
   - **前置依赖**：P1-007、P1-012
   - **交付物**：最小 WebUI；TS SDK 接入；SSE 消费；构建产物。
   - **验收标准**：
-    - [ ] 浏览器可发送消息并看到流式输出。
-    - [ ] 所有 API 调用均来自生成 SDK（无手写 path 字面量）。
-    - [ ] Server 关闭时界面显示可读错误而非白屏。
-    - **实现结论（代码已落地，验收未完成）**：Transport 在 `lingting-agent-ui/src/api/client.ts`（`AgentApiClient extends ApiClient`，负责拼地址、判定状态码、拆 `R<T>` 包装、把失败统一成 `ApiRequestError`；基地址留空 = 同源，开发期走 Vite 代理、发布态由 Rust 托管），SSE 消费在 `src/api/runStream.ts`（fetch 流式响应 + 自行切帧，path 取自 `ApiDefinitions.runStream.path`，不用 `EventSource`，理由见 D-007 的 P1-016 回填）。界面在 `src/pages/chat/`：`ChatMain`（布局 + 错误提示条 + 空状态）、`useChat`（会话创建 → `messageCreate` → 消费事件流 → 中止/取消的状态机）、`MessageList`（`@ant-design/x` 的 `Bubble.List`，流式气泡 `status=updating`、中断气泡 `abort`）、`Composer`（`Sender`，生成中显示停止按钮）、`chatMessage`（界面消息模型）。停止生成先调 `api/run/cancel` 再 `AbortController.abort()`（避免先断流导致取消请求撞上 400）；断线、`run_failed`、`server_shutdown` 都在回复末尾追加说明并把原因写进提示条。SDK 消费方式与目录约定见 D-010 的 P1-016 回填。
+    - [x] 浏览器可发送消息并看到流式输出。
+    - [x] 所有 API 调用均来自生成 SDK（无手写 path 字面量）。
+    - [x] Server 关闭时界面显示可读错误而非白屏。
+    - **实现结论**：Transport 在 `lingting-agent-ui/src/api/client.ts`（`AgentApiClient extends ApiClient`，负责拼地址、判定状态码、拆 `R<T>` 包装、把失败统一成 `ApiRequestError`；基地址留空 = 同源，开发期走 Vite 代理、发布态由 Rust 托管），SSE 消费在 `src/api/runStream.ts`（fetch 流式响应 + 自行切帧，path 取自 `ApiDefinitions.runStream.path`，不用 `EventSource`，理由见 D-007 的 P1-016 回填）。界面在 `src/pages/chat/`：`ChatMain`（布局 + 错误提示条 + 空状态）、`useChat`（会话创建 → `messageCreate` → 消费事件流 → 中止/取消的状态机）、`MessageList`（`@ant-design/x` 的 `Bubble.List`，流式气泡 `status=updating`、中断气泡 `abort`）、`Composer`（`Sender`，生成中显示停止按钮）、`chatMessage`（界面消息模型）。停止生成先调 `api/run/cancel` 再 `AbortController.abort()`（避免先断流导致取消请求撞上 400）；断线、`run_failed`、`server_shutdown` 都在回复末尾追加说明并把原因写进提示条。SDK 消费方式与目录约定见 D-010 的 P1-016 回填。
     - **服务端侧验收（已落地，2026-11-10）**：`bin-tests` 新增 `web` 领域 6 个用例，`make test ARGS="web"` 6/6、`--all` 22/22 通过 —— `web.assets`（首页与构建产物托管、缺失资源 404 文本）、`web.fallback`（前端路由回落 index.html，`api/` 与非 GET 仍为 API 404）、`web.cors`（白名单预检 204 + 实际请求 allow-origin / expose-headers，非白名单无 CORS 头）、`web.stream`（订阅已取消的 Run → 400 可读错误体，不是空流）、`web.shutdown`（关闭期间请求 → 503 `{code,message}`）、`web.sdk-only`（扫描前端 13 个源码文件的非注释行，无手写 `api/…` 字面量）。前置准备由用例声明驱动：`make test` 只保留 `gen`（编译期必需），`ui-build` 由 `bin-tests` 的 `prepare` 按选中的 `web.*` 用例执行一次。计划与逐步骤结论见 `.plan/p1-016-webui-tests.md`。
     - **前端逻辑验收（已落地，2026-11-10）**：`lingting-agent-ui/tests/` 下 4 个文件 21 条用例（`pnpm test` → `vp test run`），覆盖 SDK Transport（`R<T>` 解包、查询串与请求体、204、错误分类）、SSE 切帧（跨 chunk、粘包、CRLF、非法 JSON）、`useChat` 状态机（成功流式、会话复用、空白输入、停止生成、`server_shutdown`、事件流报错、建会话失败）与 `ChatMain` 首屏渲染；`bin-tests` 的 `web.ui` 用例转发同一命令，`make test ARGS="--all"` 23/23 通过。用例从 `vite-plus/test` 导入，未新增 vitest 依赖；新增 devDependencies 仅 `jsdom` 与 `@testing-library/react`。
-    - **待验收**：真实浏览器里的验收（流式渲染观感、停止按钮交互、关服提示条）仍由计划中的步骤 4（Playwright）覆盖，尚未开始。
+    - **端到端验收（已落地，2026-11-10）**：`lingting-agent-ui/tests/e2e/chat.spec.ts` 3 条 Playwright 用例（真实 Chromium + 真实 Rust 服务端）覆盖 P1-016 的三条验收标准：发送后逐段看到流式回复（先取回复开头长度、再取完整正文长度，证明是增量而非一次性到位）、停止生成后保留已收内容并追加「（已停止生成）」且回到可发送状态、关服后出现可读错误提示条且输入框仍在（不白屏）。由 `bin-tests` 的 `web.e2e` 隔离用例驱动（同一服务端串行跑完 3 条，关服用例最后），`make test ARGS="--all"` 24/24 通过；`@playwright/test` 版本与 `lingting-agent-flow-ui` 对齐（`^1.64.1`），浏览器二进制由 `make ui-e2e-install` 安装。
+    - **验收状态**：三条验收标准全部通过，证据为 `web.assets` / `web.fallback` / `web.cors` / `web.stream` / `web.shutdown` / `web.sdk-only`（服务端契约）、`web.ui`（21 条前端用例）、`web.e2e`（3 条真实浏览器用例）；`make test ARGS="--all"` 24/24。
 
 - [ ] **P1-017 WebUI 静态资源嵌入 Binary**
 

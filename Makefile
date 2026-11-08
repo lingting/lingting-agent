@@ -12,7 +12,7 @@ GEN_DIR := packages
 ARGS ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help gen build check fmt test clean-gen ui-install ui-dev ui-build ui-lint
+.PHONY: help gen build check fmt test clean-gen ui-install ui-dev ui-build ui-lint ui-e2e-install
 
 help:
 	@cat .make/help.txt
@@ -51,6 +51,10 @@ ui-dev:
 
 ui-build:
 	cd $(UI_DIR) && pnpm build
+
+# 端到端用例需要 Playwright 的浏览器二进制；只装 chromium，避免下载全部浏览器。
+ui-e2e-install:
+	cd $(UI_DIR) && pnpm exec playwright install chromium
 
 ui-lint:
 	cd $(UI_DIR) && pnpm run lint

@@ -21,6 +21,13 @@
       "@lri/*": ["./node_modules/lingting-react-ui/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vite.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "vite.config.ts",
+    "playwright.config.ts"
+  ],
   "exclude": ["node_modules"]
 }

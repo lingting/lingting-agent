@@ -8,6 +8,7 @@ mod cases;
 mod cli;
 mod context;
 mod frontend;
+mod paths;
 mod prepare;
 mod report;
 mod runner;
