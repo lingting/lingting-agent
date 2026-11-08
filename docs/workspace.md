@@ -604,7 +604,7 @@ manager-agent -> service-agent
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-tool`、`agent-route`、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
 | `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体） | `lib-bin-*`、`bin-*` |
-| `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | Clap、Reqwest、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber` | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖） |
+| `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | `framework-http`（HTTP 收发，启用 `reqwest` 后端）、Clap、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber`、Tokio（客户端命令的运行时）、`url`（查询串编码） | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖）；也不得直接依赖 reqwest 发请求（HTTP 只经 `framework-http`） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui | Agent Runtime、服务端业务实现 |
 | `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |

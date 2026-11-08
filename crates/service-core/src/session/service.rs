@@ -70,6 +70,11 @@ impl SessionService {
         sessions
     }
 
+    /// 统计未结束的 Run 数量，供探活接口报告运行状态。
+    pub fn running_run_count(&self) -> i64 {
+        self.store.running_run_count()
+    }
+
     /// 取指定会话的消息，按写入顺序返回。
     pub fn list_messages(&self, params: MessageListParams) -> Result<Vec<Message>, SessionError> {
         self.require_session(&params.session_id)?;

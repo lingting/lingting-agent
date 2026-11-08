@@ -33,7 +33,7 @@
 
 ## 配置装载
 
-服务端配置按「命令行 > 环境变量 > 配置文件 > 默认值」装载（D-012）。
+服务端与客户端（`tui` / `run` / `status`）共用同一份配置来源，按「命令行 > 环境变量 > 配置文件 > 默认值」装载（D-012）。
 
 | 项 | 说明 |
 |---|---|
@@ -46,6 +46,7 @@
 约定：
 
 - `--port 0` 视为参数错误：框架对 0 端口会改用随机端口，破坏客户端默认寻址（D-022）。
+- 客户端用 `--server <ADDR>` 覆盖同一份来源，没有独立的端口参数；解析结果拼成 `http://host:port` 作为基地址。
 - 配置文件解析失败按参数错误处理，错误信息包含文件路径。
 
 ## 日志
@@ -63,6 +64,26 @@
 | 0 | 正常退出（含 `--help` / `--version`） |
 | 1 | 运行错误（监听失败、运行期错误） |
 | 2 | 参数或配置错误（clap 解析失败、配置文件无法解析、端口为 0 等） |
+
+## 客户端（CLI）
+
+命令树定义在 `lib-bin-cli::command`，`bin-agent` 只做分发；客户端命令（`tui` / `run` / `status`）共用同一套地址解析与同一个 SDK Transport。
+
+| 命令 | 说明 |
+|---|---|
+| `agent` / `agent tui [--server]` | 进入终端界面（无子命令时的默认行为，界面由 P1-015 实现） |
+| `agent server [--addr] [--port] [--log-level]` | 启动 HTTP 服务（前台常驻） |
+| `agent run <TASK> [--stream\|--json] [--server]` | 创建会话 → 发消息 → 消费 Run 事件流；`--stream` 逐段打印回复，`--json` 打印 `{sessionId, runId, status, content}` |
+| `agent status [--server]` | 探活：服务地址、健康状态、版本与协议版本、运行时长、运行中 Run 数 |
+
+传输与错误处理约定：
+
+- HTTP 收发只经 `framework-http`（`reqwest` 后端，见 `docs/workspace.md` 的依赖表），客户端不直接使用 reqwest 发请求。
+- 两个客户端分工：普通接口带 30 秒总超时；事件流不设总超时——一次回复可能持续很久，总超时会在回复中途截断，连接存活由服务端心跳（15 秒）与用户中断决定。
+- 成功响应统一是 `R<T>`（`{"code":200,"message":"Success","data":<载荷>}`），Transport 负责解包后交给生成的 SDK；`Void` 的 204 空响应与 `Blob` 的原始响应体原样透传。
+- 错误分类：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的 `operation timed out` 文案。
+- 错误呈现统一为一行：非 JSON 错误体会折叠空白并截断到 200 字符，不把 HTML 或多行文本原样写到终端；退出码见上一节。
+- 客户端不出现任何 path 字面量：地址只来自生成的 `ApiDefinition.path`。`Run` 事件流在元数据里是 `Blob`，生成的 `run_stream` 只能整体返回响应体，因此 `Client::subscribe_run` 用同一个 `RUN_STREAM` 常量的 path/method 走流式读取并自行解析 SSE 帧。
 
 ## SDK 生成
 
@@ -124,7 +145,7 @@
 | 契约类型 | `ApiError { code, message }` 定义在 `crates/lib-web/src/error.rs`（`auto_type`），随生成进入两侧 SDK；客户端解析错误体只用它，不手写重复定义 |
 | 错误分类 | 只用 `WebError::parameter` / `not_found` / `unauthorized` / `forbidden` / `internal` 表达，映射表与错误码清单见 `p1/decisions.md` D-024 |
 | 内部细节 | 堆栈、SQL、文件路径、第三方错误一律放进 `WebError::internal(msg, source)` 的 `source`，只进日志；**禁止**用裸 `anyhow!` 携带内部细节（会归入 `WebErrorKind::Message` 并原样对外） |
-| 探活接口 | `GET api/probe/health`（版本、协议版本、启动时间、运行时长）与 `GET api/probe/version`（版本、协议版本），均显式 `AuthRule::anonymous()` |
+| 探活接口 | `GET api/probe/health`（版本、协议版本、启动时间、运行时长、未结束的 Run 数量）与 `GET api/probe/version`（版本、协议版本），均显式 `AuthRule::anonymous()` |
 
 `ApiError` 当前落在 `lib-web` 以便随 SDK 生成导出；将来 `lib-web-core` 落实 Error Mapping 时可整体迁入（见 D-024 与 `docs/workspace.md` 的 `lib-web-core` 职责）。
 

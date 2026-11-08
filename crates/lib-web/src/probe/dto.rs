@@ -65,6 +65,8 @@ pub struct ProbeHealthVO {
     pub started_at_ms: i64,
     /// 已运行时长（毫秒）。
     pub uptime_ms: i64,
+    /// 未结束的 Run 数量（`QUEUED` / `RUNNING`），供客户端 `status` 展示。
+    pub running_run_count: i64,
 }
 
 /// 版本信息（`api/probe/version`）。

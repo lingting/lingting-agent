@@ -1,6 +1,7 @@
 //! lingting agent 单 Binary 入口：只负责组装与启动，不承载业务逻辑。
 
 use lib_bin_cli::command::{self, Mode, ServerArgs};
+use lib_bin_cli::result::CommandError;
 use lib_core::logger;
 use std::process::ExitCode;
 
@@ -10,12 +11,24 @@ fn exit_argument() -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    match command::parse().mode {
-        Some(Mode::Server(args)) => server(&args),
-        None => {
-            // 无子命令默认进入 TUI；TUI 由 P1-015 接入，当前先输出帮助。
-            command::print_help();
-            ExitCode::SUCCESS
+    match command::parse().mode.unwrap_or_default() {
+        Mode::Tui(args) => command_result(lib_bin_tui::run(args.server.as_deref())),
+        Mode::Server(args) => server(&args),
+        Mode::Run(args) => command_result(lib_bin_cli::run::execute(&args)),
+        Mode::Status(args) => command_result(lib_bin_cli::status::execute(&args)),
+    }
+}
+
+/// 客户端命令的失败映射：参数与配置错误退出码 2，运行期错误退出码 1，错误只打一行。
+fn command_result(result: Result<(), CommandError>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}", error.message());
+            match error {
+                CommandError::Argument(_) => exit_argument(),
+                CommandError::Runtime(_) => ExitCode::FAILURE,
+            }
         }
     }
 }

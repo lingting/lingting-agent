@@ -46,6 +46,8 @@
 | D-025 | P1 Mock 会话契约与 P2 替换点 | DECIDED |
 | D-026 | P1 Streaming 契约（RunEvent + SSE） | DECIDED |
 | D-027 | CORS、静态资源与 WebUI 兜底路由 | DECIDED |
+| D-028 | 优雅关闭与生命周期 | DECIDED |
+| D-029 | CLI 命令结构与客户端 Transport | DECIDED |
 
 ---
 
@@ -559,7 +561,7 @@
 
   | 接口 | 路径 | 载荷 | 说明 |
   |---|---|---|---|
-  | 健康检查 | `GET api/probe/health` | `ProbeHealthVO { version, protocolVersion, startedAtMs, uptimeMs }` | 客户端探活；`version` 取 workspace 版本，`protocolVersion` 取 `lib_web::probe::PROTOCOL_VERSION`（当前 `"1"`），时间为 Unix 毫秒（按 D-018 以字符串传输） |
+  | 健康检查 | `GET api/probe/health` | `ProbeHealthVO { version, protocolVersion, startedAtMs, uptimeMs, runningRunCount }` | 客户端探活；`version` 取 workspace 版本，`protocolVersion` 取 `lib_web::probe::PROTOCOL_VERSION`（当前 `"1"`），时间为 Unix 毫秒（按 D-018 以字符串传输）；`runningRunCount` 为未结束的 Run 数（P1-014 追加，见 D-029） |
   | 版本信息 | `GET api/probe/version` | `ProbeVersionVO { version, protocolVersion }` | 仅版本，不依赖时钟，便于客户端做兼容性判断 |
 
   启动时刻由 `lib_web::probe::startup()` 提供：服务端启动时调用 `mark_startup()` 记录（`lib-bin-web` 与探针示例均已接入），未显式记录时退化为首次访问时刻。两个接口的载荷都由 `R{code,message,data}` 包装（与其余 `Type` 返回一致）。
@@ -695,6 +697,29 @@
 
 ---
 
+## D-029 CLI 命令结构与客户端 Transport
+
+- **问题**：单 Binary 如何承载全部命令，客户端如何通过生成的 SDK 访问 Server，超时与错误如何分类？
+- **决策（P1-014 落地）**：
+  1. **命令树**：无子命令 → `tui`（默认 `Mode::Tui`）；`tui` / `server` / `run` / `status` 四个子命令。`--server` 只出现在客户端命令上，`server` 仍用 `--addr` / `--port` / `--log-level`。退出码映射留在 `bin-agent`，`lib-bin-cli` 只返回 `CommandError::{Argument, Runtime}`（库不决定退出码）。
+  2. **地址解析**：服务端与客户端共用 `lib-bin-cli::config` 的同一份四级来源（命令行 > `AGENT_SERVER_ADDR` / `AGENT_SERVER_PORT` > `config.toml [server]` > 默认 `127.0.0.1:20100`），客户端把结果拼成 `http://host:port` 基地址；客户端没有独立端口参数。`tui` / `run` / `status` 三者共用，TUI 入口 `lib_bin_tui::run(server)` 也走同一条链路。
+  3. **Transport 选型**：HTTP 收发只经 `framework-http`（`reqwest` 后端），`Client` 实现生成 SDK 的 `ApiClient`，`send` 负责拼地址、加请求头、判状态码与解包。**客户端代码不出现任何 path 字面量**，地址一律取 `ApiDefinition.path`。
+  4. **超时**：两个 `HttpClient` 分工——普通接口 30 秒总超时；事件流不设总超时（一次回复可能持续很久，总超时会在回复中途截断），存活由服务端 15 秒心跳与用户中断判断。
+  5. **`R<T>` 解包**：服务端成功响应统一是 `{"code":200,"message":"Success","data":<载荷>}`，生成的 SDK 直接按载荷类型反序列化，因此解包放在 Transport。判据是能反序列化成生成的 `R<Value>`；`data` 缺失（`Void` 的 204 空响应）与非 JSON 响应体（`Blob`）原样透传。**这是 P1-014 的实测发现：漏掉解包会让所有接口报 `missing field`。**
+  6. **SSE 订阅**：`api/run/stream` 在元数据里是 `Blob`，生成的 `run_stream` 只能整体返回响应体，因此 `Client::subscribe_run` 用同一个 `RUN_STREAM` 常量的 path/method 走 `framework-http` 的 `stream`，客户端自行解析 SSE 帧（`id` / `event` 忽略，`data` 反序列化成生成的 `RunEvent`）。
+  7. **错误分类**：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型（`framework-http` 用 reqwest 0.12，工作区不再声明 reqwest）：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的英文文案 `operation timed out`。错误一律压成一行（非 JSON 错误体折叠空白、截断到 200 字符）。
+  8. **`agent run`**：创建会话（标题取任务文本）→ 发消息 → 消费事件流 → 按 `--stream` / `--json` / 默认三种形态输出。Mock 的助手消息只在事件流跑到结束后落库（D-026），所以三种形态都要消费完整条流。
+  9. **`agent status`**：走生成的 `probe_health`；连接被拒绝判「服务未启动」，超时 / 非 2xx / 解析失败判「服务异常」，其余为「正常」。
+- **契约变更**：按用户要求给 `ProbeHealthVO` 增加 `runningRunCount`（未结束的 `QUEUED` / `RUNNING` Run 数，由 `SessionService::running_run_count` 统计），`api/probe/health` 因此读取会话业务计数；两份 SDK 已重新生成。
+- **代价与遗留**：
+  1. `lib-web` 的探针模块现在依赖 `service-core` 的会话存储，`health` 不再是纯探针；若 P2 的存储换成分片/外部数据库，需要保证计数接口仍是 O(1) 或改为缓存。
+  2. 事件流不设总超时：服务端进程被强杀（不走 D-028 的关闭链路）时，客户端只能靠 TCP 断开或用户中断感知，没有客户端读空闲超时。
+  3. 错误分类依赖 `io::ErrorKind` 与 reqwest 的英文文案；若框架把错误改包成自有类型，超时/连接失败会退化为一般传输错误（消息仍可读），此时需框架侧提供分类入口。
+  4. TUI 目前只是接入点（地址解析 + `logs-tui` 初始化后返回「TUI 尚未接入」），界面与事件循环归 P1-015。
+- **实测回填（2026-11-08，debug 构建，`agent server --port 20150`）**：`agent --help` / `--version` 退出码 0（`--help` 的 Usage 显示 `agent`，靠 clap 的 `bin_name`）；`agent`（无子命令）返回「TUI 尚未接入（P1-015）」退出码 1；`agent status` 输出地址 / 正常 / 版本 / 运行时长 / 运行中 Run 数；`agent run "…"` 三种输出形态都拿到 Mock 完整回复，`--json` 输出 `{content, runId, sessionId, status:"COMPLETED"}`；后台跑 `run --stream` 时 `status` 显示 `运行中 Run：1`；`--json` 与 `--stream` 互斥（clap 退出码 2）；服务停止后 `status` 报「服务未启动」、`run` 报「无法连接服务 …（服务是否已启动？）」，退出码均为 1；对非 API 服务（`python -m http.server`）`status` 报「服务异常：服务返回错误 404：…」且被压成一行；不可达地址在 30 秒内以「请求 … 超时」结束；`AGENT_SERVER_ADDR` 生效且被 `--server` 覆盖；`server --port 0` 退出码 2。`cargo tree -d` 中 reqwest 只剩 0.12.28 一份。
+- **状态**：`DECIDED`
+
+---
 ## 假设清单（未验证）
 
 | ID | 假设 | 影响 | 何时验证 |

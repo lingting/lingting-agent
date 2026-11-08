@@ -70,8 +70,10 @@
 | `protocolVersion` | `string` | 两者 | API 协议版本，当前 `"1"`，不兼容变更时递增 |
 | `startedAtMs` | `string` | `health` | 服务启动时间（Unix 毫秒） |
 | `uptimeMs` | `string` | `health` | 已运行时长（毫秒） |
+| `runningRunCount` | `string` | `health` | 未结束的 Run 数量（`QUEUED` / `RUNNING`），供 `agent status` 展示 |
 
 `startedAtMs` 由服务端启动时的 `mark_startup()` 记录；未显式记录时退化为首次访问时刻。
+`runningRunCount` 取 `service-core` 的会话 Mock 存储计数（`SessionService::running_run_count`），P2 换成 Repository 后统计口径不变。
 
 ## 响应样例
 
@@ -109,7 +111,7 @@ HTTP/1.1 200 OK
 GET api/probe/health
 
 HTTP/1.1 200 OK
-{"code":200,"message":"Success","data":{"version":"26.11.0","protocolVersion":"1","startedAtMs":"1767225600000","uptimeMs":"1234"}}
+{"code":200,"message":"Success","data":{"version":"26.11.0","protocolVersion":"1","startedAtMs":"1767225600000","uptimeMs":"1234","runningRunCount":"0"}}
 ```
 
 ```text

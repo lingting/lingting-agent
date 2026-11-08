@@ -79,6 +79,17 @@ impl Store {
         self.lock().runs.get(run_id).cloned()
     }
 
+    /// 统计未结束的 Run 数量（`QUEUED` / `RUNNING`）。
+    pub(crate) fn running_run_count(&self) -> i64 {
+        let inner = self.lock();
+        let count = inner
+            .runs
+            .values()
+            .filter(|run| matches!(run.status, RunStatus::Queued | RunStatus::Running))
+            .count();
+        i64::try_from(count).unwrap_or(i64::MAX)
+    }
+
     /// 修改指定 Run；Run 不存在时返回 `None`。
     pub(crate) fn update_run(&self, run_id: &str, update: impl FnOnce(&mut Run)) -> Option<Run> {
         let mut inner = self.lock();

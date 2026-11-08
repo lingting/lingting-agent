@@ -44,6 +44,7 @@ framework-region = { path = "../lingting-rust-framework/framework-region" }
 framework-proc-auto = { path = "../lingting-rust-framework/framework-proc-auto" }
 framework-proc-core = { path = "../lingting-rust-framework/framework-proc-core" }
 framework-web = { path = "../lingting-rust-framework/framework-web" }
+framework-http = { path = "../lingting-rust-framework/framework-http" }
 framework-web-axum = { path = "../lingting-rust-framework/framework-web-axum" }
 framework-timer = { path = "../lingting-rust-framework/framework-timer" }
 framework-proc-timer = { path = "../lingting-rust-framework/framework-proc-timer" }

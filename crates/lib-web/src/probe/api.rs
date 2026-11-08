@@ -7,6 +7,7 @@ use crate::probe::dto::{ProbeEchoPO, ProbeEchoVO, ProbeHealthVO, ProbeQueryPO, P
 use crate::probe::{PROTOCOL_VERSION, SERVICE_VERSION, startup};
 use anyhow::Result;
 use framework_web::{AuthRule, Json, Query, WebError, WebResponse, WebResponseOf, web_api_get, web_api_post};
+use service_core::holder;
 
 /// 探针响应的自定义头，用于区分手工构造的响应。
 const PROBE_HEADER: &str = "x-probe-kind";
@@ -88,7 +89,7 @@ pub async fn probe_panic() -> ProbeQueryVO {
     panic!("探针 panic：此消息不应出现在响应体中");
 }
 
-/// 健康检查：客户端探活入口，返回服务版本、协议版本、启动时间与运行时长。
+/// 健康检查：客户端探活入口，返回服务版本、协议版本、启动时间、运行时长与未结束的 Run 数量。
 #[web_api_get(path = "api/probe/health", auth = AuthRule::anonymous())]
 pub async fn probe_health() -> ProbeHealthVO {
     let startup = startup();
@@ -97,6 +98,7 @@ pub async fn probe_health() -> ProbeHealthVO {
         protocol_version: PROTOCOL_VERSION.to_string(),
         started_at_ms: startup.started_at_ms(),
         uptime_ms: startup.uptime_ms(),
+        running_run_count: holder::session().running_run_count(),
     }
 }
 
