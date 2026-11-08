@@ -33,8 +33,7 @@ lib-bin-tui = { path = "crates/lib-bin-tui" }
 lib-bin-web = { path = "crates/lib-bin-web" }
 types-core = { path = "crates/types-core" }
 service-core = { path = "crates/service-core" }
-# framework（作者自有框架；P1 走 path 引入，本地源码版本 26.11.0；待 framework-proc-rust 开发完成后再补 version 约束，见 decisions.md D-015）
-# 注：本地框架已移除 framework-proc-ts，Rust 导出并入 framework-proc-core 的 rust 特性（P1-006 适配）。
+
 framework-bus = { path = "../lingting-rust-framework/framework-bus" }
 framework-core = { path = "../lingting-rust-framework/framework-core" }
 framework-datetime = { path = "../lingting-rust-framework/framework-datetime" }
@@ -43,6 +42,7 @@ framework-system = { path = "../lingting-rust-framework/framework-system" }
 framework-region = { path = "../lingting-rust-framework/framework-region" }
 framework-proc-auto = { path = "../lingting-rust-framework/framework-proc-auto" }
 framework-proc-core = { path = "../lingting-rust-framework/framework-proc-core" }
+framework-proc-web = { path = "../lingting-rust-framework/framework-proc-web" }
 framework-web = { path = "../lingting-rust-framework/framework-web" }
 framework-http = { path = "../lingting-rust-framework/framework-http" }
 framework-web-axum = { path = "../lingting-rust-framework/framework-web-axum" }
@@ -76,6 +76,7 @@ tracing-appender = "0.2"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 bytes = { version = "1.11" }
+http = { version = "1.5" }
 flate2 = { version = "1.1" }
 cbc = { version = "0.1" }
 cipher = { version = "0.4" }
@@ -84,6 +85,7 @@ hmac = { version = "0.12" }
 sha1 = { version = "0.10" }
 md-5 = { version = "0.10" }
 wreq = { version = "0.16", features = ["socks"] }
+wreq-util = { version = "0.2" }
 rsntp = { version = "4.1", default-features = false }
 sha2 = { version = "0.10" }
 async-trait = { version = "0.1" }
