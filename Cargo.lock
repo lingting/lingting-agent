@@ -1698,6 +1698,8 @@ dependencies = [
  "lib-bin-cli",
  "lib-core",
  "ratatui",
+ "tokio",
+ "unicode-width",
 ]
 
 [[package]]
