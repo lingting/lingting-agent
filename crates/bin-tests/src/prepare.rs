@@ -66,7 +66,7 @@ fn pnpm() -> Command {
 }
 
 /// 仓库根目录：由 `crates/bin-tests` 上溯两级，不依赖测试进程的当前工作目录。
-fn repo_root() -> Result<PathBuf> {
+pub(crate) fn repo_root() -> Result<PathBuf> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

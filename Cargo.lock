@@ -288,6 +288,7 @@ dependencies = [
  "lib-bin-cli",
  "lib-bin-tui",
  "lib-core",
+ "serde_json",
  "tokio",
 ]
 
