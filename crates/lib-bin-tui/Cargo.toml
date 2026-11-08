@@ -14,6 +14,7 @@ lib-bin-cli = { workspace = true }
 lib-core = { workspace = true }
 
 ratatui = { workspace = true }
+ratatui-textarea = { workspace = true }
 tokio = { workspace = true }
 unicode-width = { workspace = true }
 

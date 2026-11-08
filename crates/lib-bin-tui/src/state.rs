@@ -4,9 +4,10 @@
 //! 两者都返回需要发给工作线程的请求；渲染只读状态，不改状态。
 
 use crate::event::{Command, Update};
-use crate::input::Input;
 use lib_bin_cli::sdk::{Message, MessageRole, SessionSummary};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Style;
+use ratatui_textarea::{TextArea, WrapMode};
 
 /// 滚动一页的行数。
 const PAGE: u16 = 10;
@@ -87,7 +88,7 @@ pub struct App {
     /// 当前会话的消息。
     pub messages: Vec<ChatMessage>,
     /// 输入框。
-    pub input: Input,
+    pub input: TextArea<'static>,
     /// 焦点。
     pub focus: Focus,
     /// 流式阶段。
@@ -107,6 +108,11 @@ pub struct App {
 impl App {
     /// 初始状态：连接中，没有会话与消息。
     pub fn new(base_url: String) -> Self {
+        let mut input = TextArea::default();
+        input.set_wrap_mode(WrapMode::WordOrGlyph);
+        // 光标所在行不再整行加下划线：终端光标已经指示位置，保持与消息区一致的素净观感。
+        input.set_cursor_line_style(Style::default());
+        input.set_placeholder_text("输入消息；Enter 发送，Shift+Enter 换行");
         Self {
             base_url,
             connection: Connection::Connecting,
@@ -114,7 +120,7 @@ impl App {
             selected: 0,
             current: None,
             messages: Vec::new(),
-            input: Input::default(),
+            input,
             focus: Focus::Input,
             phase: Phase::Idle,
             run_id: None,
@@ -283,16 +289,18 @@ impl App {
 
     /// 处理按键，返回需要发给工作线程的请求。
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<Command> {
+        // 应用级快捷键优先：Ctrl+N / Ctrl+R / Ctrl+C 在输入组件里另有含义（下移 / 重做 / 复制），
+        // 这里以应用原有行为为准。其余 Ctrl 组合键不拦，交给输入组件当编辑快捷键。
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return match key.code {
+            match key.code {
                 KeyCode::Char('c') => {
                     self.quit = true;
-                    Vec::new()
+                    return Vec::new();
                 }
-                KeyCode::Char('n') => self.create_session(),
-                KeyCode::Char('r') => self.retry(),
-                _ => Vec::new(),
-            };
+                KeyCode::Char('n') => return self.create_session(),
+                KeyCode::Char('r') => return self.retry(),
+                _ => {}
+            }
         }
         match self.focus {
             Focus::Input => self.handle_input_key(key),
@@ -300,9 +308,24 @@ impl App {
         }
     }
 
-    /// 输入框按键。
+    /// 粘贴：只在输入焦点下写入输入框，不触发发送。
+    ///
+    /// 内容整体交给输入组件，`\n` 与 `\r\n` 由它拆成多行，不逐字模拟按键。
+    pub fn handle_paste(&mut self, text: &str) {
+        if self.focus == Focus::Input {
+            self.input.insert_str(text);
+        }
+    }
+
+    /// 输入框按键：只处理应用占用的键，其余（字符、方向键、Home/End、Backspace/Delete、
+    /// 各类 Ctrl 编辑快捷键）统一交给输入组件。
     fn handle_input_key(&mut self, key: KeyEvent) -> Vec<Command> {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            KeyCode::Enter if shift => {
+                self.input.insert_newline();
+                Vec::new()
+            }
             KeyCode::Enter => self.submit(),
             KeyCode::Esc => {
                 if self.is_busy() {
@@ -315,30 +338,6 @@ impl App {
                 self.focus = Focus::Sessions;
                 Vec::new()
             }
-            KeyCode::Backspace => {
-                self.input.backspace();
-                Vec::new()
-            }
-            KeyCode::Delete => {
-                self.input.delete();
-                Vec::new()
-            }
-            KeyCode::Left => {
-                self.input.move_left();
-                Vec::new()
-            }
-            KeyCode::Right => {
-                self.input.move_right();
-                Vec::new()
-            }
-            KeyCode::Home => {
-                self.input.home();
-                Vec::new()
-            }
-            KeyCode::End => {
-                self.input.end();
-                Vec::new()
-            }
             KeyCode::PageUp => {
                 self.scroll_up();
                 Vec::new()
@@ -347,16 +346,20 @@ impl App {
                 self.scroll_down();
                 Vec::new()
             }
-            KeyCode::Char(value) => {
-                self.input.insert(value);
+            _ => {
+                self.input.input(key);
                 Vec::new()
             }
-            _ => Vec::new(),
         }
     }
 
     /// 会话列表按键：`q` 在这里退出，避免和输入框里的字母冲突。
     fn handle_sessions_key(&mut self, key: KeyEvent) -> Vec<Command> {
+        // 会话列表不提供 Ctrl 组合键功能：未被应用占用的 Ctrl 键在这里保持无操作，
+        // 避免 Ctrl+J / Ctrl+K 之类被当成 j/k 导航。
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
@@ -384,7 +387,7 @@ impl App {
 
     /// 发送输入框的内容。
     fn submit(&mut self) -> Vec<Command> {
-        let content = self.input.text().trim().to_string();
+        let content = self.input.lines().join("\n").trim().to_string();
         if content.is_empty() {
             return Vec::new();
         }
@@ -513,5 +516,171 @@ fn chat_message(message: &Message) -> ChatMessage {
         role: message.role,
         content: message.content.clone(),
         interrupted: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_url() -> String {
+        "http://127.0.0.1:1".to_string()
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn press_shift(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
+    fn press_ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    /// 逐字键入，和终端把字符键交给界面时一致。
+    fn type_text(app: &mut App, value: &str) {
+        for value in value.chars() {
+            app.handle_key(press(KeyCode::Char(value)));
+        }
+    }
+
+    /// 输入框当前内容，与发送时的取文本规则一致。
+    fn content(app: &App) -> String {
+        app.input.lines().join("\n")
+    }
+
+    #[test]
+    fn default_input_is_empty() {
+        let app = App::new(base_url());
+        assert_eq!(content(&app), "");
+    }
+
+    #[test]
+    fn typing_and_editing_keeps_text_correct() {
+        let mut app = App::new(base_url());
+        type_text(&mut app, "ab中文");
+        assert_eq!(content(&app), "ab中文");
+
+        // 光标左移一位后删除前一个字符：中文按字素删除，不会切坏多字节字符。
+        app.handle_key(press(KeyCode::Left));
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(content(&app), "ab文");
+
+        // 回到行首后删除光标处字符。
+        app.handle_key(press(KeyCode::Home));
+        app.handle_key(press(KeyCode::Delete));
+        assert_eq!(content(&app), "b文");
+
+        app.handle_key(press(KeyCode::End));
+        type_text(&mut app, "结尾");
+        assert_eq!(content(&app), "b文结尾");
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_without_sending() {
+        let mut app = App::new(base_url());
+        type_text(&mut app, "第一行");
+        assert!(app.handle_key(press_shift(KeyCode::Enter)).is_empty());
+        type_text(&mut app, "第二行");
+
+        assert_eq!(app.input.lines().len(), 2);
+        assert_eq!(content(&app), "第一行\n第二行");
+    }
+
+    #[test]
+    fn paste_splits_crlf_into_lines() {
+        let mut app = App::new(base_url());
+        app.handle_paste("第一行\r\n第二行");
+
+        assert_eq!(app.input.lines().len(), 2);
+        assert_eq!(content(&app), "第一行\n第二行");
+    }
+
+    #[test]
+    fn paste_is_ignored_when_sessions_focused() {
+        let mut app = App::new(base_url());
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sessions);
+
+        app.handle_paste("粘贴");
+        assert_eq!(content(&app), "");
+
+        // 会话列表不提供 Ctrl 组合键功能：Ctrl+J 不能被当成 j 导航。
+        assert!(app.handle_key(press_ctrl(KeyCode::Char('j'))).is_empty());
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn blank_input_is_not_sent() {
+        let mut app = App::new(base_url());
+        app.handle_paste("  \n\t ");
+
+        assert!(app.handle_key(press(KeyCode::Enter)).is_empty());
+        assert_eq!(app.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn submit_trims_content_and_clears_input() {
+        let mut app = App::new(base_url());
+        app.handle_paste("  你好  \n世界  ");
+
+        let commands = app.handle_key(press(KeyCode::Enter));
+        match commands.as_slice() {
+            [
+                Command::Send {
+                    session_id,
+                    content: sent,
+                },
+            ] => {
+                assert!(session_id.is_none());
+                assert_eq!(sent, "你好  \n世界");
+            }
+            other => panic!("期望且仅期望一条发送请求，实际：{other:?}"),
+        }
+        assert_eq!(content(&app), "");
+        assert_eq!(app.phase, Phase::Waiting);
+    }
+
+    #[test]
+    fn busy_run_keeps_input_on_enter() {
+        let mut app = App::new(base_url());
+        app.handle_paste("排队中的消息");
+        app.phase = Phase::Waiting;
+
+        assert!(app.handle_key(press(KeyCode::Enter)).is_empty());
+        assert_eq!(content(&app), "排队中的消息");
+        assert!(app.notice.is_some());
+    }
+
+    #[test]
+    fn ctrl_shortcuts_stay_application_level() {
+        let mut app = App::new(base_url());
+
+        // Ctrl+N 是新建会话，不会被输入组件当成“下移”，也不会写入字母。
+        let commands = app.handle_key(press_ctrl(KeyCode::Char('n')));
+        assert!(matches!(commands.as_slice(), [Command::CreateSession]));
+        assert_eq!(content(&app), "");
+
+        // Ctrl+R 是重试，不会被输入组件当成“重做”。
+        let commands = app.handle_key(press_ctrl(KeyCode::Char('r')));
+        assert!(matches!(commands.as_slice(), [Command::Refresh { session: None }]));
+        assert_eq!(content(&app), "");
+
+        // Ctrl+C 是退出，不会被输入组件当成“复制”。
+        assert!(app.handle_key(press_ctrl(KeyCode::Char('c'))).is_empty());
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn editing_shortcuts_go_to_input_component() {
+        let mut app = App::new(base_url());
+        type_text(&mut app, "abc def");
+
+        // Ctrl+A 在应用里没有占用，交给输入组件把光标移到行首。
+        app.handle_key(press_ctrl(KeyCode::Char('a')));
+        type_text(&mut app, "X");
+        assert_eq!(content(&app), "Xabc def");
     }
 }

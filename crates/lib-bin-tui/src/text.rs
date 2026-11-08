@@ -1,14 +1,9 @@
-//! 文本宽度与折行：中英文混排时按显示宽度计算，避免宽字符把界面撑歪。
+//! 消息文本折行：中英文混排时按显示宽度计算，避免宽字符把界面撑歪。
 //!
 //! 消息区自己折行、`Paragraph` 不再开 `wrap`，这样滚动位置可以直接由行数算出，
-//! 不依赖 Ratatui 的 unstable 行数统计接口。
+//! 不依赖 Ratatui 的 unstable 行数统计接口。输入框的折行与裁剪由输入组件自己负责，不在这里。
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-/// 文本的显示宽度（东亚宽字符按 2 列）。
-pub fn width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
-}
+use unicode_width::UnicodeWidthChar;
 
 /// 按显示宽度折行；`width` 为 0 时不折行。
 ///
@@ -34,21 +29,4 @@ pub fn wrap(value: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
-}
-
-/// 从文本头部跳过指定显示宽度，返回剩余部分。
-///
-/// 用于输入框横向裁剪：光标超出行宽时，让可见区域跟着光标走。
-pub fn skip_columns(value: &str, skip: usize) -> String {
-    let mut used = 0;
-    value
-        .chars()
-        .skip_while(|value| {
-            if used >= skip {
-                return false;
-            }
-            used += UnicodeWidthChar::width(*value).unwrap_or(0);
-            true
-        })
-        .collect()
 }

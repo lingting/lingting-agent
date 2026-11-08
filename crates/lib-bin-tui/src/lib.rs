@@ -11,7 +11,6 @@
 //! 通道 `try_recv` 非阻塞地取，渲染 tick 就是那次轮询超时（只在有动画可放时重绘）。
 
 mod event;
-mod input;
 mod state;
 mod terminal;
 mod text;
@@ -91,6 +90,11 @@ fn event_loop(terminal: &mut terminal::Terminal, app: &mut App, worker: &Worker)
                 for command in app.handle_key(key) {
                     worker.send(command);
                 }
+                dirty = true;
+            }
+            // 开启 bracketed paste 后，终端粘贴是整段文本，不是逐字按键；只在输入焦点下写入。
+            Event::Paste(text) => {
+                app.handle_paste(&text);
                 dirty = true;
             }
             Event::Resize(_, _) => dirty = true,

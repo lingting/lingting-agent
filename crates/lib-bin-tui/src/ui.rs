@@ -13,10 +13,6 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
 /// 会话区占主体的比例。
 const SESSIONS_PERCENT: u16 = 28;
-/// 输入框提示符。
-const PROMPT: &str = "› ";
-/// 提示符宽度。
-const PROMPT_WIDTH: u16 = 2;
 /// 消息正文相对正文区的缩进。
 const INDENT: usize = 2;
 
@@ -27,7 +23,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Constraint::Length(1),
         Constraint::Length(notice_height),
         Constraint::Min(3),
-        Constraint::Length(3),
+        // 输入框固定 5 行（边框内 3 行）：多行输入与软换行需要可见的纵向空间。
+        Constraint::Length(5),
         Constraint::Length(1),
     ])
     .areas(frame.area());
@@ -143,37 +140,37 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// 输入框：单行编辑，光标跟随，超宽时横向滚动。
+/// 输入框：多行编辑、软换行与视口滚动都交给输入组件，这里只负责边框、绘制与光标定位。
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Input;
-    let block = Block::bordered().title(" 输入 ").border_style(border_style(focused));
+    let block = Block::bordered()
+        .title(" 输入 · Enter 发送 / Shift+Enter 换行 ")
+        .border_style(border_style(focused));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    frame.render_widget(&app.input, inner);
 
-    let cursor = text::width(&app.input.before_cursor());
-    let available = inner.width.saturating_sub(PROMPT_WIDTH) as usize;
-    // 光标超出行宽时整行左移，保证光标始终可见。
-    let skip = cursor.saturating_sub(available.saturating_sub(1));
-    let visible = text::skip_columns(&app.input.text(), skip);
-    let line = Line::from(vec![Span::styled(PROMPT, faded()), Span::raw(visible)]);
-    frame.render_widget(Paragraph::new(line), inner);
-
-    if !focused || inner.width <= PROMPT_WIDTH || inner.height == 0 {
+    if !focused || inner.width == 0 || inner.height == 0 {
         return;
     }
-    let column = cursor.saturating_sub(skip) as u16;
-    let x = inner
-        .x
-        .saturating_add(PROMPT_WIDTH)
-        .saturating_add(column)
-        .min(inner.right().saturating_sub(1));
-    frame.set_cursor_position((x, inner.y));
+    // 组件的屏幕光标是相对整段文本的显示坐标，减去本次渲染记录的滚动起点才是框内位置。
+    let cursor = app.input.screen_cursor();
+    let (top_row, top_col) = app.input.scroll_offset();
+    let row = cursor.row.saturating_sub(top_row as usize);
+    let col = cursor.col.saturating_sub(top_col as usize);
+    let x = inner.x.saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
+    let y = inner.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+    let x = x.min(inner.right().saturating_sub(1));
+    let y = y.min(inner.bottom().saturating_sub(1));
+    frame.set_cursor_position((x, y));
 }
 
 /// 底部快捷键提示：随焦点切换。
 fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.focus {
-        Focus::Input => "Enter 发送 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+C 退出",
+        Focus::Input => {
+            "Enter 发送 · Shift+Enter 换行 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+C 退出"
+        }
         Focus::Sessions => "↑↓ 选择 · Enter 打开 · n 新建 · q 退出 · Tab/Esc 回到输入",
     };
     frame.render_widget(Span::styled(format!(" {hint}"), faded()), area);
@@ -222,4 +219,61 @@ fn border_style(focused: bool) -> Style {
 /// 次要文字样式。
 fn faded() -> Style {
     Style::new().fg(Color::DarkGray)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Position;
+
+    fn draw_app(app: &App, width: u16, height: u16) -> Position {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("测试终端");
+        terminal.draw(|frame| draw(frame, app)).expect("绘制一帧");
+        terminal.get_cursor_position().expect("读取光标位置")
+    }
+
+    #[test]
+    fn cursor_sits_at_text_end_of_input_box() {
+        let mut app = App::new("http://127.0.0.1:1".to_string());
+        app.handle_paste("ab中文");
+
+        // 输入框内容区左上角是 (1, 19)：状态栏 1 行、主体 17 行、上边框 1 行。
+        // 光标在 "ab中文" 之后，显示宽度 6 列。
+        assert_eq!(draw_app(&app, 80, 24), Position { x: 7, y: 19 });
+    }
+
+    #[test]
+    fn cursor_stays_inside_input_box_when_text_scrolls() {
+        let mut app = App::new("http://127.0.0.1:1".to_string());
+        app.handle_paste("第一行\n第二行\n第三行\n第四行\n第五行");
+
+        // 内容超过框内 3 行可见高度时，光标停在内容区最后一行，不会越界到底部提示行。
+        assert_eq!(draw_app(&app, 80, 24).y, 21);
+    }
+
+    #[test]
+    fn tiny_terminal_keeps_input_renderable() {
+        let mut app = App::new("http://127.0.0.1:1".to_string());
+        app.handle_paste("很长的输入内容会软换行\n第二行\n第三行\n第四行");
+
+        // 行数不足以放下全部固定高度时也不能 panic：光标位置只会落在终端可见范围内。
+        let position = draw_app(&app, 20, 6);
+        assert!(position.x < 20);
+        assert!(position.y < 6);
+    }
+
+    #[test]
+    fn cursor_is_hidden_when_sessions_focused() {
+        let mut app = App::new("http://127.0.0.1:1".to_string());
+        app.handle_paste("ab");
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        // 焦点不在输入框时不设置终端光标，位置由终端自己决定。
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("测试终端");
+        terminal.draw(|frame| draw(frame, &app)).expect("绘制一帧");
+        assert!(!terminal.backend().cursor_visible());
+    }
 }
