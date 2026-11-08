@@ -278,6 +278,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bin-tests"
+version = "26.11.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-util",
+ "lib-bin-cli",
+ "lib-core",
+ "tokio",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

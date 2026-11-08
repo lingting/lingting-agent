@@ -82,6 +82,8 @@ flowchart TB
 | Agent 领域层（agent） | `agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`、`agent-tool`、`agent-mcp`、`agent-skill` | Agent Runtime 与 Context、Tool、MCP、Skill 能力 |
 | 程序入口层（bin） | `bin-agent`、`bin-tui`（计划）、`bin-web`（计划）、`bin-mock-server`（计划） | 组装与启动 |
 
+另有开发期工具 `bin-tests`（源码位于 `crates/bin-tests`）：端到端测试入口，不属于上述四层，不参与分发，只依赖 `lib-bin-cli` 的客户端能力，并通过子进程运行服务端。
+
 ### 2.2 依赖方向表示法
 
 全文统一使用：
@@ -379,6 +381,25 @@ agent status
 - 它就是"外部供应商"的替身，**与 P1 内部 Mock 的 Agent API 不是同一个服务**。
 - **不得依赖 `agent-runtime`**，也不得依赖 `service-core` / `lib-web` 等业务与 Agent 能力。
 
+#### bin-tests（开发期工具，不参与分发）
+
+包名 `bin-tests`，源码位于 `crates/bin-tests`。
+
+职责：
+
+- 声明端到端测试用例，支持按用例名前缀选择与 `--all`。
+- 以 CPU 内核数为默认并发度调度用例，单个用例失败不中断其余用例。
+- 管理可复用测试资源：共享服务端只启动一次，供多个用例复用。
+- 需要隔离状态或带副作用的用例自行启动独立服务端。
+
+边界：
+
+- **不得进程内启动服务端**：服务端一律以 `bin-agent server` 子进程运行，测试进程只作为客户端。
+- 不得直接依赖 `lib-web` / `lib-bin-web` / `service-core` 等服务端实现，只通过生成的客户端 SDK 访问服务端。
+- 不参与分发，不是产品入口。
+
+替代方案记录：曾考虑用 `cargo test` + `cargo-nextest`。每个测试文件是独立进程，无法让多个用例复用同一个服务端，与“统一入口只启动一个共享服务端”的目标冲突，因此不采用。
+
 ### 3.4 通用基础库
 
 `lib-bin-cli` / `lib-bin-tui` / `lib-bin-web` 都是 **Library Crate，不是可执行 Binary**：它们只向 `bin-*` 提供组装所需的能力，自身不产生可执行文件。
@@ -611,6 +632,7 @@ manager-agent -> service-agent
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
 | `bin-mock-server`（计划） | `lib-web-core`、`lib-core` | Axum / `framework-web-axum` | `agent-runtime`、`service-core`、`lib-web` |
+| `bin-tests` | `lib-bin-cli`、`lib-core` | Clap、Tokio（子进程、并发与超时）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`、`service-core`（不得进程内启动服务端）；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
 
 ### 5.2 依赖图
 
@@ -815,6 +837,7 @@ embed-ui = ["dep:rust-embed"]
 | `types-core` | 通用领域类型 |
 | `service-core` | 通用核心业务服务 |
 | `lib-core` | 公共基础能力 |
+| `bin-tests` | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
 P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_ts_sdk`、`gen_rust_sdk`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
 

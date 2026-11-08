@@ -1,6 +1,7 @@
 make gen         生成 Rust / TS 两份客户端 SDK（产物落 packages/，不入库）
 make build       编译 workspace 全部成员（ARGS 透传给 cargo build）
 make check       格式检查 + Clippy 静态检查（不执行测试）
+make test        并发执行端到端测试（ARGS 必填：用例前缀或 --all）
 make fmt         用 rustfmt 格式化 workspace
 make clean-gen   删除生成物目录 packages/
 make ui-install  安装前端依赖（需先 make gen）

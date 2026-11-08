@@ -2,7 +2,7 @@
 #
 # 约定：
 #   1. recipe 使用 POSIX sh，需在 Git Bash 中执行 make。
-#   2. 本文件不包含任何测试命令；check 只做格式与静态检查。
+#   2. check 只做格式与静态检查；需要执行测试用 test（会调用测试入口）。
 
 # 前端工程目录（同时是 pnpm workspace 根）。
 UI_DIR := lingting-agent-ui
@@ -12,7 +12,7 @@ GEN_DIR := packages
 ARGS ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help gen build check fmt clean-gen ui-install ui-dev ui-build ui-lint
+.PHONY: help gen build check fmt test clean-gen ui-install ui-dev ui-build ui-lint
 
 help:
 	@cat .make/help.txt
@@ -32,6 +32,12 @@ check:
 
 fmt:
 	cargo fmt --all
+
+# 测试：ARGS 必填，传用例名前缀或 --all，例如 make test ARGS="--all"。
+# 前置：先重新生成 SDK，再构建 bin-agent（测试入口以子进程拉起服务端）。
+test: gen
+	cargo build --quiet -p bin-agent
+	cargo run --quiet -p bin-tests -- $(ARGS)
 
 clean-gen:
 	rm -rf $(GEN_DIR)

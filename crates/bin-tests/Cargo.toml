@@ -1,0 +1,22 @@
+[package]
+name = "bin-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "lingting agent 端到端测试入口"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-bin-cli = { workspace = true }
+lib-core = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true

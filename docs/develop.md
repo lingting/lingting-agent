@@ -10,6 +10,7 @@
 | `make build` | 编译 workspace 全部成员；`ARGS` 透传，如 `make build ARGS="--release"` |
 | `make check` | `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings`，不执行测试 |
 | `make fmt` | `cargo fmt --all` |
+| `make test ARGS="..."` | 生成 SDK、构建 `bin-agent` 后并发执行端到端用例；`ARGS` 传用例名前缀或 `--all`（详见“测试”一节） |
 | `make clean-gen` | 删除生成物目录 `packages/` |
 | `make ui-install` / `make ui-dev` / `make ui-build` / `make ui-lint` | 在 `lingting-agent-ui/` 内执行对应 pnpm 脚本 |
 
@@ -17,7 +18,7 @@
 
 ## 固定端口
 
-项目各进程一律使用固定端口，不使用随机端口。
+项目各进程一律使用固定端口，不使用随机端口；唯一例外是测试入口为隔离用例动态申请空闲端口（见“测试”一节）。
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
@@ -25,11 +26,33 @@
 | 开发环境 WebUI | 20101 | 开发环境 WebUI 端口 |
 | 开发环境服务端 | 20102 | 开发环境服务端端口 |
 | API 探针服务端 | 20103 | API 探针服务端端口 |
+| 测试共享服务端 | 20104 | 测试入口启动的唯一共享服务端端口；隔离用例使用动态空闲端口 |
 
 约定：
 
 - 端口冲突时直接报错退出，不静默改用随机端口。
 - 端口变更必须同时更新本表与 `.steps/p1/decisions.md` 的 D-022。
+
+## 测试
+
+端到端测试由 `crates/bin-tests`（包名 `bin-tests`）统一承载，用一个入口管理资源并分发用例，替代手工 curl 复测。
+
+| 项 | 说明 |
+|---|---|
+| 运行命令 | `make test ARGS="..."`：先执行 `make gen`、构建 `bin-agent`，再运行测试入口 |
+| 用例选择 | `ARGS` 传用例名前缀（如 `session` 选中 `session.*`，`session.message` 精确选中单个），可传多个；`--all` 运行全部；`--list` 只列用例 |
+| 并发 | 默认取 CPU 内核数，`--concurrency N` 覆盖；单个用例失败不中断其余用例，结束后汇总 |
+| 共享服务端 | 用例注册为 `Shared` 时复用入口启动的唯一服务端，固定端口 20104；写用例时必须自建会话、不得断言全局计数 |
+| 隔离服务端 | 用例注册为 `Isolated` 时自起 `bin-agent server` 子进程，端口动态取空闲端口，适合有副作用（如触发关闭）或需要干净状态的用例 |
+| 子进程文件 | 根目录为系统临时目录下的 `lingting-agent-tests/<运行 ID>/`：共享服务端用 `shard-shared/`，隔离用例用 `<用例名>/`；`server.log` 是子进程输出，`data/`、`config.toml`、`logs*/` 来自 `AGENT_HOME` |
+| 服务端二进制 | 默认取测试入口同目录的 `bin-agent`，可用 `AGENT_TEST_SERVER_BIN` 覆盖；缺失时提示先执行 `make build` |
+
+约定：
+
+- 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总。
+- 用例只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。
+- 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
+- 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。
 
 ## 配置装载
 
@@ -40,6 +63,7 @@
 | 配置文件 | `<应用根目录>/config.toml`，内容为 `[server]` 下的 `addr` / `port` / `log_level`；文件不存在时全部取默认值 |
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
 | 环境变量 | `AGENT_SERVER_ADDR`（接受 `host` / `host:port` / `http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL` |
+| 应用根目录覆盖 | 环境变量 `AGENT_HOME` 指向的目录；设置后 `data`、`config.toml`、`logs` / `logs-cli` / `logs-tui` 全部落在该目录，默认位置不再使用（测试用它隔离每个服务端实例） |
 | 默认值 | 监听 `127.0.0.1:20100`，日志级别 `info` |
 | 目录字段 | `lib-core` 的 `AppDirectories`：`data`、`config_file`、`logs_server`、`logs_cli`、`logs_tui` |
 
