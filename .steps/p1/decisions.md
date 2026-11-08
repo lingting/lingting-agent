@@ -707,7 +707,7 @@
   4. **超时**：两个 `HttpClient` 分工——普通接口 30 秒总超时；事件流不设总超时（一次回复可能持续很久，总超时会在回复中途截断），存活由服务端 15 秒心跳与用户中断判断。
   5. **`R<T>` 解包**：服务端成功响应统一是 `{"code":200,"message":"Success","data":<载荷>}`，生成的 SDK 直接按载荷类型反序列化，因此解包放在 Transport。判据是能反序列化成生成的 `R<Value>`；`data` 缺失（`Void` 的 204 空响应）与非 JSON 响应体（`Blob`）原样透传。**这是 P1-014 的实测发现：漏掉解包会让所有接口报 `missing field`。**
   6. **SSE 订阅**：`api/run/stream` 在元数据里是 `Blob`，生成的 `run_stream` 只能整体返回响应体，因此 `Client::subscribe_run` 用同一个 `RUN_STREAM` 常量的 path/method 走 `framework-http` 的 `stream`，客户端自行解析 SSE 帧（`id` / `event` 忽略，`data` 反序列化成生成的 `RunEvent`）。
-  7. **错误分类**：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型（`framework-http` 用 reqwest 0.12，工作区不再声明 reqwest）：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的英文文案 `operation timed out`。错误一律压成一行（非 JSON 错误体折叠空白、截断到 200 字符）。
+  7. **错误分类**：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型（工作区不声明 reqwest，版本跟随 `framework-http`）：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的英文文案 `operation timed out`。错误一律压成一行（非 JSON 错误体折叠空白、截断到 200 字符）。
   8. **`agent run`**：创建会话（标题取任务文本）→ 发消息 → 消费事件流 → 按 `--stream` / `--json` / 默认三种形态输出。Mock 的助手消息只在事件流跑到结束后落库（D-026），所以三种形态都要消费完整条流。
   9. **`agent status`**：走生成的 `probe_health`；连接被拒绝判「服务未启动」，超时 / 非 2xx / 解析失败判「服务异常」，其余为「正常」。
 - **契约变更**：按用户要求给 `ProbeHealthVO` 增加 `runningRunCount`（未结束的 `QUEUED` / `RUNNING` Run 数，由 `SessionService::running_run_count` 统计），`api/probe/health` 因此读取会话业务计数；两份 SDK 已重新生成。
@@ -716,7 +716,7 @@
   2. 事件流不设总超时：服务端进程被强杀（不走 D-028 的关闭链路）时，客户端只能靠 TCP 断开或用户中断感知，没有客户端读空闲超时。
   3. 错误分类依赖 `io::ErrorKind` 与 reqwest 的英文文案；若框架把错误改包成自有类型，超时/连接失败会退化为一般传输错误（消息仍可读），此时需框架侧提供分类入口。
   4. TUI 目前只是接入点（地址解析 + `logs-tui` 初始化后返回「TUI 尚未接入」），界面与事件循环归 P1-015。
-- **实测回填（2026-11-08，debug 构建，`agent server --port 20150`）**：`agent --help` / `--version` 退出码 0（`--help` 的 Usage 显示 `agent`，靠 clap 的 `bin_name`）；`agent`（无子命令）返回「TUI 尚未接入（P1-015）」退出码 1；`agent status` 输出地址 / 正常 / 版本 / 运行时长 / 运行中 Run 数；`agent run "…"` 三种输出形态都拿到 Mock 完整回复，`--json` 输出 `{content, runId, sessionId, status:"COMPLETED"}`；后台跑 `run --stream` 时 `status` 显示 `运行中 Run：1`；`--json` 与 `--stream` 互斥（clap 退出码 2）；服务停止后 `status` 报「服务未启动」、`run` 报「无法连接服务 …（服务是否已启动？）」，退出码均为 1；对非 API 服务（`python -m http.server`）`status` 报「服务异常：服务返回错误 404：…」且被压成一行；不可达地址在 30 秒内以「请求 … 超时」结束；`AGENT_SERVER_ADDR` 生效且被 `--server` 覆盖；`server --port 0` 退出码 2。`cargo tree -d` 中 reqwest 只剩 0.12.28 一份。
+- **实测回填（2026-11-08，debug 构建，`agent server --port 20150`）**：`agent --help` / `--version` 退出码 0（`--help` 的 Usage 显示 `agent`，靠 clap 的 `bin_name`）；`agent`（无子命令）返回「TUI 尚未接入（P1-015）」退出码 1；`agent status` 输出地址 / 正常 / 版本 / 运行时长 / 运行中 Run 数；`agent run "…"` 三种输出形态都拿到 Mock 完整回复，`--json` 输出 `{content, runId, sessionId, status:"COMPLETED"}`；后台跑 `run --stream` 时 `status` 显示 `运行中 Run：1`；`--json` 与 `--stream` 互斥（clap 退出码 2）；服务停止后 `status` 报「服务未启动」、`run` 报「无法连接服务 …（服务是否已启动？）」，退出码均为 1；对非 API 服务（`python -m http.server`）`status` 报「服务异常：服务返回错误 404：…」且被压成一行；不可达地址在 30 秒内以「请求 … 超时」结束；`AGENT_SERVER_ADDR` 生效且被 `--server` 覆盖；`server --port 0` 退出码 2。`cargo tree -d` 中 reqwest 只有一份。**依赖同步复测（2026-11-08，框架侧 reqwest 升到 0.13）**：`cargo build`、`clippy -D warnings`、`fmt --check` 全通过，`cargo tree -i reqwest` 只有 `reqwest v0.13.5`（无重复版本），上面全部用例复跑结果一致（含 404 单行错误、`运行中 Run：1`、关闭窗口 503、「超时」分类）。
 - **状态**：`DECIDED`
 
 ---
