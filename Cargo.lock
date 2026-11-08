@@ -284,6 +284,7 @@ dependencies = [
  "anyhow",
  "clap",
  "framework-http",
+ "framework-proc-core",
  "futures-util",
  "lib-bin-cli",
  "lib-bin-tui",

@@ -88,12 +88,12 @@ P6 Production Readiness
 
 | 项 | 状态 |
 |----|------|
-| 仓库状态 | Cargo Workspace + 9 个成员 crate 骨架（`bin-agent` + `lib-*` + `types-core` + `service-core`）；已有探针 API 服务（含 `health` / `version` 探活与统一错误响应契约 `ApiError`）与 TS / Rust 两份 SDK 生成链路；前端脚手架已建立在 `lingting-agent-ui/`（pnpm workspace 根），业务代码尚未开始 |
+| 仓库状态 | Cargo Workspace + 9 个成员 crate（`bin-agent` + `lib-*` + `types-core` + `service-core`）；服务端已具备 19 条接口（探针 12 条，其中关闭探针仅 debug 构建；Mock 会话 / 消息 / Run 与事件流 7 条）、统一错误契约 `ApiError`、trace id、CORS、静态资源托管与优雅关闭；TUI 与 WebUI 的最小对话闭环（Mock 流式）已完成，WebUI 产物嵌入 release binary；前端工程在 `lingting-agent-ui/`（pnpm workspace 根） |
 | Rust 工具链 | rustc 1.98.0 / cargo 1.98.0 |
 | Node 工具链 | node v22.22.3 / pnpm 11.24.0 / npm 10.9.8 |
 | framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
 | SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
-| P1 | 进行中：P1-001 ~ P1-019 已完成（含 SSE 事件流、CORS / 静态兜底、优雅关闭、CLI `run` / `status`、TUI 流式闭环、WebUI 最小对话界面与 `web.*` 三层验收用例、WebUI 产物嵌入 single binary、release 构建与跨平台结论、生成物重建门禁与 CI）；下一个 P1-020（P1 端到端 Mock 闭环验收与结论回填） |
+| P1 | **已完成**：P1-001 ~ P1-020 全部完成并通过验收（九类条目全部通过，结论与证据见 [`reports/p1-020-acceptance.md`](../docs/reports/p1-020-acceptance.md)）；判据修订（A-1、E-3、E-4）见 `p1/decisions.md` D-032。下一步：P2 细化前先读该报告的「P2 输入清单」 |
 | P2–P6 | 未开始，仅有阶段级规划 |
 
 ---

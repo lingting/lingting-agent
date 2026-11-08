@@ -1,6 +1,6 @@
 # P1：基础工程架构
 
-**状态：未开始**
+**状态：已完成（P1-020 验收通过；结论与证据见 [`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）**
 
 P1 的目标不是做出 Agent，而是把「单 Binary + Server/Client + 统一 API 契约 + 双端 SDK 生成」这套地基一次性打正确。地基一旦错误，P2 之后的每一条 API 都要返工。
 

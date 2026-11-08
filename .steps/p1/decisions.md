@@ -29,16 +29,16 @@
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
 | D-009 | WebUI 静态资源嵌入方案 | DECIDED (P1-017 落地：构建期 codegen + gzip) |
 | D-010 | WebUI 技术栈 | DECIDED (P1-016 脚手架与 SDK 接入已落地) |
-| D-011 | TUI 与 Server 的连接管理 | OPEN |
+| D-011 | TUI 与 Server 的连接管理 | DECIDED (P1-015 落地) |
 | D-012 | Server 地址配置与发现 | DECIDED |
-| D-013 | 优雅关闭实现方式 | OPEN |
+| D-013 | 优雅关闭实现方式 | DECIDED (P1-013 落地：框架公开 API) |
 | D-014 | 鉴权策略 | DECIDED (已实测) |
 | D-015 | `framework-*` 依赖引入方式与版本矩阵 | DECIDED (已核实) |
-| D-016 | 单 Binary 的功能裁剪与体积权衡 | OPEN |
+| D-016 | 单 Binary 的功能裁剪与体积权衡 | DECIDED (P1-018：不裁剪，阈值 30MB) |
 | D-017 | P1 是否引入 SQLite | DECIDED |
 | D-018 | `i64` 账号/ID 的跨语言表示 | DECIDED |
 | D-019 | API 版本管理策略 | DECIDED |
-| D-020 | P1 跨平台构建策略 | OPEN |
+| D-020 | P1 跨平台构建策略 | DECIDED (P1-018：Windows 原生 + Linux zigbuild) |
 | D-021 | 参数提取与错误响应约束 | DECIDED (已实测) |
 | D-022 | 固定端口分配 | DECIDED |
 | D-023 | 日志目录与归档策略 | DECIDED |
@@ -50,6 +50,7 @@
 | D-029 | CLI 命令结构与客户端 Transport | DECIDED |
 | D-030 | 前端测试分层与执行入口 | DECIDED (P1-016) |
 | D-031 | 生成物重建门禁与 CI 形态 | DECIDED (P1-019) |
+| D-032 | P1 验收判据修订（A-1、E-3、E-4） | DECIDED (P1-020) |
 
 ---
 
@@ -785,7 +786,22 @@
   3. CI 目前只在 ubuntu-latest 上跑 Rust 检查与前端类型检查，不含 `make test`（测试执行不进门禁，见全局测试约束）。
 - **状态**：`DECIDED`（P1-019）
 
+
+## D-032 P1 验收判据修订（A-1、E-3、E-4）
+
+- **问题**：P1-020 逐条执行 `acceptance.md` 时，有三条判据与已定决策或 P1 的 Mock 契约冲突，无法按原文判定。
+- **A-1（变更可检测）**：原文要求「修改任一 API 定义后不重新生成，运行一致性检查命令以非 0 退出」。生成物不入库（D-006），门禁每次都清空并重建 `packages/`（D-031），**不存在「生成物过期」这一可检测状态**；实测把 `api/probe/void` 的 path 改成别的值后不重新生成直接跑 `make gen-check`，退出码仍为 0。
+  - **修订**：A-1 的判据由 D-031 取代，验收口径为「缺生成物 / 生成失败 / 关键产物不完整 → 非 0 退出」（由 A-2、A-3 覆盖）。
+  - **遗留**：「改了定义但忘记重新生成」在本地不会被任何命令拦住（缺产物会编译失败，过期但合法的产物不会）。需要时再引入基于重新生成后比对哈希的门禁，归属 P2（P2 任务细化时定方案）。
+- **E-3（心跳）**：心跳只在单次等待超过 `HEARTBEAT_INTERVAL = 15s` 时补发（`service-core/src/session/stream.rs`），而 P1 的 Mock 生产方每 120ms 推一段增量，**当前契约下不存在可观测的心跳场景**。
+  - **修订**：P1 只保留代码路径，心跳的实际观测推至 P2 的真实 LLM 长等待。
+- **E-4（错误事件）**：P1 的 Mock 不实现失败分支，`run_failed` 不产出（D-025 / D-026 明确「留给 P2 的真实执行」）。
+  - **修订**：等价的「终止事件 + 流正常结束」由 `server_shutdown` 覆盖 —— `bin-tests` 的 `session.stream_terminal` 断言它带 `status=CANCELLED` 与可读 `error`、随后流立即结束；`run_failed` 随 P2 验证。
+- **不影响的部分**：其余 B/S/T/W/G/A/E/X/R 条目判据不变，全部通过，结论见 `docs/reports/p1-020-acceptance.md`。
+- **状态**：`DECIDED`（P1-020）
+
 ---
+
 ## 假设清单（未验证）
 
 | ID | 假设 | 影响 | 何时验证 |

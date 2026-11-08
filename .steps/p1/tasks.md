@@ -399,7 +399,7 @@
     - **CI**：新增 `.github/workflows/ci.yml`（ubuntu-latest，`master` 与 PR），只做检出 + 工具链/依赖安装，随后执行 `make gen` → `make ui-install` → `make ci`，与本地完全同一组命令；复杂逻辑不下沉到 workflow。framework 目前以 path 引入同级仓库（D-015），发布前改为 version，workflow 不为它做检出处理。
     - **实测**：`make gen-check` 从零重建后通过（`cargo check` 通过）；`make ci` 通过（fmt / clippy `-D warnings` / `tsc --noEmit` 全绿）。失败路径用 `AGENT_SDK_RUST_OUT_DIR` 把 Rust 产物导到别处复现：脚本在产物校验步报「产物缺失或为空：sdk-rust/src/api.rs …」并退出 1。
 
-- [ ] **P1-020 P1 端到端 Mock 闭环验收与结论回填**
+- [x] **P1-020 P1 端到端 Mock 闭环验收与结论回填**
 
   - **目标**：按 `acceptance.md` 逐条完成 P1 验收，并把过程中的偏差回填到文档。
   - **具体工作**：
@@ -411,6 +411,11 @@
   - **前置依赖**：P1-018、P1-019（以及 Batch A–C 全部任务）
   - **交付物**：验收结论；已更新的路线图文档；P1 遗留问题清单；P2 输入清单。
   - **验收标准**：
-    - [ ] `acceptance.md` 中每一条都有“通过 / 不通过 + 证据”的结论。
-    - [ ] 不存在状态与实际不符的任务勾选。
-    - [ ] P1 遗留问题清单每条都有归属阶段。
+    - [x] `acceptance.md` 中每一条都有“通过 / 不通过 + 证据”的结论。
+    - [x] 不存在状态与实际不符的任务勾选。
+    - [x] P1 遗留问题清单每条都有归属阶段。
+  - **实现结论（2026-11-11）**：九类条目逐条执行完毕，结论、证据、偏差与 P2 输入见 `docs/reports/p1-020-acceptance.md`。
+    - **验收结果**：B/S/T/W/G/A/E/X/R 九类全部通过（`make test ARGS="--all"` 29 个用例、前端 21 条、Playwright 3 条；`make ci` 全绿）。T-1 / T-7 为人工验证项（P1-015 已在真实终端完成）。
+    - **本轮修复与补测**：G-7 原先只在 Rust 生成物与 `types.d.ts` 有标识，`gen_ts_sdk.rs` 现为全部 `.js` / `.d.ts` 补「自动生成，勿手改」头部（写盘仍是内容一致不落盘，G-4 幂等不受影响）；`bin-tests` 新增 `session.error`（R-1 的 404/400）、`session.isolation`（R-2）、`session.stream_terminal`（R-3 的终止事件分支）、`sdk.generator`（R-4 的重复检测与幂等）、`client.errors`（R-5 的服务未启动/超时/非 2xx），为此新增 `framework-proc-core` 依赖与 tokio `net` feature。
+    - **判据修订**：A-1、E-3、E-4 与既有决策冲突或 P1 不可触发，口径修订记入 `decisions.md` **D-032**，并在 `acceptance.md` 对应行加注。`decisions.md` 索引中残留的 D-011 / D-013 / D-016 / D-020 `OPEN` 已同步为 `DECIDED`。
+    - **遗留问题（含归属）**：E-3 心跳与 E-4 `run_failed` → P2；W-1 的浏览器控制台 error 断言 → P2；T-1 / T-7 保持人工（P6 若引入终端快照测试再补）；「生成物过期」的自动检测 → P2（P2 任务细化时定方案）。
