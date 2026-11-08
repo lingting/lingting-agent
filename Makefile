@@ -17,11 +17,11 @@ ARGS ?=
 help:
 	@cat .make/help.txt
 
-# 生成：两条命令顺序执行，任一失败即中止（make 遇错退出，非 0）。
+# 生成：一次进程内顺序生成两份 SDK，任一失败即中止（make 遇错退出，非 0）。
 # 生成物由 API 定义产出，不手改；详见 docs/develop.md「API 契约规范」。
+# 产物与上次逐字节比对：完全一致时不写盘，避免刷新 mtime 让下游（cargo / 前端）无谓重编译。
 gen:
-	cargo run --quiet -p lib-web --example gen_rust_sdk
-	cargo run --quiet -p lib-web --example gen_ts_sdk
+	cargo run --quiet -p lib-web --example gen_sdk
 
 build:
 	cargo build $(ARGS)

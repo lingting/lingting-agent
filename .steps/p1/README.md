@@ -23,7 +23,7 @@ P1 的目标不是做出 Agent，而是把「单 Binary + Server/Client + 统一
 - 工程骨架、工具链固定、依赖版本矩阵。
 - Clap 命令结构、运行模式分发、配置与 Server 地址管理。
 - Axum Server：健康检查、统一错误响应、trace id、日志、CORS、静态资源兜底、优雅关闭、SSE 基础能力。
-- API 契约定义与元数据收集；TypeScript SDK 与 Rust Client SDK 的生成流程、生成物管理、CI 一致性门禁。
+- API 契约定义与元数据收集；TypeScript SDK 与 Rust Client SDK 的生成流程（幂等落盘）与重建检查。
 - TUI 最小对话界面 + Streaming 展示 + 断线提示。
 - WebUI 最小对话界面 + Streaming 展示。
 - 单 Binary Release 构建、运行验证、体积与启动时间初步记录。
@@ -214,7 +214,7 @@ Batch C  客户端
 
 Batch D  收口
   P1-018 单 Binary Release 构建与跨平台 ← 015, 017
-  P1-019 API 一致性与生成物 CI 门禁     ← 007, 018
+  P1-019 API 一致性与生成物重建门禁     ← 007, 018
   P1-020 P1 端到端 Mock 闭环验收        ← 全部
 ```
 

@@ -145,14 +145,14 @@
 
 - **问题**：SDK 生成在构建期自动发生，还是作为独立命令？
 - **可选方案**：
-  1. 独立命令（`<gen 命令>`），构建过程本身不触发；CI 中额外跑一次一致性检查。
+  1. 独立命令（`<gen 命令>`），构建过程本身不触发；CI 中额外跑一次生成，确认生成可执行（产物不入库，无 diff 可校验）。
   2. Rust 构建期自动生成（`build.rs` / proc macro）。
   3. 前端构建期生成（Vite 插件）。
 - **推荐方案**：方案 1。
-- **决策理由**：方案 2 不可行（见 D-004）；方案 3 会把 Rust 元数据采集绑定到 Node 环境，且 Rust 侧仍需一次生成；方案 1 让“生成”成为显式、可重复、可 diff 的动作，配合 CI 门禁（P1-019）即可避免漏生成。
+- **决策理由**：方案 2 不可行（见 D-004）；方案 3 会把 Rust 元数据采集绑定到 Node 环境，且 Rust 侧仍需一次生成；方案 1 让“生成”成为显式、可重复的动作，漏生成由构建期缺产物 / 编译失败暴露（P1-019），不依赖生成物 diff。
 - **配套约束**：生成命令必须幂等；生成失败必须非 0 退出且不落半成品；CI 与本地用同一条命令。
-- **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_rust_sdk` / `gen_ts_sdk`）顺序执行」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。
-- **P1-007 回填**：命令入口固化为根 `Makefile` 的 `make gen`（不再使用 `scripts/*.sh`，`scripts/` 已删除）；生成器形态仍是 `lib-web` 的 example，不新增独立 crate。失败行为落实为「全部校验与源码构建先于写盘完成；写盘先落同级暂存目录 `.gen-tmp`，成功后整体替换目标目录」，失败以非 0 退出且保留上一次产物。
+- **P1-006 验证结论（回填）**：当前形态为「隔离在 `lib-web` 的 example（`gen_sdk`，内部顺序执行 Rust 与 TS 两个生成器）」，生成物不入库（D-006）。`build.rs` 方案已实测不可行：放在 `lib-web` 会自引用循环，放在 `lib-bin-cli` 且产物被 path 依赖时会造成 workspace 加载死锁。
+- **P1-007 回填**：命令入口固化为根 `Makefile` 的 `make gen`（不再使用 `scripts/*.sh`，`scripts/` 已删除）；生成器形态仍是 `lib-web` 的 example，不新增独立 crate。失败行为落实为「全部校验与源码构建先于写盘完成；写盘先落同级暂存目录 `.gen-tmp`，成功后才提交目标目录」，失败以非 0 退出且保留上一次产物；提交前逐字节比对内容，与上次完全一致时只删暂存目录、不写盘（避免刷新 mtime 让下游重编译），有任一差异则整体替换目录。
 - **状态**：`DECIDED (P1-006 已验证；P1-007 已固化命令入口与失败行为)`
 
 ---
@@ -161,13 +161,12 @@
 
 - **问题**：生成的 TS 包与 Rust 客户端源码是否提交到仓库？
 - **可选方案**：
-  1. 入库（提交生成物），CI 校验“重新生成无 diff”。（原方案，已废弃）
-  2. 不入库，生成物仅存在于本地构建产物与工作站内，随生成命令重建。
-- **推荐方案**：方案 2（P1-006 修订）。
+  1. 不入库，生成物仅存在于本地构建产物与工作站内，随生成命令重建。
+- **推荐方案**：方案 1（P1-006 修订）。原方案“入库 + CI 校验重新生成无 diff”已废弃：生成物不入库，git diff 无从校验。
 - **决策理由**：生成物完全可由服务端 API 定义重现，来源只有 Rust 定义一处；入库会让每次 API 变更都附带大段机器生成 diff，掩盖真实改动。
 - **落位**：
-  - Rust Client SDK 由 `cargo run -p lib-web --example gen_rust_sdk` 写入 `packages/sdk-rust/src/`，且**不生成 Cargo.toml**：`lib-bin-cli` 用 `#[path = "../../../packages/sdk-rust/src/*.rs"]` 把生成文件当作自己的模块引入，避免「path 依赖的 manifest 先于生成存在」的引导死锁。
-  - TypeScript SDK 由 `cargo run -p lib-web --example gen_ts_sdk` 写入 `packages/sdk-ts/`（pnpm workspace 内消费）。
+  - Rust Client SDK 由 `cargo run -p lib-web --example gen_sdk` 写入 `packages/sdk-rust/src/`，且**不生成 Cargo.toml**：`lib-bin-cli` 用 `#[path = "../../../packages/sdk-rust/src/*.rs"]` 把生成文件当作自己的模块引入，避免「path 依赖的 manifest 先于生成存在」的引导死锁。
+  - TypeScript SDK 由同一个 `gen_sdk` example 写入 `packages/sdk-ts/`（pnpm workspace 内消费）。
   - `packages/` 整体被 `.gitignore` 忽略；`make gen` 一条命令产出两份 SDK，且必须在 `make build` / `make ui-install` 之前执行。
 - **配套约束**：生成文件头部必须带“自动生成，勿手改”；生成失败必须非 0 退出且不落半成品；不得手工修改生成物，改 API 定义后重新生成；**不存在“提交生成物”步骤**，API 变更的提交只包含定义与消费方代码。
 - **P1-007 回填**：命令入口由 `scripts/gen.sh` 改为根 `Makefile` 的 `make gen`；生成物落位不变，仍不入库；`tasks.md` 中“改定义 → 跑生成 → 提交生成物”的表述已修正为“改定义 → 跑生成”，不再有提交生成物的环节。

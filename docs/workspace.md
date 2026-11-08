@@ -844,7 +844,7 @@ embed-ui = ["dep:rust-embed"]
 | `lib-core` | 公共基础能力 |
 | `bin-tests` | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
-P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_ts_sdk`、`gen_rust_sdk`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
+P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_sdk`；生成逻辑与其共用输出处理在 `examples/support/`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
 
 P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此 **P1 阶段不创建 `lib-db`**；`service-core -> lib-db` 是 P2 才成立的依赖。同理，P1 的 `lib-web` 尚不存在 `agent-runtime` 依赖，该依赖在 P2 加入。这些差异属于**阶段性依赖裁剪**，不改变目标依赖方向。
 

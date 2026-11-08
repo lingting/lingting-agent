@@ -1,4 +1,4 @@
-//! 生成的 Rust Client SDK（由 `cargo run -p lib-web --example gen_rust_sdk` 写入 `packages/sdk-rust/src/`）。
+//! 生成的 Rust Client SDK（由 `cargo run -p lib-web --example gen_sdk` 写入 `packages/sdk-rust/src/`）。
 //!
 //! 生成物不入库，也不生成 Cargo.toml：这里用 `#[path]` 把生成文件当作本 crate 的模块引入，
 //! 避免「path 依赖的 manifest 先于生成存在」的引导死锁。

@@ -1,6 +1,6 @@
-//! 由服务端 API 元数据生成 Rust Client SDK 模块（P1-007 固化）。
+//! 由服务端 API 元数据生成 Rust Client SDK（P1-007 固化）。
 //!
-//! 运行：`make gen`（内部执行 `cargo run -p lib-web --example gen_rust_sdk`）。
+//! 由 `examples/gen_sdk.rs` 在 `make gen` 中调用。
 //!
 //! 生成物写入 `packages/sdk-rust/src/`（可用环境变量 `AGENT_SDK_RUST_OUT_DIR` 覆盖），包含
 //! `types.rs`（DTO 定义快照）、`enums.rs`（枚举运行时信息）与 `api.rs`（接口定义 + `ApiClient` trait）。
@@ -10,6 +10,7 @@
 //! DTO 策略为“自带快照定义”：生成物自包含，不依赖服务端 crate，客户端不会 link 服务端代码。
 
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,10 +21,8 @@ use framework_proc_core::{
     type_metadata_iter,
 };
 
-/// 生成器共用的暂存目录与整体替换逻辑（P1-007）。
-#[path = "support/sdk_out.rs"]
-mod sdk_out;
-
+// 生成器共用的暂存目录与按内容提交逻辑（P1-007）：模块声明在 `examples/support/mod.rs`。
+use super::sdk_out;
 /// 生成物默认输出目录（相对 workspace 根）。
 const DEFAULT_OUT_DIR: &str = "packages/sdk-rust/src";
 /// 覆盖输出目录的环境变量。
@@ -33,7 +32,7 @@ const TRAIT_NAME: &str = "ApiClient";
 /// 接口模块引用 DTO 的模块路径。
 const TYPES_PATH: &str = "crate::sdk::types";
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn generate() -> Result<(), Box<dyn Error + Send + Sync>> {
     // 链接锚点：必须引用 lib-web 的符号，否则 `inventory` 注册项会被链接器丢弃，元数据为空。
     let routes = lib_web::web_routes();
     let apis = api_metadata_iter().collect::<Vec<_>>();
@@ -61,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .type_import_from(TYPES_PATH)
         .build()?;
 
-    // 先写暂存目录：全部生成成功后再整体替换目标目录，失败时保留上一次的有效产物。
+    // 先写暂存目录：全部生成成功后再提交，失败时保留上一次的有效产物。
     let staging = sdk_out::prepare_staging(&out_dir)?;
     write_module(&staging, "types", &types.code)?;
     write_module(&staging, "api", &api.code)?;
@@ -69,11 +68,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         write_module(&staging, "enums", &enums.code)?;
     }
     format_modules(&staging)?;
-    sdk_out::commit_staging(&staging, &out_dir)?;
-    println!(
-        "生成完成 → {}（由 lib-bin-cli 用 #[path] 引入，不生成 Cargo.toml）",
-        out_dir.display()
-    );
+    let commit = sdk_out::commit(&staging, &out_dir)?;
+    println!("Rust SDK → {}", out_dir.display());
+    commit.report(&out_dir);
     Ok(())
 }
 

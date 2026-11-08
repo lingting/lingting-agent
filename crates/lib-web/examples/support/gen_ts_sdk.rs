@@ -1,11 +1,12 @@
 //! 由服务端 API 元数据生成 TypeScript SDK（P1-007 固化）。
 //!
-//! 运行：`make gen`（内部执行 `cargo run -p lib-web --example gen_ts_sdk`）。
+//! 由 `examples/gen_sdk.rs` 在 `make gen` 中调用。
 //!
 //! 生成物写入 `packages/sdk-ts/`（npm ESM 包：`package.json` + `dist/*.js|*.d.ts`），
 //! WebUI 通过根目录的 pnpm workspace 以 `workspace:*` 引入。
 //! 生成物只有抽象类 `ApiClient`，`call` 的实际 HTTP Transport 由 WebUI 自己实现（D-002）。
 
+use std::error::Error;
 use std::path::Path;
 
 use framework_proc_core::{
@@ -13,10 +14,8 @@ use framework_proc_core::{
     enum_metadata_iter, type_metadata_iter,
 };
 
-/// 生成器共用的暂存目录与整体替换逻辑（P1-007）。
-#[path = "support/sdk_out.rs"]
-mod sdk_out;
-
+// 生成器共用的暂存目录与按内容提交逻辑（P1-007）：模块声明在 `examples/support/mod.rs`。
+use super::sdk_out;
 /// 生成的 npm 包名。
 const PACKAGE_NAME: &str = "@lingting/agent-api";
 /// 生成的 npm 包版本，与服务端 workspace 版本保持一致。
@@ -26,7 +25,7 @@ const OUT_DIR: &str = "packages/sdk-ts";
 /// 生成的客户端抽象类名。
 const CLASS_NAME: &str = "ApiClient";
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn generate() -> Result<(), Box<dyn Error + Send + Sync>> {
     // 链接锚点：必须引用 lib-web 的符号，否则 `inventory` 注册项会被链接器丢弃，元数据为空。
     let routes = lib_web::web_routes();
     let api_count = api_metadata_iter().count();
@@ -39,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let out_dir = Path::new(OUT_DIR);
-    // 先写暂存目录：全部生成成功后再整体替换目标目录，失败时保留上一次的有效产物。
+    // 先写暂存目录：全部生成成功后再提交，失败时保留上一次的有效产物。
     let staging = sdk_out::prepare_staging(out_dir)?;
     let mut package = PackageBuilder::new(PACKAGE_NAME, PACKAGE_VERSION, &staging);
     package.push(
@@ -62,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .type_import_from("."),
     );
     package.write()?;
-    sdk_out::commit_staging(&staging, out_dir)?;
-    println!("路由 {} 条，接口 {api_count} 条，生成完成 → {OUT_DIR}", routes.len());
+    let commit = sdk_out::commit(&staging, out_dir)?;
+    println!("路由 {} 条，接口 {api_count} 条", routes.len());
+    println!("TS SDK → {OUT_DIR}");
+    commit.report(out_dir);
     Ok(())
 }

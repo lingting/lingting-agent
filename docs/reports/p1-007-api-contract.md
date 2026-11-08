@@ -15,7 +15,7 @@
 | 生成命令 | 根 `Makefile` 的 `make gen`，`scripts/` 已删除 | 实测 |
 | 生成器形态 | 仍是 `lib-web` 的 example + `examples/support/sdk_out.rs`，不新增 crate | 实测 |
 | 生成物是否入库 | 不入库（D-006）；流程里不存在“提交生成物”步骤 | 实测 |
-| 生成失败行为 | 校验与源码构建先于写盘；写盘走暂存目录 + 整体替换；失败非 0 退出并保留上一次产物 | 实测（见第 4 节） |
+| 生成失败行为 | 校验与源码构建先于写盘；写盘走暂存目录 + 按内容提交（内容与上次一致时不写盘）；失败非 0 退出并保留上一次产物 | 实测（见第 4 节） |
 | 命名规范 | 见 `docs/develop.md`「API 契约规范」 | 约定 |
 | 版本策略 | P1 不做版本化，path 保持 `api/...`，不预留 `/api/v1`（D-019 已 DECIDED） | 约定 |
 
@@ -27,7 +27,7 @@
 
 | 目标 | 行为 |
 |---|---|
-| `make gen` | 依次执行 `cargo run --quiet -p lib-web --example gen_rust_sdk` 与 `gen_ts_sdk` |
+| `make gen` | `cargo run --quiet -p lib-web --example gen_sdk`（同进程依次生成 Rust 与 TS） |
 | `make build` | `cargo build $(ARGS)` |
 | `make check` | `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make fmt` | `cargo fmt --all` |
@@ -36,7 +36,7 @@
 
 取舍说明：
 
-1. **一条命令产出两份 SDK**：`make gen` 的两条 recipe 由 make 串行执行，任一失败即中止并非 0 退出，不需要额外脚本判断退出码。
+1. **一条命令产出两份 SDK**：`make gen` 只调一次 example，两个生成器同进程串行执行，任一失败即中止并非 0 退出，不需要额外脚本判断退出码。
 2. **帮助文本外置到 `.make/help.txt`**：Windows 版 GNU Make 按 ANSI 代码页解析 Makefile，UTF-8 中文写在 recipe 里会变成乱码（实测），因此 `help` 目标改为 `cat` 一个 UTF-8 文本文件。
 3. **recipe 依赖 POSIX sh**：`make` 需在 Git Bash 中执行（`clean-gen` 使用 `rm -rf`），与项目既有终端约定一致。
 
@@ -55,7 +55,7 @@
 
 ---
 
-## 4. 失败行为：暂存目录 + 整体替换
+## 4. 失败行为：暂存目录 + 按内容提交
 
 两个生成器的写盘顺序统一为：
 
@@ -63,9 +63,9 @@
 2. 全部 builder 构建成功（TS 侧 `PackageBuilder::write` 内部也是先 build 全部模块再落盘）。
 3. 写入目标目录的同级暂存目录（如 `packages/sdk-rust/.src.gen-tmp`）。
 4. Rust 侧在暂存目录内跑 `rustfmt`。
-5. 整体替换：旧目录先 rename 到 `.src.gen-old`，暂存目录 rename 到目标位；rename 失败则把旧目录放回原位。成功后删除备份。
+5. 按内容提交：暂存目录与目标目录逐字节比对，完全一致时只删暂存目录、不动目标目录（不刷新 mtime，避免 cargo 的 `#[path]` 依赖与前端依赖图无谓重编译）；有任一差异才整体替换——旧目录先 rename 到 `.src.gen-old`，暂存目录 rename 到目标位；rename 失败则把旧目录放回原位，成功后删除备份。
 
-实现位于 `crates/lib-web/examples/support/sdk_out.rs`（`prepare_staging` / `commit_staging`），两个 example 共用。
+实现位于 `crates/lib-web/examples/support/sdk_out.rs`（`prepare_staging` / `commit`），两个生成器共用；生成器逻辑在 `examples/support/gen_{rust,ts}_sdk.rs`，由 `examples/gen_sdk.rs` 一次进程内顺序调用。
 
 实测：
 

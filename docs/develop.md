@@ -123,12 +123,13 @@
 
 | 项 | 说明 |
 |---|---|
-| 生成命令 | `make gen`（内部依次执行 `cargo run -p lib-web --example gen_rust_sdk` 与 `gen_ts_sdk`） |
+| 生成命令 | `make gen`（内部执行 `cargo run -p lib-web --example gen_sdk`，同进程依次生成 Rust 与 TS，省掉一次 cargo 启动） |
 | Rust 产物 | `packages/sdk-rust/src/{types,enums,api}.rs`，由 `lib-bin-cli` 用 `#[path]` 作为自身模块引入 |
 | TS 产物 | `packages/sdk-ts/`（npm ESM 包），由 `lingting-agent-ui/pnpm-workspace.yaml` 的 `../packages/*` 引入 |
 | 是否入库 | **不入库**（`packages/` 被 `.gitignore` 忽略，D-006）；改 API 后重新生成即可，没有“提交生成物”步骤 |
 | 生成文件头 | Rust 侧写“自动生成，请勿手动修改” + `#![allow(warnings)]`；TS 侧由框架写入 Specta 的 do-not-edit 标记 |
-| 失败行为 | 校验与源码构建先于写盘完成；写盘先落同级暂存目录（`.gen-tmp`），成功后才整体替换目标目录，失败以非 0 退出并保留上一次产物 |
+| 失败行为 | 校验与源码构建先于写盘完成；写盘先落同级暂存目录（`.gen-tmp`），成功后整体替换目标目录，失败以非 0 退出并保留上一次产物 |
+| 重复生成 | 提交前按内容逐字节比对：与上次完全一致时只删暂存目录、不写盘（不刷新 mtime，避免 cargo 的 `#[path]` 依赖与前端依赖图无谓重编译）；有任一差异则整体替换目录，不做逐文件同步 |
 
 执行顺序约束（重要）：
 
