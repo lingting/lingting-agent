@@ -36,15 +36,6 @@ pub enum Prep {
     WebUiBuild,
 }
 
-impl Prep {
-    /// 控制台与报告里展示的准备动作说明。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::WebUiBuild => "构建 WebUI 产物",
-        }
-    }
-}
-
 /// 用例与服务端资源的绑定方式。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CaseKind {

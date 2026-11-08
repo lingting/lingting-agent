@@ -129,7 +129,7 @@ P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事
 | 取消 | 流式期间调用 `api/run/cancel` → 生产方在下一段增量前发现状态变化并停止推送，Run 保持 `CANCELLED` |
 | 重复订阅 | 只有 `QUEUED` 可订阅；同一 Run 再次订阅返回 400，避免两个生产方写同一条助手消息 |
 | 服务关闭 | 生产方在下一段增量前发现关闭标记 → Run 落成 `CANCELLED` → 发出 `server_shutdown`（含 `status` 与可读 `error`）→ 连接关闭；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
-| 客户端 | 浏览器用原生 `EventSource`（GET + 查询参数，A-6）；Rust 侧用生成的 path 常量 + 自己的 SSE 解析 |
+| 客户端 | 浏览器用 **fetch 流式响应 + 自行切帧**（`lingting-agent-ui/src/api/runStream.ts`）：原生 `EventSource` 拿不到订阅失败的 4xx 错误体、断线会自动重连（重订阅被 400 拒绝）、也无法中断，见 D-007 与 A-6 的 P1-016 结论；path 取自生成的 `ApiDefinitions.runStream.path`。Rust 侧用生成的 path 常量 + 自己的 SSE 解析 |
 
 ## 请求与响应样例
 

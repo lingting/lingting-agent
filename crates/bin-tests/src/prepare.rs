@@ -15,8 +15,8 @@ pub async fn ensure(cases: &[Case]) -> Result<()> {
     needed.dedup();
 
     for prep in needed {
-        println!("准备：{}", prep.label());
         match prep {
+            // 具体动作自带「构建 / 跳过」日志，这里不再重复打印。
             Prep::WebUiBuild => frontend::build().await?,
         }
     }

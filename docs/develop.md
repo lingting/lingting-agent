@@ -10,9 +10,10 @@
 | `make build` | 编译 workspace 全部成员；`ARGS` 透传，如 `make build ARGS="--release"` |
 | `make check` | `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings`，不执行测试 |
 | `make fmt` | `cargo fmt --all` |
-| `make test ARGS="..."` | 生成 SDK、构建 `bin-agent` 后并发执行端到端用例；`ARGS` 传用例名前缀或 `--all`（详见“测试”一节） |
+| `make test ARGS="..."` | 生成 SDK、构建 `bin-agent` 后运行测试入口；运行期准备（如构建 WebUI 产物）由入口按选中用例自行完成。`ARGS` 传用例名前缀或 `--all`（详见“测试”一节） |
 | `make clean-gen` | 删除生成物目录 `packages/` |
-| `make ui-install` / `make ui-dev` / `make ui-build` / `make ui-lint` | 在 `lingting-agent-ui/` 内执行对应 pnpm 脚本 |
+| `make ui-install` / `make ui-dev` / `make ui-build` / `make ui-lint` | 在 `lingting-agent-ui/` 内执行对应 pnpm 命令 |
+| `make ui-e2e-install` | 安装 Playwright 的 chromium（端到端用例用；其他机器或 CI 首次运行前执行一次） |
 
 `make help` 的文本放在 `.make/help.txt`：make 在 Windows 上按 ANSI 代码页解析 Makefile，中文写在 Makefile 的 recipe 里会变成乱码。
 
@@ -31,6 +32,7 @@
 约定：
 
 - 端口冲突时直接报错退出，不静默改用随机端口。
+- 未显式配置时的默认端口按构建形态切换（D-022）：**debug 构建用 `20102`（开发环境服务端）**，**release 构建用 `20100`**。服务端与客户端（`tui` / `run` / `status`）共用这一默认值，因此 `cargo run -p bin-agent -- server` 与 `make ui-dev` 的代理目标天然对齐。
 - 端口变更必须同时更新本表与 `.steps/p1/decisions.md` 的 D-022。
 
 ## 测试
@@ -39,20 +41,24 @@
 
 | 项 | 说明 |
 |---|---|
-| 运行命令 | `make test ARGS="..."`：先执行 `make gen`、构建 `bin-agent`，再运行测试入口 |
+| 运行命令 | `make test ARGS="..."`：先执行 `make gen`（编译期必需，`lib-bin-cli` 用 `#[path]` 引入生成物）、构建 `bin-agent`，再运行测试入口 |
+| 运行期准备 | 用例通过 `Case.prep` 声明前置（如 `Prep::WebUiBuild`），入口在启动服务端之前去重执行一次；WebUI 产物比源码新时直接复用，不重复构建 |
 | 用例选择 | `ARGS` 传用例名前缀（如 `session` 选中 `session.*`，`session.message` 精确选中单个），可传多个；`--all` 运行全部；`--list` 只列用例 |
 | 并发 | 默认取 CPU 内核数，`--concurrency N` 覆盖；单个用例失败不中断其余用例，结束后汇总 |
 | 共享服务端 | 用例注册为 `Shared` 时复用入口启动的唯一服务端，固定端口 20104；写用例时必须自建会话、不得断言全局计数 |
 | 隔离服务端 | 用例注册为 `Isolated` 时自起 `bin-agent server` 子进程，端口动态取空闲端口，适合有副作用（如触发关闭）或需要干净状态的用例 |
 | 子进程文件 | 根目录为系统临时目录下的 `lingting-agent-tests/<运行 ID>/`：共享服务端用 `shard-shared/`，隔离用例用 `<用例名>/`；`server.log` 是子进程输出，`data/`、`config.toml`、`logs*/` 来自 `AGENT_HOME` |
 | 服务端二进制 | 默认取测试入口同目录的 `bin-agent`，可用 `AGENT_TEST_SERVER_BIN` 覆盖；缺失时提示先执行 `make build` |
+| 前端用例 | `web.ui` 转发 `pnpm exec vp test run --maxWorkers 4`（jsdom 单元用例），`web.e2e` 转发 `pnpm exec playwright test`（真实 Chromium）；两者都在 `lingting-agent-ui/` 内执行，命令写在 Rust 侧 `frontend` 模块，不依赖 package.json scripts |
+| 浏览器依赖 | 端到端用例需要 Playwright 的 chromium：先执行 `make ui-e2e-install`；用例不会自动下载，缺失时报错原样透出 |
 | 测试报告 | 全部用例结束后写入 `target/tests/<运行 ID>/README.md`（汇总与用例索引）；用例按领域汇总到同目录 `<领域>.md`，README 索引给出该用例在领域文档中的行号范围，领域文档顶部也提供行号索引；每条含结果、耗时、服务地址、日志目录与用例返回的结果信息 |
 
 约定：
 
 - 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总；领域内用例变多时拆成 `cases/<领域>/` 子模块，由 `cases/<领域>.rs` 统一注册与放公共辅助。
 - 测试只写在 `bin-tests`：其他 crate 不写 `#[cfg(test)]` 单元测试，为测试提供的入口必须由 feature 隔离（如 `lib-bin-tui` 的 `testing`）且只在 `bin-tests` 启用。
-- 用例只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。
+- 用例优先只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。**例外**：`web.*` 里断言静态资源、SPA 回落与 CORS 预检这类不经过 SDK 的路径，用 workspace 内的 `framework-http` 直发原始请求；接口 path 仍复用生成的 `PROBE_HEALTH` / `PROBE_SHUTDOWN` / `RUN_STREAM` 常量，只有「本就不存在」的路径保留字面量（那正是断言目标）。
+- 前端用例分两层：`lingting-agent-ui/tests/*.test.ts(x)` 是 jsdom 单元用例（Transport、SSE 切帧、`useChat`、首屏渲染），`lingting-agent-ui/tests/e2e/*.spec.ts` 是 Playwright 端到端用例（真实浏览器 + 真实服务端）。前端命令由 `bin-tests` 的 `frontend` 模块执行，不在 `package.json` 里另设 `test` 脚本。
 - 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
 - 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。
 
@@ -66,7 +72,7 @@
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
 | 环境变量 | `AGENT_SERVER_ADDR`（接受 `host` / `host:port` / `http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL` |
 | 应用根目录覆盖 | 环境变量 `AGENT_HOME` 指向的目录；设置后 `data`、`config.toml`、`logs` / `logs-cli` / `logs-tui` 全部落在该目录，默认位置不再使用（测试用它隔离每个服务端实例） |
-| 默认值 | 监听 `127.0.0.1:20100`，日志级别 `info` |
+| 默认值 | 监听 `127.0.0.1:20100`（release 构建）/ `127.0.0.1:20102`（debug 构建，见“固定端口”），日志级别 `info` |
 | 目录字段 | `lib-core` 的 `AppDirectories`：`data`、`config_file`、`logs_server`、`logs_cli`、`logs_tui` |
 
 约定：
@@ -198,6 +204,11 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 | 后端代理 | 开发服务器把 `^/api/` 代理到 `http://127.0.0.1:20102`，不做路径重写（后端路由自带 `api/` 前缀） |
 | SDK 引入 | 依赖项 `"@lingting/agent-api": "workspace:*"`，指向生成的 `packages/sdk-ts` |
 | 代码检查 | `make ui-lint`（内部执行 `pnpm run lint`：`vp fmt` + `vp lint --fix` + `tsc --noEmit`） |
+| 单元用例 | `lingting-agent-ui/tests/*.test.ts(x)`，jsdom 环境，由 `bin-tests` 的 `web.ui` 执行 `pnpm exec vp test run --maxWorkers 4`（用例从 `vite-plus/test` 导入，不额外装 vitest） |
+| 端到端用例 | `lingting-agent-ui/tests/e2e/*.spec.ts`，Playwright + 真实服务端，由 `web.e2e` 执行 `pnpm exec playwright test`；`playwright.config.ts` 不启 `webServer`，服务端地址由 `WEBUI_BASE_URL` 传入（未设置时回落 `http://127.0.0.1:20102`） |
+| 端到端浏览器 | `make ui-e2e-install`（`pnpm exec playwright install chromium`）；`@playwright/test` 版本与 `lingting-agent-flow-ui` 对齐 |
+| 失败产物 | `tests/.artifacts/`（截图与追踪，已被 `.gitignore` 忽略） |
+| SDK 调用约束 | 所有请求经生成的 `ApiClient` 子类（`src/api/client.ts`）；SSE 用 fetch 流式响应自行切帧（`src/api/runStream.ts`），path 取自 `ApiDefinitions`，页面代码不出现 `api/…` 字面量（由 `web.sdk-only` 用例守护） |
 | 缩进 | 2 空格（根 `.editorconfig` 的 `[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]` 段；`[*]` 默认 4 空格只用于 Rust 等） |
 
 ## 待补充

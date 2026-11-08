@@ -48,6 +48,7 @@
 | D-027 | CORS、静态资源与 WebUI 兜底路由 | DECIDED |
 | D-028 | 优雅关闭与生命周期 | DECIDED |
 | D-029 | CLI 命令结构与客户端 Transport | DECIDED |
+| D-030 | 前端测试分层与执行入口 | DECIDED (P1-016) |
 
 ---
 
@@ -734,6 +735,26 @@
 - **实测回填（2026-11-08，debug 构建，`agent server --port 20150`）**：`agent --help` / `--version` 退出码 0（`--help` 的 Usage 显示 `agent`，靠 clap 的 `bin_name`）；`agent`（无子命令）返回「TUI 尚未接入（P1-015）」退出码 1；`agent status` 输出地址 / 正常 / 版本 / 运行时长 / 运行中 Run 数；`agent run "…"` 三种输出形态都拿到 Mock 完整回复，`--json` 输出 `{content, runId, sessionId, status:"COMPLETED"}`；后台跑 `run --stream` 时 `status` 显示 `运行中 Run：1`；`--json` 与 `--stream` 互斥（clap 退出码 2）；服务停止后 `status` 报「服务未启动」、`run` 报「无法连接服务 …（服务是否已启动？）」，退出码均为 1；对非 API 服务（`python -m http.server`）`status` 报「服务异常：服务返回错误 404：…」且被压成一行；不可达地址在 30 秒内以「请求 … 超时」结束；`AGENT_SERVER_ADDR` 生效且被 `--server` 覆盖；`server --port 0` 退出码 2。`cargo tree -d` 中 reqwest 只有一份。**依赖同步复测（2026-11-08，框架侧 reqwest 升到 0.13）**：`cargo build`、`clippy -D warnings`、`fmt --check` 全通过，`cargo tree -i reqwest` 只有 `reqwest v0.13.5`（无重复版本），上面全部用例复跑结果一致（含 404 单行错误、`运行中 Run：1`、关闭窗口 503、「超时」分类）。
 - **状态**：`DECIDED`
 
+## D-030 前端测试分层与执行入口
+
+- **问题**：P1-016 的界面验收怎么自动化，命令入口放在哪里，如何避免同一台机器装多份工具链。
+- **可选方案**：
+  1. 只在 `bin-tests` 里用 Rust 客户端断言服务端契约（不碰界面）。
+  2. 加前端测试运行器（jsdom）+ 真实浏览器端到端，三层都挂在 `bin-tests` 下。
+  3. 前端自带 `pnpm test` / `pnpm test:e2e` 脚本，`make test` 串起来。
+- **决策**：采用方案 2，命令入口收在 Rust 侧。
+  1. **三层分工**：`web.*`（`framework-http` 直连，覆盖静态托管、SPA 回落、CORS、SSE 失败形态、关服 503、以及「前端不手写 path」的静态检索）→ `web.ui`（jsdom 单元用例：Transport、SSE 切帧、`useChat` 状态机、首屏渲染）→ `web.e2e`（Playwright + 真实 Chromium + 真实 Rust 服务端）。
+  2. **命令不进 `package.json`**：`frontend` 模块直接执行 `pnpm exec vp test run --maxWorkers 4` 与 `pnpm exec playwright test`，前端工程只保留 `dev` / `build` / `lint` 三个脚本。
+  3. **不重复装 vitest**：`vite-plus` 自带 vitest 4.1.10 并导出 `vite-plus/test`，用例从这里导入；新增 devDependencies 只有 `jsdom`、`@testing-library/react`、`@playwright/test`。
+  4. **Playwright 版本与相邻工程对齐**：`@playwright/test@^1.64.1`（同 `lingting-agent-flow-ui`），浏览器二进制只装 chromium，走 `PLAYWRIGHT_BROWSERS_PATH` 缓存，仓库不下载；入口是 `make ui-e2e-install`。
+  5. **Playwright 不启 `webServer`**：服务端是 Rust 进程，由 `web.e2e` 的隔离实例拉起并托管 `dist`，地址经 `WEBUI_BASE_URL` 传入；这样 E2E 验的是「Rust 托管静态产物」这条发布路径，而不是 dev server + 代理。
+  6. **并行与顺序**：`chat.spec.ts` 互相独立可并行（`workers: 2`），会停服务端的 `shutdown.spec.ts` 用 Playwright 项目依赖排在后面。实测并行收益接近零（最慢的用例在等服务端逐段推流），保留是为用例变多后受益。
+- **代价与遗留**：
+  1. `web.e2e` 依赖 debug 构建的关闭探针，release 构建下该用例与 `web.shutdown` 都不注册（显式跳过，不静默通过）。
+  2. 前端构建在准备阶段只做一次，用例执行期间不再更新产物；产物比源码新时直接复用（mtime 比较），因此改前端后首次运行会重建。
+  3. `make test` 每次都跑 `gen`，生成物重写会让 cargo 重建 `bin-agent`，Windows 对新 exe 的首次加载约 1.1 秒（第二次 86ms），这是隔离用例耗时波动的主因。
+- **状态**：`DECIDED`（P1-016）
+
 ---
 ## 假设清单（未验证）
 
@@ -744,8 +765,10 @@
 | A-3 | ~~`framework-web-axum` 的 `AxumBuilder` 与静态资源 fallback 可以共存~~ **已验证（P1-012）**：上游 `69cfaf6` 的路由拦截器（`WebInterceptor` + `push_interceptor`）可在路由未命中时提前返回响应，与 `fallback(any(dispatch))` 共存，无需修改框架或用 SPA fallback 替换 dispatch | 静态资源与 WebUI 兜底由拦截器实现，`api/` 前缀保持 API 404（D-027） | 已验证 |
 | A-4 | SSE 经 `WebBody::Stream` 在 Windows + 浏览器 / reqwest 下不被缓冲（无 `Transfer-Encoding` 或反代缓冲问题） | 影响流式体验 | **直连已验证（P1-011）**：`curl -N` 下事件按约 120ms 逐个到达、`chunked` 无缓冲，响应头为 `cache-control: no-cache` / `x-accel-buffering: no`；浏览器与反代场景留待 P1-016 |
 | A-5 | ~~`inventory` 注册在 Windows 的动态链接场景下工作正常~~ **已验证（P1-004）**：静态链接下可用，但消费方必须显式引用 crate 符号作为链接锚点，否则注册项被链接器丢弃 | 生成器与服务启动都必须先引用 `lib_web::web_routes()`，否则接口与元数据为空 | 已验证 |
-| A-6 | WebUI 的 SSE 消费可用 `EventSource`（原生），无需为 POST + SSE 引入 fetch stream | 影响 WebUI 传输实现（`EventSource` 只支持 GET） | P1-016 |
+| A-6 | ~~WebUI 的 SSE 消费可用 `EventSource`（原生），无需为 POST + SSE 引入 fetch stream~~ **已验证并否决（P1-016）**：事件流是 GET，`EventSource` 技术上能用，但拿不到订阅失败的 4xx 错误体（只有 `onerror`）、断线会自动重连（重订阅同一 Run 被 400 拒绝）、也无法主动中断；WebUI 因此改用 fetch 流式响应自行切帧（`src/api/runStream.ts`，见 D-007 与 D-030） | 影响 WebUI 传输实现（`EventSource` 只支持 GET） | 已验证 |
 
 > A-6 需要特别注意：`EventSource` 只能发 GET 且不能带自定义 header/body，而 `RunEvent` 流通常由 POST 触发。若确认必须 POST，则 WebUI 需用 `fetch` + `ReadableStream` 手动解析 SSE，这会直接影响 D-007 的落地方式。
 
-> A-6 后续（P1-011）：事件流端点已定为 `GET api/run/stream?runId=`（D-026），原生 `EventSource` 可用；P1-016 只需验证浏览器侧的实际行为（含中断与错误事件）。
+> A-6 后续（P1-011）：事件流端点已定为 `GET api/run/stream?runId=`（D-026），原生 `EventSource` 在协议层面可用；P1-016 只需验证浏览器侧的实际行为（含中断与错误事件）。
+>
+> A-6 结论（P1-016）：协议可用，但工程上不采用 —— `EventSource` 拿不到订阅失败的 4xx 错误体、断线会自动重连（重订阅同一 Run 被 400 拒绝）、也无法主动中断。WebUI 改为 fetch 流式响应自行切帧，见 D-007 与 D-030。

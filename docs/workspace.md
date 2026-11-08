@@ -82,7 +82,7 @@ flowchart TB
 | Agent 领域层（agent） | `agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`、`agent-tool`、`agent-mcp`、`agent-skill` | Agent Runtime 与 Context、Tool、MCP、Skill 能力 |
 | 程序入口层（bin） | `bin-agent`、`bin-tui`（计划）、`bin-web`（计划）、`bin-mock-server`（计划） | 组装与启动 |
 
-另有开发期工具 `bin-tests`（源码位于 `crates/bin-tests`）：端到端测试入口，不属于上述四层，不参与分发，只依赖 `lib-bin-cli` 的客户端能力与 `lib-bin-tui` 的无终端驱动（`testing` feature），并通过子进程运行服务端。
+另有开发期工具 `bin-tests`（源码位于 `crates/bin-tests`）：端到端测试入口，不属于上述四层，不参与分发，只依赖 `lib-bin-cli` 的客户端能力与 `lib-bin-tui` 的无终端驱动（`testing` feature），通过子进程运行服务端，并用 `framework-http` 直连静态资源 / 预检这类不经过 SDK 的路径；前端单元与端到端用例也由它转发执行。
 
 ### 2.2 依赖方向表示法
 
@@ -392,12 +392,14 @@ agent status
 - 管理可复用测试资源：共享服务端只启动一次，供多个用例复用。
 - 需要隔离状态或带副作用的用例自行启动独立服务端。
 - 把运行汇总与每个用例返回的结果信息按领域汇总写入 `target/tests/<运行 ID>/`。
+- 按用例声明的前置（`Case.prep`）在启动服务端之前去重执行运行期准备：目前是构建 WebUI 产物（`lingting-agent-ui/dist`），产物比源码新时跳过。
+- 转发前端用例：`web.ui` 执行 `pnpm exec vp test run`（jsdom），`web.e2e` 执行 `pnpm exec playwright test`（真实 Chromium，服务端地址经 `WEBUI_BASE_URL` 传入）。
 - 以无终端驱动覆盖 TUI 界面：按键迁移、输入编辑、渲染定位、流式展示与退出时的取消，不进入 raw 模式。
 
 边界：
 
 - **不得进程内启动服务端**：服务端一律以 `bin-agent server` 子进程运行，测试进程只作为客户端。
-- 不得直接依赖 `lib-web` / `lib-bin-web` / `service-core` 等服务端实现，只通过生成的客户端 SDK 访问服务端。
+- 不得直接依赖 `lib-web` / `lib-bin-web` / `service-core` 等服务端实现，只通过生成的客户端 SDK 访问服务端；`web.*` 断言静态资源、SPA 回落与 CORS 预检时改用 `framework-http` 直发原始请求（这些路径不经过 SDK），接口 path 仍复用生成物导出的常量。
 - 不参与分发，不是产品入口。
 
 替代方案记录：曾考虑用 `cargo test` + `cargo-nextest`。每个测试文件是独立进程，无法让多个用例复用同一个服务端，与“统一入口只启动一个共享服务端”的目标冲突，因此不采用。
@@ -635,7 +637,7 @@ manager-agent -> service-agent
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
 | `bin-mock-server`（计划） | `lib-web-core`、`lib-core` | Axum / `framework-web-axum` | `agent-runtime`、`service-core`、`lib-web` |
-| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`lib-core` | Clap、Tokio（子进程、并发与超时）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`、`service-core`（不得进程内启动服务端）；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
+| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`lib-core` | Clap、Tokio（子进程、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`serde_json`（解析错误体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`、`service-core`（不得进程内启动服务端）；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
 
 ### 5.2 依赖图
 

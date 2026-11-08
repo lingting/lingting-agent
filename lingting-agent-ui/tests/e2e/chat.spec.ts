@@ -1,7 +1,8 @@
 /**
  * 对话页端到端用例：真实浏览器 + 真实服务端（由 bin-tests 的 web.e2e 拉起）。
  *
- * 关服用例会把服务端停掉，所以整个文件串行，且它必须是最后一条。
+ * 这个文件里的用例互不依赖（各自建会话），可以并行；会把服务端停掉的用例在
+ * `shutdown.spec.ts`，由 Playwright 项目的依赖关系保证它在这些用例之后执行。
  */
 
 import { expect, test } from "@playwright/test";
@@ -14,8 +15,6 @@ const STOP_BUTTON = ".ant-sender-actions-btn-loading-button";
 
 /** 助手气泡。 */
 const ASSISTANT_BUBBLE = ".ant-bubble-start";
-
-test.describe.configure({ mode: "serial" });
 
 test("发送消息后逐段看到流式回复", async ({ page }) => {
   await page.goto("/");
@@ -57,23 +56,4 @@ test("停止生成后保留已收内容并打标", async ({ page }) => {
 
   // 停止后仍可继续输入。
   await expect(input).toHaveValue("");
-});
-
-test("服务端关闭后界面给出可读错误", async ({ page }) => {
-  await page.goto("/");
-
-  // 关闭探针只在 debug 构建注册；bin-tests 起的服务端就是 debug 构建。
-  const shutdown = await page.request.post("/api/probe/shutdown");
-  expect(shutdown.status()).toBe(204);
-
-  const input = page.getByPlaceholder(PLACEHOLDER);
-  await input.fill("关服测试");
-  await input.press("Enter");
-
-  // 拒绝窗口内是 503 文案，窗口过后是连不上；两种都必须可读，不能白屏。
-  const alert = page.locator(".ant-alert");
-  await expect(alert).toBeVisible();
-  await expect(alert).toContainText(/无法连接到服务端|服务正在关闭/);
-  // 页面仍然活着：输入框还在，没有被清空成白屏。
-  await expect(input).toBeVisible();
 });

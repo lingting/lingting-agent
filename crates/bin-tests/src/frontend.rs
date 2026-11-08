@@ -5,7 +5,9 @@
 
 use crate::paths;
 use anyhow::{Context, Result, bail};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tokio::process::Command;
 
 /// 前端工程目录名（仓库根目录下）。
@@ -21,26 +23,80 @@ pub(crate) fn dir() -> Result<PathBuf> {
 }
 
 /// 构建 WebUI 产物：静态托管类用例读的是 `lingting-agent-ui/dist`。
+///
+/// 产物比所有构建输入都新时直接复用，避免每次跑测试都重新构建（一次约 1.3 秒）。
 pub(crate) async fn build() -> Result<()> {
     let dir = installed_dir()?;
+    let dist = dir.join("dist");
+    if is_fresh(&dir, &dist)? {
+        println!("跳过：WebUI 产物已是最新（{}）", dist.display());
+        return Ok(());
+    }
+    println!("构建 WebUI 产物：{}", dist.display());
     run_pnpm(&dir, &["build"], &[]).await.context("构建 WebUI 产物失败")
 }
 
-/// 跑前端单元用例（`pnpm test` → `vp test run`）。
+/// 跑前端单元用例（`vp test run`）。
 pub(crate) async fn test() -> Result<()> {
     let dir = installed_dir()?;
-    run_pnpm(&dir, &["test"], &[]).await.context("前端单元用例失败")
+    // 用例文件数不多，限 4 个 worker：既不浪费高核机器，也不让 jsdom 争 CPU。
+    run_pnpm(&dir, &["exec", "vp", "test", "run", "--maxWorkers", "4"], &[])
+        .await
+        .context("前端单元用例失败")
 }
 
-/// 跑端到端用例（`pnpm test:e2e` → `playwright test`）。
+/// 跑端到端用例（`playwright test`）。
 ///
 /// 服务端由调用方启动，地址通过 `WEBUI_BASE_URL` 传给 Playwright 配置；浏览器二进制需事先
 /// 安装（`make ui-e2e-install`），本函数不自动下载。
 pub(crate) async fn e2e(base_url: &str) -> Result<()> {
     let dir = installed_dir()?;
-    run_pnpm(&dir, &["test:e2e"], &[("WEBUI_BASE_URL", base_url)])
+    run_pnpm(&dir, &["exec", "playwright", "test"], &[("WEBUI_BASE_URL", base_url)])
         .await
         .context("前端端到端用例失败")
+}
+
+/// 产物是否比所有构建输入都新：`dist/index.html` 不早于源码树里最新的修改。
+fn is_fresh(ui_dir: &Path, dist: &Path) -> Result<bool> {
+    let Ok(index) = fs::metadata(dist.join("index.html")).and_then(|meta| meta.modified()) else {
+        return Ok(false);
+    };
+    Ok(newest_modified(ui_dir)?.is_some_and(|newest| index >= newest))
+}
+
+/// 递归取最新的修改时间，跳过不参与构建的目录与文件。
+fn newest_modified(dir: &Path) -> Result<Option<SystemTime>> {
+    let mut newest = None;
+    let entries = fs::read_dir(dir).with_context(|| format!("读取目录失败：{}", dir.display()))?;
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("读取目录项失败：{}", dir.display()))?
+            .path();
+        let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        if path.is_dir() {
+            if matches!(name, "node_modules" | "dist" | "tests") {
+                continue;
+            }
+            newest = keep_newest(newest, newest_modified(&path)?);
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) == Some("tsbuildinfo") {
+            continue;
+        }
+        if let Ok(modified) = path.metadata().and_then(|meta| meta.modified()) {
+            newest = keep_newest(newest, Some(modified));
+        }
+    }
+    Ok(newest)
+}
+
+/// 取两个「最新修改时间」里更新的那个。
+fn keep_newest(current: Option<SystemTime>, candidate: Option<SystemTime>) -> Option<SystemTime> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) if current >= candidate => Some(current),
+        (_, Some(candidate)) => Some(candidate),
+        (current, None) => current,
+    }
 }
 
 /// 取前端工程目录并确认依赖已安装。

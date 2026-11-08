@@ -6,9 +6,7 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
-    "lint": "vp fmt && vp lint --fix && tsc --noEmit",
-    "test": "vp test run",
-    "test:e2e": "playwright test"
+    "lint": "vp fmt && vp lint --fix && tsc --noEmit"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^2.1.2",
