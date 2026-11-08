@@ -1,5 +1,5 @@
 make gen         生成 Rust / TS 两份客户端 SDK（产物落 packages/，不入库）
-make build       编译 workspace 全部成员（ARGS 透传给 cargo build）
+make build       编译 workspace 全部成员（ARGS 透传给 cargo build；--release 会先构建前端并把 WebUI 嵌入 binary）
 make check       格式检查 + Clippy 静态检查（不执行测试）
 make test        并发执行端到端测试（ARGS 必填：用例前缀或 --all）
 make fmt         用 rustfmt 格式化 workspace

@@ -324,7 +324,7 @@
     - **端到端验收（已落地，2026-11-10）**：`lingting-agent-ui/tests/e2e/` 下 `chat.spec.ts`（流式、停止）与 `shutdown.spec.ts`（关服）共 3 条 Playwright 用例（真实 Chromium + 真实 Rust 服务端）覆盖 P1-016 的三条验收标准：发送后逐段看到流式回复（先取回复开头长度、再取完整正文长度，证明是增量而非一次性到位）、停止生成后保留已收内容并追加「（已停止生成）」且回到可发送状态、关服后出现可读错误提示条且输入框仍在（不白屏）。由 `bin-tests` 的 `web.e2e` 隔离用例驱动（`pnpm exec playwright test`，`workers: 2`；关服项目依赖对话项目，排在最后），`make test ARGS="--all"` 24/24 通过；`@playwright/test` 版本与 `lingting-agent-flow-ui` 对齐（`^1.64.1`），浏览器二进制由 `make ui-e2e-install` 安装。测试分层与命令入口见 D-030。
     - **验收状态**：三条验收标准全部通过，证据为 `web.assets` / `web.fallback` / `web.cors` / `web.stream` / `web.shutdown` / `web.sdk-only`（服务端契约）、`web.ui`（21 条前端用例）、`web.e2e`（3 条真实浏览器用例）；`make test ARGS="--all"` 24/24。
 
-- [ ] **P1-017 WebUI 静态资源嵌入 Binary**
+- [x] **P1-017 WebUI 静态资源嵌入 Binary**
 
   - **目标**：WebUI 产物编译进 Rust binary，使单文件部署时无需携带静态目录。
   - **具体工作**：
@@ -335,10 +335,12 @@
     5. 确定前端构建与 Rust 构建的先后顺序，固化到构建脚本。
   - **前置依赖**：P1-016
   - **交付物**：资源嵌入实现；构建顺序脚本；开发/发布两种模式。
+  - **实现结论（2026-11-08）**：方案定为构建期 codegen + gzip（D-009 改为方案 3）。`lib-bin-web/build.rs` 在 release 构建里跑 `pnpm build`，把文本资源 gzip（约 1MB → 333KB）、其余原样复制到 `OUT_DIR/webui`，并生成资源表 `OUT_DIR/generated.rs`；`webui/assets.rs` 按 `debug_assertions` 分两条读取路径：release 读内嵌字节（`Bytes::from_static` 零拷贝，带 gzip 的资源补 `content-encoding: gzip`），debug 读仓库内 `lingting-agent-ui/dist`。拦截器、SPA 兜底、`api/` 前缀隔离、`content-type` / `cache-control` 规则沿用 P1-012，只把资源来源换掉，所以 `content-length` 在两种模式下都是真实响应体长度（release 为压缩后长度）。`build.rs` 只在 release 里声明前端源码的 `rerun-if-changed`，改前端不会让 debug 构建重编 Rust；release 下改前端只会重编 `lib-bin-web` 及其下游。构建顺序由 `build.rs` 自己保证，前端依赖缺失时直接构建失败并提示 `make ui-install`。
   - **验收标准**：
-    - [ ] Release binary 在**不含任何静态目录**的环境运行后，浏览器可正常打开 WebUI。
-    - [ ] 资源响应头正确（`content-type` 与文件类型一致）。
-    - [ ] 开发模式下修改前端代码无需重新编译 Rust。
+    - [x] Release binary 在**不含任何静态目录**的环境运行后，浏览器可正常打开 WebUI。
+    - [x] 资源响应头正确（`content-type` 与文件类型一致）。
+    - [x] 开发模式下修改前端代码无需重新编译 Rust。
+    - **运行期验证（已执行，2026-11-08）**：`cargo build --release -p bin-agent` 产出的 `bin-agent.exe`（10.5MB）单独复制到空目录（无 `lingting-agent-ui`，无 `dist`）后 `server --port 20100` 启动。`GET /` 返回 200 `text/html` 带 `content-encoding: gzip`、`content-length: 287`（压缩后）、`cache-control: no-cache`，解压后与 `dist/index.html` 逐字节一致；`GET /assets/index-*.js` 与 `.css` 返回 200、`content-type` 分别为 `text/javascript` / `text/css`、带 `public, max-age=31536000, immutable`，解压后与 `dist` 内对应文件逐字节一致（js 压缩后 330457 字节）；`GET /assets/missing.js` 返回 404 `text/plain`，`GET /chat/abc` 与 `GET /index.html` 返回 200 且回落到入口页面，`GET api/probe/not-exist` 返回 404 `{"code":404,"message":"请求接口不存在"}`，`/../Cargo.toml` 返回 404（未泄露文件）。debug binary（`cargo build -p bin-agent`）从 `/tmp` 启动同样 200，`GET /` 无 `content-encoding`、`content-length: 422`（原始 `dist/index.html` 大小），说明走磁盘而非内嵌；运行中的 debug 进程在 `dist` 下新增 `probe.txt` 后立即能取到 200，删除后立即 404，证明资源是请求期读盘（热更新即时生效）；`touch lingting-agent-ui/src/main.tsx` 后 `cargo build -p bin-agent` 只输出 `Finished`，没有任何 `Compiling`，即改前端不触发 Rust 重编。
 
 ---
 

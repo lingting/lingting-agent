@@ -34,7 +34,7 @@ async fn run(host: &str, port: u16) -> Result<()> {
     info!(count = routes.len(), "已收集的接口数量");
 
     // WebUI 静态资源与 SPA 兜底：只接管路由未命中的 GET，api/ 前缀仍归框架的 404。
-    let webui = webui::WebUiAssets::new(webui::DIRECTORY);
+    let webui = webui::WebUiAssets;
     webui.log_ready();
 
     // 端口冲突等绑定失败在此返回，由调用方转换为可读错误与退出码（不做随机端口回退）。

@@ -1,17 +1,16 @@
-//! WebUI 静态资源托管：按本地目录提供前端构建产物，未命中的前端路由回落到 `index.html`。
+//! WebUI 静态资源托管：提供前端构建产物，未命中的前端路由回落到 `index.html`。
 //!
 //! 路径隔离规则：所有 `api/` 前缀的请求不进入静态查找，未命中时仍由框架返回 API 404；
 //! 其余 GET 请求按“带扩展名视为资源、否则视为前端路由”处理。
+//! 资源来源见 `assets`：release 用内嵌字节，debug 读本地 `dist`（D-009）。
+
+mod assets;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use framework_web::{WebContext, WebInterceptResult, WebInterceptor, WebMethod, WebResponse, WebRoute};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, warn};
-
-/// WebUI 构建产物目录，相对进程工作目录；P1-017 改为编译期嵌入（D-009）。
-pub const DIRECTORY: &str = "lingting-agent-ui/dist";
 
 /// SPA 入口文件。
 const INDEX: &str = "index.html";
@@ -20,26 +19,12 @@ const INDEX: &str = "index.html";
 const API_PREFIX: &str = "api";
 
 /// 静态资源拦截器：仅在路由未命中的 GET 请求上生效。
-pub struct WebUiAssets {
-    root: PathBuf,
-}
+pub struct WebUiAssets;
 
 impl WebUiAssets {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    /// 启动时记录资源目录状态，避免资源缺失只能在请求期发现。
+    /// 启动时记录资源状态，避免资源缺失只能在请求期发现。
     pub fn log_ready(&self) {
-        let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
-        if root.join(INDEX).is_file() {
-            info!(directory = %root.display(), "WebUI 静态资源目录就绪");
-        } else {
-            warn!(
-                directory = %root.display(),
-                "WebUI 静态资源缺失：前端未构建时访问前端路由会返回 503"
-            );
-        }
+        assets::log_ready();
     }
 
     /// 生成静态响应：入口文件、静态文件与 SPA 兜底都在这里决定。
@@ -57,18 +42,23 @@ impl WebUiAssets {
 
     /// 入口文件缺失时返回可读的 503，而不是伪装成 API 404。
     fn index(&self) -> WebResponse {
-        self.file(INDEX).unwrap_or_else(|| {
-            text(
-                503,
-                &format!("WebUI 静态资源未就绪：{} 下缺少 {INDEX}", self.root.display()),
-            )
-        })
+        self.file(INDEX)
+            .unwrap_or_else(|| text(503, "WebUI 静态资源未就绪：缺少 index.html"))
     }
 
     fn file(&self, relative: &str) -> Option<WebResponse> {
-        let path = self.root.join(safe_relative(relative)?);
-        let body = std::fs::read(&path).ok()?;
-        Some(file_response(&path, body))
+        let asset = assets::read(relative)?;
+        let mut response = WebResponse::empty();
+        response.status = 200;
+        response.headers.set_content_type(content_type(relative));
+        response.headers.set_content_length(asset.body.len());
+        response.headers.set("cache-control", cache_control(relative));
+        if asset.gzip {
+            response.headers.set("content-encoding", "gzip");
+        }
+        response.body = asset.body.into();
+
+        Some(response)
     }
 }
 
@@ -96,31 +86,6 @@ fn is_api_path(path: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// 把 URL 相对路径转换为磁盘相对路径，拒绝目录穿越与盘符前缀。
-fn safe_relative(path: &str) -> Option<PathBuf> {
-    let mut relative = PathBuf::new();
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\') || segment.contains(':') {
-            return None;
-        }
-        relative.push(segment);
-    }
-    if relative.as_os_str().is_empty() {
-        return None;
-    }
-    Some(relative)
-}
-
-fn file_response(path: &Path, body: Vec<u8>) -> WebResponse {
-    let mut response = WebResponse::empty();
-    response.status = 200;
-    response.headers.set_content_type(content_type(path));
-    response.headers.set_content_length(body.len());
-    response.headers.set("cache-control", cache_control(path));
-    response.body = body.into();
-    response
-}
-
 fn text(status: u16, message: &str) -> WebResponse {
     let body = message.as_bytes().to_vec();
     let mut response = WebResponse::empty();
@@ -129,12 +94,13 @@ fn text(status: u16, message: &str) -> WebResponse {
     response.headers.set_content_length(body.len());
     response.headers.set("cache-control", "no-store");
     response.body = body.into();
+
     response
 }
 
 /// 按扩展名推断 `Content-Type`，未识别的类型按二进制流返回。
-fn content_type(path: &Path) -> &'static str {
-    let extension = path
+fn content_type(relative: &str) -> &'static str {
+    let extension = Path::new(relative)
         .extension()
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase);
@@ -145,6 +111,8 @@ fn content_type(path: &Path) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("json") | Some("map") => "application/json; charset=utf-8",
         Some("txt") => "text/plain; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
@@ -162,8 +130,10 @@ fn content_type(path: &Path) -> &'static str {
 }
 
 /// 入口文件每次校验，其余产物带内容哈希可长期缓存。
-fn cache_control(path: &Path) -> &'static str {
-    if path.file_name().is_some_and(|name| name == INDEX) {
+fn cache_control(relative: &str) -> &'static str {
+    let is_index = Path::new(relative).file_name().is_some_and(|name| name == INDEX);
+
+    if is_index {
         "no-cache"
     } else {
         "public, max-age=31536000, immutable"

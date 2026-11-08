@@ -27,7 +27,7 @@
 | D-006 | 生成物是否纳入版本控制 | DECIDED |
 | D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011；浏览器侧消费 P1-016 定案) |
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
-| D-009 | WebUI 静态资源嵌入方案 | OPEN |
+| D-009 | WebUI 静态资源嵌入方案 | DECIDED (P1-017 落地：构建期 codegen + gzip) |
 | D-010 | WebUI 技术栈 | DECIDED (P1-016 脚手架与 SDK 接入已落地) |
 | D-011 | TUI 与 Server 的连接管理 | OPEN |
 | D-012 | Server 地址配置与发现 | DECIDED |
@@ -222,10 +222,17 @@
   1. `rust-embed`：`#[derive(RustEmbed)]` + 目录，debug 模式可读磁盘（天然支持开发热更新）。
   2. `include_dir`：纯 `include_bytes!` 展开，编译期全量嵌入，无 debug/磁盘回退。
   3. 构建期生成 Rust 源码（自研 codegen，把文件写成 `&[u8]` 常量）。
-- **推荐方案**：方案 1。
-- **决策理由**：debug 与 release 行为差异正好满足“开发指向本地目录、发布嵌入”的双模式需求；方案 2 在开发时需要重新编译 Rust，体验差；方案 3 是重复制造 `rust-embed`。
+- **推荐方案**：方案 1（原推荐）→ **P1-017 定稿改为方案 3**。
+- **决策理由**：debug 与 release 行为差异正好满足“开发指向本地目录、发布嵌入”的双模式需求；方案 2 在开发时需要重新编译 Rust，体验差。
 - **待确认**：`rust-embed` 与 `framework-web` 的 `WebResponse` 集成是否需要额外的 MIME 推断逻辑（`WebResponse` 无内建 MIME 表）。**P1-012 回填**：MIME 推断已在静态资源拦截器中实现（按扩展名映射，未识别按 `application/octet-stream`），P1-017 直接复用，不再需要额外推断逻辑。
-- **状态**：`OPEN`
+- **P1-017 落地结论（改选方案 3）**：
+  1. **为什么不用 `rust-embed`**：它只做原样内嵌，前端产物约 1MB 会全量进 binary；要压缩得启用它的 `compression` feature，而这会引入本地缓存里没有的 `include-flate`。构建期 codegen 只用到已在依赖图里的 `flate2`，能把文本产物 gzip 到约 1/3。
+  2. **为什么 codegen 不多一套读取路径**：开发/发布的差异本来就必须存在（debug 读磁盘才能热更新），方案 3 只是把“发布侧”从宏换成生成代码，两侧的差异点仍然只在 `webui/assets.rs` 的 `read()` 一处。
+  3. **实现**：`crates/lib-bin-web/build.rs` 在 `PROFILE == release` 时执行 `pnpm build`，把文本资源 gzip、其余原样复制到 `OUT_DIR/webui`，再生成资源表 `OUT_DIR/generated.rs`（`lookup(relative) -> Option<(&'static [u8], bool)>` + `COUNT`），由 `webui/assets.rs` 的 `include!` 引入；debug 构建只写一份空文件。
+  4. **两种模式**：debug 从 `lingting-agent-ui/dist` 读盘（编译期绝对路径，不依赖进程工作目录，前端改动无需重编 Rust，`build.rs` 也不监视前端源码）；release 只读内嵌字节，带 gzip 的资源在响应里加 `content-encoding: gzip`，`content-length` 用压缩后长度。
+  5. **构建顺序**：release 由 `build.rs` 自己驱动前端构建，`make build ARGS="--release"` 一条命令即可；缺失依赖时构建失败并提示 `make ui-install`，不静默产出无 WebUI 的 binary。改前端只会让 `lib-bin-web` 及其下游（`bin-agent`、`bin-tests`）重编。
+  6. **不做的事**：不按 `accept-encoding` 降级（不支持 gzip 的客户端不在支持范围）；不保留运行时 `--webui-dir` 覆盖，目录固定为仓库内 `lingting-agent-ui/dist`。
+- **状态**：`DECIDED`
 
 ---
 

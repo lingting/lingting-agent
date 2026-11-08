@@ -16,10 +16,14 @@ lib-web-core = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }
 framework-web = { workspace = true }
 framework-web-axum = { workspace = true }
+
+[build-dependencies]
+flate2 = { workspace = true }
 
 [lints]
 workspace = true
