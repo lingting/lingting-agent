@@ -2,17 +2,20 @@
 
 ## 开发命令（Makefile）
 
-根目录 `Makefile` 是唯一命令入口，不再提供 `scripts/` 脚本；需在 Git Bash 中执行（recipe 使用 POSIX sh）。
+根目录 `Makefile` 是唯一命令入口；需要多步流程或中文提示的逻辑放在 `scripts/` 下的脚本里由 Makefile 调用（如 `scripts/gen-check.sh`），不写进 recipe。需在 Git Bash 中执行（recipe 使用 POSIX sh）。
 
 | 命令 | 作用 |
 |------|------|
 | `make gen` | 由服务端 API 定义生成 Rust / TS 两份客户端 SDK（产物落 `packages/`，不入库） |
 | `make build` | 编译 workspace 全部成员；`ARGS` 透传，如 `make build ARGS="--release"` |
 | `make check` | `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings`，不执行测试 |
+| `make gen-check` | 生成物重建门禁：清空 `packages/` → `make gen` → 校验关键产物完整 → `cargo check --workspace --all-targets`；任一步失败非 0 退出，逻辑在 `scripts/gen-check.sh`（见“生成物门禁与 CI”一节） |
+| `make ci` | 本地与 CI 共用的完整门禁：`gen-check` + `check` + `ui-check` |
 | `make fmt` | `cargo fmt --all` |
 | `make test ARGS="..."` | 生成 SDK、构建 `bin-agent` 后运行测试入口；运行期准备（如构建 WebUI 产物）由入口按选中用例自行完成。`ARGS` 传用例名前缀或 `--all`（详见“测试”一节） |
 | `make clean-gen` | 删除生成物目录 `packages/` |
 | `make ui-install` / `make ui-dev` / `make ui-build` / `make ui-lint` | 在 `lingting-agent-ui/` 内执行对应 pnpm 命令 |
+| `make ui-check` | 前端静态类型检查（`pnpm exec tsc --noEmit`，只读不写，供门禁与 CI 使用） |
 | `make ui-e2e-install` | 安装 Playwright 的 chromium（端到端用例用；其他机器或 CI 首次运行前执行一次） |
 
 `make help` 的文本放在 `.make/help.txt`：make 在 Windows 上按 ANSI 代码页解析 Makefile，中文写在 Makefile 的 recipe 里会变成乱码。
@@ -151,8 +154,8 @@
 1. 改 `crates/lib-web/src/` 下的 handler 与 DTO。
 2. 同步 `docs/api/` 中对应领域文档（接口清单、参数表、样例）；新增领域时同时登记到 `docs/api/readme.md` 的索引表。
 3. `make gen` 重新生成两份 SDK；生成失败按提示修定义，不手改生成物。
-4. `make check`（格式 + Clippy）与 `make build`（生成代码参与编译）通过。
-5. 前端侧 `make ui-install` / `make ui-lint`；生成物不入库，提交里只有 API 定义与消费方代码。
+4. `make gen-check`（清空重建 + 产物校验 + 生成代码参与编译）与 `make check`（格式 + Clippy）通过。
+5. 前端侧 `make ui-install` / `make ui-check`（只读类型检查；`make ui-lint` 会 `--fix`，本地随手修时用）；生成物不入库，提交里只有 API 定义与消费方代码。
 
 ### 命名规范
 
@@ -204,12 +207,31 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 | 开发启动 | `make ui-dev`（内部在 `lingting-agent-ui/` 执行 `pnpm dev`，固定端口 20101，见本文件端口表） |
 | 后端代理 | 开发服务器把 `^/api/` 代理到 `http://127.0.0.1:20102`，不做路径重写（后端路由自带 `api/` 前缀） |
 | SDK 引入 | 依赖项 `"@lingting/agent-api": "workspace:*"`，指向生成的 `packages/sdk-ts` |
-| 代码检查 | `make ui-lint`（内部执行 `pnpm run lint`：`vp fmt` + `vp lint --fix` + `tsc --noEmit`） |
+| 代码检查 | `make ui-lint`（内部执行 `pnpm run lint`：`vp fmt` + `vp lint --fix` + `tsc --noEmit`，会改文件）；只读检查用 `make ui-check`（`tsc --noEmit`），门禁与 CI 用后者 |
 | 单元用例 | `lingting-agent-ui/tests/*.test.ts(x)`，jsdom 环境，由 `bin-tests` 的 `web.ui` 执行 `pnpm exec vp test run --maxWorkers 4`（用例从 `vite-plus/test` 导入，不额外装 vitest） |
 | 端到端用例 | `lingting-agent-ui/tests/e2e/*.spec.ts`，Playwright + 真实服务端，由 `web.e2e` 执行 `pnpm exec playwright test`；`playwright.config.ts` 不启 `webServer`，服务端地址由 `WEBUI_BASE_URL` 传入（未设置时回落 `http://127.0.0.1:20102`） |
 | 端到端浏览器 | `make ui-e2e-install`（`pnpm exec playwright install chromium`）；`@playwright/test` 版本与 `lingting-agent-flow-ui` 对齐 |
 | 失败产物 | `tests/.artifacts/`（截图与追踪，已被 `.gitignore` 忽略） |
 | SDK 调用约束 | 所有请求经生成的 `ApiClient` 子类（`src/api/client.ts`）；SSE 用 fetch 流式响应自行切帧（`src/api/runStream.ts`），path 取自 `ApiDefinitions`，页面代码不出现 `api/…` 字面量（由 `web.sdk-only` 用例守护） |
 | 缩进 | 2 空格（根 `.editorconfig` 的 `[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]` 段；`[*]` 默认 4 空格只用于 Rust 等） |
+
+## 生成物门禁与 CI
+
+生成物不入库（D-006），因此门禁不做 git diff 比对，判据只有三条：`make gen` 以 0 退出、关键产物存在且非空、生成物参与编译的 `cargo check` 通过；前端静态类型检查另由 `make ui-check` 负责。
+
+| 项 | 说明 |
+|---|---|
+| 门禁命令 | `make gen-check`（逻辑在 `scripts/gen-check.sh`）：清空 `packages/` → `make gen` → 校验 10 份关键产物（`sdk-rust/src/*.rs`、`sdk-ts/package.json` 与 `dist/*`）→ `cargo check --workspace --all-targets` |
+| 完整门禁 | `make ci` = `gen-check` + `check`（fmt + Clippy）+ `ui-check`（`tsc --noEmit`） |
+| 失败提示 | 统一为「缺少生成物或生成失败，请运行 `make gen` 重新生成」，并按失败步给出处理建议；生成物不入库，不存在“提交生成物”这一步 |
+| CI | `.github/workflows/ci.yml`（ubuntu-latest，`master` 与 PR）：只做检出、Rust 工具链（按 `rust-toolchain.toml` 固定版本）与前端依赖安装，随后执行 `make gen` → `make ui-install` → `make ci` |
+| 本地等价 | 本地照抄 CI 的三条命令即可复现同一结果；`make check` 保持“fmt + Clippy”的轻量语义，不承担重建 |
+| framework 依赖 | workspace 目前以 path 引入同级 `lingting-rust-framework` 仓库（D-015），发布前改为 version 引入；workflow 不为该路径做检出处理 |
+
+约定：
+
+- 门禁失败时按提示修 API 定义或生成器，不手改 `packages/` 下的生成物。
+- `gen-check` 每次清空并重建 `packages/`，下游 cargo 必然重编一次，耗时高于 `make check`；日常改动用 `make check`，改 API 定义或提交前用 `make ci`。
+- 门禁不证明生成物与某个历史基线一致，只证明“生成器可重建、产物完整、可编译”。
 
 ## 待补充
