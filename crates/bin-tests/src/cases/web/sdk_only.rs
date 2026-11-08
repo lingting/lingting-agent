@@ -2,13 +2,13 @@
 
 use crate::case::CaseFuture;
 use crate::context::TestContext;
-use crate::prepare;
+use crate::frontend;
 use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;
 
-/// 前端源码目录（相对仓库根目录）。
-const UI_SRC: &str = "lingting-agent-ui/src";
+/// 前端源码目录名（前端工程下）。
+const UI_SRC: &str = "src";
 
 /// 视为「手写接口 path」的片段：引号（或模板串）后直接跟 `api/`。
 ///
@@ -18,7 +18,7 @@ const ENDPOINT_MARKERS: [&str; 3] = ["\"api/", "'api/", "`api/"];
 /// 扫描前端源码的非注释行，断言没有手写接口 path。
 pub(super) fn sdk_only(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let root = prepare::repo_root()?.join(UI_SRC);
+        let root = frontend::dir()?.join(UI_SRC);
         ensure!(root.is_dir(), "未找到前端源码目录：{}", root.display());
 
         let mut scanned = 0usize;

@@ -10,6 +10,7 @@ mod sdk_only;
 #[cfg(debug_assertions)]
 mod shutdown;
 mod stream;
+mod ui;
 
 use crate::case::{Case, CaseKind, Prep};
 use crate::context::TestContext;
@@ -52,6 +53,12 @@ pub(crate) fn cases() -> Vec<Case> {
             kind: CaseKind::Shared,
             prep: &[],
             run: sdk_only::sdk_only,
+        },
+        Case {
+            name: "web.ui",
+            kind: CaseKind::Shared,
+            prep: &[],
+            run: ui::ui,
         },
     ];
     // 关闭探针只在 debug 构建注册（release 不包含），对应用例也只在 debug 存在。

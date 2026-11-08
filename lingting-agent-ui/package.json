@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
-    "lint": "vp fmt && vp lint --fix && tsc --noEmit"
+    "lint": "vp fmt && vp lint --fix && tsc --noEmit",
+    "test": "vp test run"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^2.1.2",
@@ -37,11 +38,13 @@
   "devDependencies": {
     "@ant-design/cli": "~6.6.0",
     "@tailwindcss/vite": "~4.1.18",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "~22.13.1",
     "@types/react": "~19.2.8",
     "@types/react-dom": "~19.2.3",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "~5.1.1",
+    "jsdom": "^31.0.0",
     "tailwindcss": "~4.1.18",
     "typescript": "~5.9.3",
     "vite": "catalog:",

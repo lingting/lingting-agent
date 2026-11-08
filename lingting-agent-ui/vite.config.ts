@@ -51,4 +51,10 @@ export default defineConfig({
       },
     },
   },
+  // 前端用例：由 `pnpm test`（`vp test run`）执行，也由 bin-tests 的 web.ui 用例转发调用。
+  test: {
+    environment: "jsdom",
+    include: ["tests/**/*.test.{ts,tsx}"],
+    setupFiles: ["tests/setup.ts"],
+  },
 });
