@@ -3,7 +3,7 @@
 `probe` 不是业务领域，它承担三件事：验证 `web_api` 宏的能力边界、提供错误响应与错误码的回归基线、提供客户端探活入口。通用约定（地址、响应包装、错误体、字段类型）见 [readme.md](readme.md)。
 
 - 定义位置：`crates/lib-web/src/probe/{api.rs,dto.rs}`
-- 默认鉴权：`typed` / `health` / `version` 显式声明 `AuthRule::anonymous()`，其余沿用 `auth` 默认值（P1 未启用鉴权，对本地客户端无影响）
+- 默认鉴权：`typed` / `health` / `version` / `shutdown` 显式声明 `AuthRule::anonymous()`，其余沿用 `auth` 默认值（P1 未启用鉴权，对本地客户端无影响）
 - 探针服务启动：`cargo run -p lib-web --example api_probe_server`（默认 `127.0.0.1:20103`，可用 `AGENT_PROBE_PORT` 改端口），启动日志打印收集到的路由数
 - 结论与实测记录：`docs/reports/p1-004-api-probe.md`、`.steps/p1/decisions.md` D-024
 
@@ -22,6 +22,9 @@
 | GET | `api/probe/panic` | 无 | `ProbeQueryVO` | panic 兜底后响应体不含堆栈 |
 | GET | `api/probe/health` | 无 | `ProbeHealthVO` | 客户端探活 |
 | GET | `api/probe/version` | 无 | `ProbeVersionVO` | 版本与协议版本核对 |
+| POST | `api/probe/shutdown` | 无 | 无（204） | 优雅关闭联调；**仅 debug 构建注册**（release 返回 404） |
+
+> `api/probe/shutdown` 只记录关闭请求（`lib_core::lifecycle::request_shutdown()`），真正的关闭动作由 `lib-bin-web` 注册的钩子完成：先进入 200ms 拒绝窗口（此期间新请求返回 `503 {"code":503,"message":"服务正在关闭，请稍后重试"}`），再停止监听并排空进行中的请求。它用于关闭流程联调，不是对外契约，P2 前可删除；`make gen` 在 debug 下生成，因此两份 SDK 会包含该 path。语义见 `.steps/p1/decisions.md` D-028。
 
 ## 参数与载荷
 

@@ -96,7 +96,7 @@
 | `delta` | `string \| null` | 增量文本；仅 `message_delta` 有值 |
 | `messageId` | `string \| null` | 助手消息 ID；`run_started` 与 `run_completed` 有值 |
 | `status` | `RunStatus \| null` | Run 最新状态；`run_started` 与 `run_completed` 有值 |
-| `error` | `string \| null` | 失败原因；仅 `run_failed` 有值，不含内部细节 |
+| `error` | `string \| null` | 失败或终止原因；仅 `run_failed` 与 `server_shutdown` 有值，不含内部细节 |
 | `inputTokens` | `string \| null` | 输入 token 用量；`run_started` 与 `run_completed` 有值（Mock 按字符数估算） |
 | `outputTokens` | `string \| null` | 输出 token 用量；`run_completed` 有值（Mock 按字符数估算） |
 
@@ -108,6 +108,7 @@
 | `message_delta` | 助手回复的增量片段 | `delta` |
 | `run_completed` | Run 正常结束，助手消息已落库 | `status`、`messageId`、`inputTokens`、`outputTokens` |
 | `run_failed` | 执行失败；P1 的 Mock 不产出，留给 P2 的真实执行 | `error` |
+| `server_shutdown` | 服务关闭，事件流被主动终止（Run 已落成 `CANCELLED`） | `status`、`error` |
 | `heartbeat` | 空闲满 15 秒 | 仅公共字段 |
 
 P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事件的字段语义。
@@ -122,11 +123,12 @@ P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事
 | 响应头 | `cache-control: no-cache`、`x-accel-buffering: no`（避免中间层缓冲） |
 | 帧格式 | `id: <seq>` + `event: <RunEventKind>` + `data: <RunEvent 的 JSON>`，空行结束一帧 |
 | 事件名 | 与 `data` 里的 `event` 字段同值（snake_case），客户端任取其一判别 |
-| 结束 | 服务端发出 `run_completed` 后关闭连接，没有额外的结束哨兵事件 |
+| 结束 | 服务端发出 `run_completed` 后关闭连接，没有额外的结束哨兵事件；服务关闭时改为发出 `server_shutdown` 后关闭连接（D-028） |
 | 状态推进 | 订阅即把 Run 从 `QUEUED` 推进到 `RUNNING`；`run_completed` 发出前助手消息与 Run 终态已落库 |
 | 断开 | 客户端断开（流被 drop）→ 生产方停止并释放任务，Run 落成 `CANCELLED`，不写半成品助手消息 |
 | 取消 | 流式期间调用 `api/run/cancel` → 生产方在下一段增量前发现状态变化并停止推送，Run 保持 `CANCELLED` |
 | 重复订阅 | 只有 `QUEUED` 可订阅；同一 Run 再次订阅返回 400，避免两个生产方写同一条助手消息 |
+| 服务关闭 | 生产方在下一段增量前发现关闭标记 → Run 落成 `CANCELLED` → 发出 `server_shutdown`（含 `status` 与可读 `error`）→ 连接关闭；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
 | 客户端 | 浏览器用原生 `EventSource`（GET + 查询参数，A-6）；Rust 侧用生成的 path 常量 + 自己的 SSE 解析 |
 
 ## 请求与响应样例

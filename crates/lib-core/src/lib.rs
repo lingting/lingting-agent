@@ -2,5 +2,6 @@
 
 pub mod directorys;
 pub mod id;
+pub mod lifecycle;
 pub mod logger;
 pub mod time;

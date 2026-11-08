@@ -109,6 +109,16 @@ pub async fn probe_version() -> ProbeVersionVO {
     }
 }
 
+/// 触发优雅关闭：**仅 debug 构建注册**，用于验证关闭期间的行为（release 构建不含该接口）。
+///
+/// 真正的关闭动作由 `lib-bin-web` 注册到 `lib_core::lifecycle` 的钩子完成，本接口只记录关闭请求；
+/// 重复调用不会重复触发。关闭流程在本次响应发出后开始，响应体为空。
+#[cfg(debug_assertions)]
+#[web_api_post(path = "api/probe/shutdown", auth = AuthRule::anonymous())]
+pub async fn probe_shutdown() {
+    lib_core::lifecycle::request_shutdown();
+}
+
 /// 把查询参数整理成结果载荷。
 fn probe_result(params: ProbeQueryPO) -> ProbeQueryVO {
     ProbeQueryVO {

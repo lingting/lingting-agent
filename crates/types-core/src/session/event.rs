@@ -25,6 +25,8 @@ pub enum RunEventKind {
     RunCompleted,
     /// Run 执行失败；P1 的 Mock 不产出，留给 P2 的真实执行。
     RunFailed,
+    /// 服务关闭：事件流被主动终止，Run 已落成 `CANCELLED`。
+    ServerShutdown,
     /// 心跳：长时间没有事件时保持连接不被中间层掐断。
     Heartbeat,
 }

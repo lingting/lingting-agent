@@ -2,6 +2,7 @@
 
 mod cors;
 mod server;
+mod shutdown;
 mod webui;
 
 pub use server::serve;

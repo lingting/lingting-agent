@@ -230,7 +230,7 @@
     - [x] OPTIONS 预检响应包含正确的 `access-control-*` 头。
     - **运行期验证（已执行）**：`make ui-build` 产出 `lingting-agent-ui/dist` 后启动 `bin-agent server --port 20100`。预检 `OPTIONS api/probe/void`（`Origin: http://127.0.0.1:20101`）返回 204，带 `access-control-allow-origin` / `allow-methods` / `allow-headers` / `expose-headers` / `max-age`；非白名单 Origin 的预检与实际请求都不输出任何 `access-control-*`。`GET api/probe/health`（白名单 Origin）返回 200 且带 allow-origin。`GET api/probe/not-exist`、`GET api/unknown.js`、`POST chat/abc` 均返回 404 `{"code":404,"message":"请求接口不存在"}`。`GET /` 与 `GET /chat/abc` 返回 200 `text/html` 且与 `dist/index.html` 字节一致（`cache-control: no-cache`）。`GET assets/index-*.js|css` 返回 200 对应 `content-type` 与 `public, max-age=31536000, immutable`。`GET assets/missing.js`、`--path-as-is /../Cargo.toml` 与 `/%2e%2e/Cargo.toml` 均返回 404 文本且未泄露文件。无 dist 目录时前端路由返回 503 文本，启动日志告警，两次运行均无 panic。
 
-- [ ] **P1-013 优雅关闭与生命周期**
+- [x] **P1-013 优雅关闭与生命周期**
 
   - **目标**：让 Server 可被可靠停止：不产生半条 SSE 事件、不丢日志、及时退出。
   - **具体工作**：
@@ -242,10 +242,12 @@
   - **前置依赖**：P1-008
   - **交付物**：关闭信号链路；关闭超时机制；退出码实现。
   - **验收标准**：
-    - [ ] Ctrl+C 后进程在超时内退出，日志有完整的关闭过程记录。
-    - [ ] 关闭瞬间的 SSE 客户端收到终止事件或明确断开，不会挂死。
-    - [ ] 关闭期间新请求被拒绝且返回可读错误，而非连接被静默丢弃。
-    - [ ] `framework-web-axum` 的改动（若有）已记录在 `decisions.md`，并说明是否已合入上游。
+    - [x] Ctrl+C 后进程在超时内退出，日志有完整的关闭过程记录。
+    - [x] 关闭瞬间的 SSE 客户端收到终止事件或明确断开，不会挂死。
+    - [x] 关闭期间新请求被拒绝且返回可读错误，而非连接被静默丢弃。
+    - [x] `framework-web-axum` 的改动（若有）已记录在 `decisions.md`，并说明是否已合入上游。
+    - **实现结论（2026-11-07）**：框架侧已提供关闭能力（`AxumServer::shutdown()` / `AxumShutdown` / `AxumContext::subscribe_stopping()` / `AxumStatus`），本仓库未修改框架，D-013 由 `OPEN` 改为 `DECIDED`。关闭链路落在 `lib-bin-web` 的 `shutdown` 模块：`serve` 启动前用 `lib_core::lifecycle::set_shutdown_hook` 注册“停止服务”的动作，再拉起信号任务；`Ctrl+C` / `SIGTERM` 与 debug 探针 `POST api/probe/shutdown` 都只调用 `lifecycle::request_shutdown()`，由钩子先等 `REJECT_WINDOW = 200ms` 的拒绝窗口再调用 `AxumShutdown::shutdown()`（立刻停监听会让关闭期的新请求在连接层被丢弃，无法返回可读错误）。`serve` 用 `select!` 同时等 `server.run` 与 `shutdown::deadline`（`TIMEOUT = 5s`，从进入停止流程起算），超时以错误返回、退出码 1，全程不用 `std::process::exit`（保证 `LoggingGuard` 刷盘）。关闭标记是 `lib-core` 的进程级 `AtomicBool`，`service-core` 的 SSE 生产方在每段增量前读取：命中即把 Run 落成 `CANCELLED` 并推一条 `RunEventKind::ServerShutdown`（`status = CANCELLED`、`error = 服务正在关闭，事件流已终止`）后收尾；关闭期间 `ShutdownGuard` 拦截器（`order = -1`）对所有请求返回 `503 {"code":503,"message":"服务正在关闭，请稍后重试"}`。退出码沿用 `bin-agent` 现有映射（0 正常 / 1 运行错误 / 2 参数与配置错误，关闭超时归入 1）。`make gen` 后 Rust / TS 两份 SDK 均导出 `ServerShutdown` / `"server_shutdown"`，`docs/api/session.md` 补齐事件表与 SSE 关闭语义，决策与遗留见 D-028。
+    - **运行期验证（已执行，debug 构建 + `POST api/probe/shutdown` 触发）**：探针返回 204；紧接着的 `GET api/probe/health` 返回 503 `{"code":503,"message":"服务正在关闭，请稍后重试"}`；进行中的 SSE 流在下一段增量处收到末帧 `event: server_shutdown`（`status=CANCELLED`、`error="服务正在关闭，事件流已终止"`）后 EOF，没有半条帧；进程自行退出、退出码 0；日志依次为 `进入关闭拒绝窗口，新请求返回 503 reject_window_ms=200` → `Axum 服务进入停止流程，等待进行中的请求结束` → `Axum 服务已停止` → `服务已停止`。同一代码的 release 构建 `已收集的接口数量 count=18`（debug 为 19），`POST api/probe/shutdown` 返回 404，证明该探针只在 debug 编译。Ctrl+C 路径由人工确认，与探针共用同一条 `request_shutdown()` 链路；关闭超时（退出码 1）没有可稳定制造的长请求，未做运行期验证。
 
 ---
 

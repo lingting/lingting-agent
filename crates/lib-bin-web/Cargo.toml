@@ -17,7 +17,7 @@ lib-web-core = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "signal"] }
 framework-web = { workspace = true }
 framework-web-axum = { workspace = true }
 

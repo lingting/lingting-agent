@@ -4,11 +4,13 @@
 //! 的接口保持不变，`lib-web` 的 SSE 编码不需要改。
 //!
 //! 清理规则（D-026）：消费方断开（流被 drop）→ 把仍在执行的 Run 落成 `CANCELLED`；
-//! Run 被 `api/run/cancel` 取消 → 停止生产且不改状态（取消接口已经写过终态）。
+//! Run 被 `api/run/cancel` 取消 → 停止生产且不改状态（取消接口已经写过终态）；
+//! 服务进入关闭流程 → 把 Run 落成 `CANCELLED` 并推一条 `server_shutdown` 终止事件（D-028）。
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use lib_core::lifecycle;
 use lib_core::time;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep};
@@ -24,6 +26,8 @@ const DELTA_INTERVAL: Duration = Duration::from_millis(120);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 /// 事件通道容量：够放下若干增量，生产方不需要为了背压提前阻塞。
 const CHANNEL_CAPACITY: usize = 32;
+/// 服务关闭时终止事件里的原因文本，对外可见且不含内部细节。
+const SHUTDOWN_REASON: &str = "服务正在关闭，事件流已终止";
 
 /// Run 事件流：生产方在独立任务里产出事件，消费方按需 `recv`。
 pub struct RunEventStream {
@@ -54,6 +58,8 @@ enum Outcome {
     ClientGone,
     /// Run 已不在 `RUNNING`（例如被取消），停止生产且不改状态。
     RunStopped,
+    /// 服务进入关闭流程，Run 已由本任务落成 `CANCELLED` 并推送了终止事件。
+    Shutdown,
 }
 
 /// 生产任务主流程：只在消费方断开时补一次清理。
@@ -70,7 +76,8 @@ async fn produce(
     }
 }
 
-/// 产出 `run_started` → 若干 `message_delta` → `run_completed`。
+/// 产出 `run_started` → 若干 `message_delta` → `run_completed`；
+/// 中途被取消或服务关闭时以对应终态提前收尾。
 async fn emit(
     store: &Store,
     run: &Run,
@@ -92,6 +99,10 @@ async fn emit(
 
     let mut content = String::new();
     for chunk in deltas(&mock_reply(prompt)) {
+        // 服务关闭时先收尾：Run 落成 CANCELLED 并推一条终止事件，避免客户端挂死。
+        if lifecycle::is_shutdown() {
+            return shutdown(store, run, &mut producer).await;
+        }
         // 每段之前确认 Run 仍在执行：被取消时立即停止，不再往客户端推事件。
         if !matches!(current_status(store, run), Some(RunStatus::Running)) {
             return Outcome::RunStopped;
@@ -131,6 +142,18 @@ async fn emit(
     // 客户端可能已经断开：Run 已是终态，这里失败也无需回滚。
     let _ = producer.send(completed).await;
     Outcome::Completed
+}
+
+/// 服务关闭收尾：把 Run 落成 `CANCELLED`，并补一条 `server_shutdown` 终止事件。
+///
+/// 事件只有一次机会：客户端可能已经断开，且进程即将退出，因此发送失败也不再重试。
+async fn shutdown(store: &Store, run: &Run, producer: &mut Producer<'_>) -> Outcome {
+    mark_cancelled(store, &run.id);
+    let mut ended = producer.event(RunEventKind::ServerShutdown);
+    ended.status = Some(RunStatus::Cancelled);
+    ended.error = Some(SHUTDOWN_REASON.to_string());
+    let _ = producer.send(ended).await;
+    Outcome::Shutdown
 }
 
 /// 事件生产者：统一维护序号并填充每条事件都有的公共字段。
@@ -194,7 +217,7 @@ fn current_status(store: &Store, run: &Run) -> Option<RunStatus> {
     store.run(&run.id).map(|run| run.status)
 }
 
-/// 消费方断开：把仍在执行的 Run 落成 `CANCELLED`，避免留下永远 `RUNNING` 的记录。
+/// 消费方断开或服务关闭：把仍在执行的 Run 落成 `CANCELLED`，避免留下永远 `RUNNING` 的记录。
 fn mark_cancelled(store: &Store, run_id: &str) {
     let now_millis = time::now_millis();
     store.update_run(run_id, |run| {

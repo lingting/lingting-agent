@@ -279,15 +279,19 @@
 ## D-013 优雅关闭实现方式
 
 - **问题**：如何在 `framework-web-axum` 上实现优雅关闭？
-- **背景（已核实）**：`framework-web-axum` 公开 API 只有 `axum_builder(...)`、`AxumBuilder::with_cors`、`bind()`、`AxumServer::context()`、`router()`、`run(wrapper)`；`run` 持续运行且“重复调用返回错误”，**没有任何 shutdown 信号或 handle 的入口**。源码中无 shutdown 相关实现。
+- **背景（原判断）**：`framework-web-axum` 的 `run(wrapper)` 持续运行且没有关闭入口，源码中无 shutdown 相关实现。
 - **可选方案**：
-  1. 向上游 `lingting-rust-framework` 增加 `run_with_shutdown(shutdown_future)`（或返回 `AxumServerHandle` 用于关闭），本仓库直接使用。
-  2. 本仓库绕开 `AxumServer::run`，自行调用 `axum::serve(...).with_graceful_shutdown(...)`。**已核实**：`build_router_with` 是 `pub(crate)`，公开的 `build_router(wrapper)` 只返回框架自有 `WebRouter`（不是 axum `Router`），因此该方案同样要求上游先暴露入口，否则需要在本仓库复制 dispatch 逻辑。
+  1. 向上游 `lingting-rust-framework` 增加关闭入口（`run_with_shutdown` 或关闭句柄），本仓库直接使用。
+  2. 本仓库绕开 `AxumServer::run`，自行调用 `axum::serve(...).with_graceful_shutdown(...)`。**已核实不可行**：`build_router_with` 是 `pub(crate)`，公开的 `build_router(wrapper)` 只返回框架自有 `WebRouter`（不是 axum `Router`），必须在框架内暴露入口，否则要复制 dispatch 逻辑。
   3. P1 接受非优雅关闭（Ctrl+C 直接退出）。
-- **推荐方案**：方案 1；若上游改动周期不可控，退化为方案 2。
-- **决策理由**：方案 1 是“正确修在框架里”，其他使用该框架的项目也会受益，且不需要在本仓库复制服务启动逻辑；方案 2 会分散关停职责（路由由框架组装、serve 由本仓库启动），埋下行为差异；方案 3 不满足 P1 验收 S-8/S-9。
-- **待定**：上游改动是否在 P1 时间盒内完成；若走方案 2，需确认 `build_router_with` 与 `AxumServer` 上下文（`AxumContext`）的一致性。
-- **状态**：`OPEN`
+- **决策（方案 1，P1-013 落地）**：上游已提供关闭能力，本仓库不再自行组装 `axum::serve`：
+  - `AxumServer::shutdown() -> AxumShutdown`：`shutdown()` 幂等触发停止，`is_shutdown()` 查询状态。
+  - `AxumContext::subscribe_stopping()`：异步等待“进入停止流程”，服务内部用它驱动 `with_graceful_shutdown`。
+  - `AxumStatus`：`Unstarted` / `Starting` / `Running` / `Stopping` / `Stopped`，停止流程对上层可观测。
+  - 关闭请求早于 `run` 时，服务不启动直接返回 `Ok(())`；`run` 期间关闭则停止接受新连接并等待进行中的请求结束后返回。
+- **框架改动**：本仓库**未再修改** `framework-web-axum`，只用其公开 API，因此不存在“是否合入上游”的待办。
+- **决策理由**：关停职责完整留在框架内（监听、dispatch、连接排空由框架持有），本仓库只负责“何时触发关闭”和“超时兜底”，见 D-028。
+- **状态**：`DECIDED`
 
 ---
 
@@ -631,7 +635,7 @@
   7. **心跳**：等待增量的间隙超过 15 秒补一条 `heartbeat`；Mock 的增量间隔是 120ms，正常情况下不会触发，P2 接真实 token 流后才生效。
 - **D-007 定案**：采用方案 1（SSE 端点按 `Blob` 进元数据 + 客户端自实现消费）。缓解手段已验证可行 —— 生成物同时导出 `RUN_STREAM: ApiDefinition { path: "api/run/stream" }`（Rust）与 `ApiDefinitions.runStream.path`（TS），客户端不需要手写 path 字面量；事件类型来自生成的 `RunEvent` / `RunEventKind`。方案 2（框架新增 `ApiReturnType::Stream`）留作框架演进项，P2 前再评估。
 - **代价与遗留**：
-  1. `run_failed` 在 P1 没有产出方（Mock 不会失败），只有契约与文档；P2 接真实执行后启用。
+  1. `run_failed` 在 P1 没有产出方（Mock 不会失败），只有契约与文档；P2 接真实执行后启用。P1-013 追加了 `server_shutdown`（服务关闭时的终止事件，见 D-028），同属“只增不改”。
   2. 事件流不做断点续传与事件回放：中途断开只能重新发消息（P1 无持久化，续传本来也无意义）。
   3. `inputTokens` / `outputTokens` 在 Mock 下是字符数估算，不是真实分词。
   4. SSE 的 `id:` 是 `seq` 的十进制文本，而 `data` 里的 `seq` 因 D-018 是字符串，两者语义相同、表现不同。
@@ -664,6 +668,29 @@
   2. 未输出 `Vary: Origin`（`AxumCors` 无该字段）；本地单用户场景不涉及共享缓存，暂不处理。
   3. CORS 白名单是编译期常量，不随 `--addr` / `--port` 变化；按 D-022 修改端口时必须同步改常量。
 - **运行期回填（P1-012）**：`make ui-build` 后 `bin-agent server --port 20100` 实测：白名单 Origin 的 `OPTIONS` 返回 204 且带全部 `access-control-*` 头，非白名单 Origin 的预检与实际请求都不输出 CORS 头；白名单 Origin 的 `GET api/probe/health` 返回 200 且带 allow-origin；`api/*` 未命中（含带扩展名的 `api/unknown.js`）与非 GET 的非 API 路径均返回 404 `{"code":404,"message":"请求接口不存在"}`；`/` 与未知前端路由返回 200 `text/html`（与 `dist/index.html` 一致）；`dist/assets/*` 的 `content-type` 与缓存头符合预期；`assets/missing.js`、`/../Cargo.toml`、`/%2e%2e/Cargo.toml` 均 404 文本且未泄露文件；无 `dist` 时前端路由返回 503 文本，两次运行日志均无 panic。已知观感问题：`api/*` 未命中会写一条框架 `Web 请求异常 category=路由不存在` 的 ERROR 日志（与 D-024 记录的既有行为一致）。
+- **状态**：`DECIDED`
+
+---
+
+## D-028 优雅关闭与生命周期
+
+- **问题**：谁监听关闭信号、超时如何兜底、退出码怎么定、关闭期间 SSE 与在途请求的表现、重启后客户端预期。
+- **决策**：
+  1. **触发入口与链路**（`lib-bin-web` 的 `shutdown` 模块）：`serve` 启动前把“停止服务”的动作注册成 `lib_core::lifecycle::set_shutdown_hook`，再拉起信号任务。触发方有两个：`Ctrl+C`（全平台）/ `SIGTERM`（Unix，`tokio::signal::unix`），以及仅 debug 构建注册的探针 `POST api/probe/shutdown`（供关闭期间行为联调，release 不含）。两者都只调用 `lifecycle::request_shutdown()`：先置位标记让 SSE 生产方与请求守门立即感知，再由钩子经拒绝窗口调用 `AxumShutdown::shutdown()` 让框架排空（框架能力见 D-013）。
+  2. **关闭标记**放 `lib-core` 的 `lifecycle` 模块（进程级 `AtomicBool`，电平语义、幂等）：触发方 `lib-bin-web` 与消费方 `service-core` 都依赖 `lib-core`，不新增依赖边；关闭是进程级事实，不放进业务 Crate，也不写进框架。
+  3. **兜底超时**：`lib-bin-web` 的 `shutdown::TIMEOUT = 5s`，从“框架进入停止流程”起算（不是从信号到达起算）。超时后 `select!` 另一分支直接返回错误 → `serve` 返回 → 运行时被 drop，在途连接断开 → `bin-agent` 刷日志后以退出码 1 结束。**不使用 `std::process::exit`**，否则日志守卫来不及刷盘。
+  4. **SSE 终止**（扩展 D-026）：生产方在每段增量前检查关闭标记，命中则把 Run 落成 `CANCELLED`（带 `finishedAtMs`）、推一条 `RunEventKind::ServerShutdown`（`status = CANCELLED`、`error = "服务正在关闭，事件流已终止"`）后收尾；客户端收到终止事件再接 EOF，不会挂死。检查粒度等于增量间隔（Mock 120ms，P2 的 token 流同理），因此关闭不会拖到超时。
+  5. **关闭期间拒绝新请求**：拦截器 `ShutdownGuard`（`order = -1`，最先执行）在关闭标记置位后对所有请求直接返回 `503` + `{code:503,message:"服务正在关闭，请稍后重试"}`，形状与 D-024 的错误响应一致；它排在静态托管拦截器之前，关闭期间不再命中 WebUI 或业务 Handler。
+  6. **拒绝窗口**：置位后不立刻停止监听，先等 `REJECT_WINDOW = 200ms` 再调用 `AxumShutdown::shutdown()`（在钩子任务里 `sleep`，不阻塞触发方）。若立刻停监听，关闭期间的新请求会在连接层被直接拒绝（客户端只看到连接断开），S-9 要求的“可读错误”就无法保证；200ms 既能稳定让并发的后续请求拿到 503，又不明显拉长关闭时间。
+  7. **退出码**：`0` 正常（含正常优雅关闭）、`1` 运行错误（启动失败、运行期错误、**关闭超时**）、`2` 参数与配置错误（沿用 P1-008）。关闭超时按运行错误处理：进行中的请求被强行切断，属需要排查的异常，不应与正常关闭同码。
+  8. **重启后客户端预期**：P1 存储是内存 Mock（D-017），Server 重启即会话、消息、Run 全部清空。客户端（TUI / WebUI / `agent run`）在连接断开或收到 503 时应提示“服务已关闭或未运行”并允许重试，不得自动重放旧会话；会话恢复属于 P2 引入持久化后的话题。
+- **代价与遗留**：
+  1. 关闭标记只有电平语义、不可清除：同一进程内二次 `serve` 会立即再次进入关闭态，P1 不需要该场景。
+  2. `SIGTERM` 只在 Unix 生效；Windows 上除 `Ctrl+C` 外没有其它关闭信号通道（服务管理器终止属强制结束）。
+  3. 超时值固定 5s，不新增 CLI 参数与配置项，P1 保持最小参数面。
+  4. 503 只在 200ms 拒绝窗口内稳定可得；窗口结束后框架停止监听，新连接在连接层被拒，这是框架语义，不在本仓库改动范围。
+  5. 探针 `api/probe/shutdown` 只在 debug 构建注册，但 `make gen` 用 debug 构建生成，因此两份 SDK 里会包含该 path；release 二进制下它返回 404。它属于联调接口，不是对外契约，P2 前可删除。
+- **实测回填（2026-11-07，debug 构建 + 探针触发）**：`POST api/probe/shutdown` 返回 204；随后同一时刻的 `GET api/probe/health` 返回 503 `{"code":503,"message":"服务正在关闭，请稍后重试"}`；进行中的 SSE 流在下一段增量处收到末帧 `event: server_shutdown`（`seq=4`、`status=CANCELLED`、`error="服务正在关闭，事件流已终止"`）后 EOF，没有半条帧；进程自行退出且退出码 0；日志顺序为 `进入关闭拒绝窗口，新请求返回 503 reject_window_ms=200` → `Axum 服务进入停止流程，等待进行中的请求结束` → `Axum 服务已停止` → `服务已停止`。同一二进制在 release 下 `已收集的接口数量 count=18`（debug 为 19），`POST api/probe/shutdown` 返回 404 `{"code":404,"message":"请求接口不存在"}`，证明该接口确实只在 debug 编译。Ctrl+C 链路由人工确认（本机自动化无法投递控制台事件，`GenerateConsoleCtrlEvent` 在 `AttachConsole` 后返回成功但目标无反应，已用 `ping` / `timeout` 对照），它走的是同一条 `request_shutdown()` 链路。关闭超时（退出码 1）没有可稳定制造的长请求，未做运行期验证。
 - **状态**：`DECIDED`
 
 ---

@@ -1,14 +1,16 @@
 //! Server 启动：绑定监听地址、挂载 Web 路由，并让请求日志带上 trace id。
 
-use crate::{cors, webui};
-use anyhow::{Context, Result};
+use crate::{cors, shutdown, webui};
+use anyhow::{Context, Result, anyhow};
 use framework_web::{WebRoute, use_web};
 use framework_web_axum::{WebRouteWrapper, axum_builder};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{Instrument, info, info_span};
 
-/// 启动 Web Server 并常驻运行。
+/// 启动 Web Server 并常驻运行，收到关闭信号后完成优雅关闭再返回。
 ///
+/// 关闭链路与超时策略见 D-028：超时未能排空时以错误返回，由调用方转成非 0 退出码。
 /// 内部创建 Tokio 运行时，调用方按同步方式调用即可。
 pub fn serve(host: &str, port: u16) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -39,10 +41,29 @@ async fn run(host: &str, port: u16) -> Result<()> {
     let server = axum_builder(host, i32::from(port))
         .with_cors(cors::resolve)
         .push_interceptor(Arc::new(webui))
+        .push_interceptor(Arc::new(shutdown::ShutdownGuard))
         .bind()
         .await?;
     info!("listening on {}", server.context().address());
-    server.run(Some(trace_wrapper())).await
+
+    // 关闭链路：信号（或 debug 探针）→ 记录关闭请求 → 拒绝窗口 → 框架优雅关闭；
+    // 超时则放弃等待进行中的请求。钩子必须在启动前注册。
+    shutdown::install(server.shutdown());
+    tokio::spawn(shutdown::watch());
+
+    let started = Instant::now();
+    let stopping = server.context().subscribe_stopping();
+    let result = tokio::select! {
+        result = server.run(Some(trace_wrapper())) => result,
+        () = shutdown::deadline(stopping) => Err(anyhow!(
+            "优雅关闭超时（{}s），已强制退出",
+            shutdown::TIMEOUT.as_secs()
+        )),
+    };
+    if result.is_ok() {
+        info!(elapsed_ms = started.elapsed().as_millis(), "服务已停止");
+    }
+    result
 }
 
 /// 路由包装器：为每次请求建立带 trace id 的日志作用域，并记录处理结果。

@@ -393,6 +393,7 @@ agent status
 - 时间。
 - 应用目录。
 - 日志。
+- 进程生命周期（关闭请求标记，`lifecycle` 模块）。
 - 常量。
 - 通用值类型。
 - 通用工具方法。
@@ -448,7 +449,7 @@ Web 基础能力（参考 `lingting-ai-gateway` 的 `lib-web-core`）。
 - SSE Endpoint。
 - API Metadata 收集。
 - 统一错误响应契约（`ApiError`，`auto_type`，随 SDK 生成导出；映射规则见 `docs/develop.md` 与 D-024）。
-- 探活接口 `health` / `version`（P1 位于探针模块）。
+- 探活接口 `health` / `version`（P1 位于探针模块），以及仅 debug 构建注册的关闭联调接口 `shutdown`。
 - Web Router 组装。
 - 与服务端 API SDK 生成机制集成。
 
