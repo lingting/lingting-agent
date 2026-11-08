@@ -124,3 +124,15 @@ dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 
+[profile.release]
+opt-level = 3
+# fat LTO：跨 crate 内联与去重，代价是构建时间；发布构建只有一条链路，可以接受。
+lto = "fat"
+# 单 codegen unit 才能让 LTO 拿到完整视图，也避免并行代码生成带来的体积波动。
+codegen-units = 1
+# 发布产物不带符号表：体积显著下降，崩溃栈可读性交给 debug symbol 单独归档的需求再议。
+strip = "symbols"
+# panic 保持 unwind：TUI 的终端恢复依赖 Drop（`?1049l` 等），abort 会直接跳过析构把终端留在原始模式；
+# 后续阶段（工具执行隔离）也需要 catch_unwind，abort 会让这条路彻底不可用。
+panic = "unwind"
+

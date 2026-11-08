@@ -346,7 +346,7 @@
 
 ## Batch D：收口
 
-- [ ] **P1-018 单 Binary Release 构建与跨平台策略**
+- [x] **P1-018 单 Binary Release 构建与跨平台策略**
 
   - **目标**：产出可独立运行、可分发的 Release 产物，并留下体积与启动时间的基线数据。
   - **具体工作**：
@@ -358,10 +358,24 @@
   - **前置依赖**：P1-015、P1-017
   - **交付物**：release 构建配置；一键构建脚本；基线数据记录；跨平台结论。
   - **验收标准**：
-    - [ ] 单条命令产出可运行 binary。
-    - [ ] 干净目录下 binary 可启动 server 并打开 WebUI。
-    - [ ] 体积与启动时间数据记录在 `.steps` 中，且注明测量环境与方式。
-    - [ ] `--help` / `--version` / 三个运行模式在 release 构建下均可用。
+    - [x] 单条命令产出可运行 binary。
+    - [x] 干净目录下 binary 可启动 server 并打开 WebUI。
+    - [x] 体积与启动时间数据记录在 `.steps` 中，且注明测量环境与方式。
+    - [x] `--help` / `--version` / 三个运行模式在 release 构建下均可用。
+
+  - **实现结论（2026-11-08）**：
+    - **release profile**（根 `Cargo.toml` 的 `[profile.release]`）：`opt-level = 3` + `lto = "fat"` + `codegen-units = 1` + `strip = "symbols"` + `panic = "unwind"`。前两项以构建时间换跨 crate 内联与体积，`strip` 去符号表；`panic` 明确保留 unwind —— TUI 的终端恢复挂在 `Drop`（`?1049l` / `?2004l` / `?25h`），`abort` 会跳过析构把终端留在原始模式，P3 之后的工具执行隔离也需要 `catch_unwind`。实测 `make release` 全量构建约 2m45s。
+    - **一条命令**：`make release` = `gen`（SDK 生成，编译期必需）→ `cargo build --release -p bin-agent`。前端构建不单独编排：`lib-bin-web/build.rs` 在 release 下自行 `pnpm build` 并把产物嵌入（D-009），因此「前端构建 → SDK 生成 → Rust 构建」在实现上收敛为「SDK 生成 → Rust 构建（内含前端构建与嵌入）」。首次构建需先 `make ui-install`，缺前端依赖时 `build.rs` 直接失败并提示。
+    - **交叉编译**：`make release-cross CROSS_TARGET=<triple>` = `rustup target add` + `cargo zigbuild`，产物落 `target/<triple>/release/`；Windows 目标不走这条路，用本机 msvc 原生 `make release`（D-020）。
+    - **基线数据**（测量环境：Windows 11 + rustc 1.98.0 / x86_64-pc-windows-msvc，`make release` 产物；Linux 侧为同源码 `cargo zigbuild` 交叉编译，在 WSL2 Ubuntu、`uname -m = x86_64` 下运行）：
+      - Windows release binary **9,721,856 字节（约 9.27 MiB）**，`stat -c %s` 取值；同一命令在加 `[profile.release]` 之前的产物为 10.5 MiB。
+      - Windows 冷启动（`server` 进程 spawn → 日志打印 `listening on`）**5 次 61–66 ms，中位 63 ms**。方式：bash 在 spawn 前记录 `date -u +%s%N`，再取日志中 `listening on` 行的 tracing 时间戳（UTC，含微秒）相减；含 `date` 与进程启动之间的 5–15 ms 开销，结果偏大。
+      - Linux x86_64-gnu 产物 10,265,480 字节（约 9.79 MiB），同一方法冷启动 **9–10 ms**。
+      - Linux x86_64-musl 静态产物 9,981,304 字节（约 9.52 MiB），WSL2 下可启动、WebUI 可打开。
+      - Linux aarch64-gnu 产物 8,556,352 字节（约 8.16 MiB），本机无 qemu 也无真机，只验证到编译产物生成。
+      - 冷启动口径说明：本机 MSYS 的客户端探测有固定开销（`/dev/tcp` 连已关闭端口单次约 2 s，`TcpClient.Connect` 连已监听端口也要 80 ms、curl 轮询到首个 200 约 0.6 s），因此统一取日志时间戳，不用客户端探测值。
+    - **跨平台结论**（回填 D-020）：Windows 为第一目标且已验收；Linux 走 `cargo-zigbuild` 交叉编译（x86_64 gnu / musl 已运行验证，aarch64 gnu 仅编译通过）；macOS 交叉编译需要 Apple SDK 与签名，本机不可行，走 CI 的 macOS runner，P1 不做，归属 P6 发布阶段。
+    - **无开发工具环境**（X-6）：仅把 `bin-agent.exe` 拷到空目录（无 `dist`、无 `lingting-agent-ui`、无 SDK 生成物），`env PATH='C:/Windows/system32'` 下 `--version` 正常；`server` 启动后 `/`、`/assets/index-*.js`、`/assets/index-*.css` 均 200 且解压后与 `dist` 内文件逐字节一致，`/chat/abc` 回落入口页；`status` / `run` 走同一 binary 正常，`tui` 在 release 下可正常渲染。
 
 - [ ] **P1-019 API 一致性与生成物重建门禁**
 

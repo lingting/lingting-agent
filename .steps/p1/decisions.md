@@ -425,8 +425,8 @@
   3. 拆成三个 binary（`agent` / `agent-server` / `agent-cli`）——**违反“单 Binary”目标，REJECTED**。
 - **推荐方案**：P1 用方案 1；若体积超标（例如 > 30 MB）再评估方案 2。
 - **决策理由**：P1 优先保证“一个文件能跑通”，feature 矩阵会让 CI 与文档复杂度翻倍。方案 2 保留为 P6（发布）的优化项。
-- **待定**：体积阈值与判断依据（P1-018 记录基线数据后决定）。
-- **状态**：`OPEN`
+- **P1-018 回填**（体积阈值与判断依据，方案 1 维持）：`[profile.release]` 取 `lto = "fat"` + `codegen-units = 1` + `strip = "symbols"` 后，Windows release binary 为 9.27 MiB（加 profile 前 10.5 MiB），远低于 30 MB。阈值就此定为 **30 MB（单平台单文件）**：超过则触发方案 2 评估，判断依据是「与一台无运行时环境的目标机上的下载/拷贝成本相当」，30 MB 是可接受的量级上限；当前余量足够，P1 不做 feature 裁剪。
+- **状态**：`DECIDED`
 
 ---
 
@@ -478,9 +478,10 @@
   1. 仅 Windows（本机平台），其他平台留到 P6。
   2. Windows + Linux 通过 CI 矩阵构建（原生 runner，不做交叉编译）。
   3. 交叉编译（`cargo-zigbuild`，本机已安装）。
-- **推荐方案**：方案 1 做验收，方案 2 作为 CI 目标（不阻塞 P1 验收）。
-- **决策理由**：P1 的验收标准要求“Release Binary 可独立运行”，本机 Windows 即可验证；方案 3 在引入 `rust-embed`、SQLite（P2）后会遇到链接与原生依赖问题，不适合在 P1 就承担。
-- **状态**：`OPEN`（确认 Linux 是否属于 P1 交付范围）
+- **决策（P1-018 实测后定稿）**：Windows 用方案 1（本机 msvc 原生构建，作为 P1 验收基线）；Linux 用方案 3（`cargo-zigbuild` 交叉编译）；macOS 本机无法交叉编译（需 Apple SDK 与签名），只能用方案 2 的原生 runner 在 CI 上构建，P1 不做，归属 P6 发布阶段。
+- **决策理由**：P1 的验收标准要求“Release Binary 可独立运行”，本机 Windows 即可验证；P1-018 实测 `cargo-zigbuild` 在本仓库可行 —— `x86_64-unknown-linux-gnu` / `x86_64-unknown-linux-musl` 产物在 WSL2 下启动、WebUI、`status` / `run`、SIGTERM 优雅关闭全部正常，`aarch64-unknown-linux-gnu` 编译通过（本机无 qemu/真机，运行未验证）；此前担心的 `rust-embed` 已改为构建期 codegen（D-009），不再引入原生依赖，剩下要盯的是 SQLite（P2）在交叉编译下的可行性。macOS 不进入本机交叉编译范围，避免为了签名与 SDK 提前引入复杂的构建链。
+- **落地方式**：`make release`（Windows 原生）、`make release-cross CROSS_TARGET=<triple>`（zigbuild，默认 `x86_64-unknown-linux-gnu`）；体积与冷启动基线数据见 `.steps/p1/tasks.md` 的 P1-018。
+- **状态**：`DECIDED`
 
 ---
 
