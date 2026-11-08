@@ -303,7 +303,7 @@
       - 回归结果：`bin-tests` 的 `tui.*` 共 11 个用例、`--all` 全量 16 个用例全部通过，连续多轮结果一致。
     - **验收状态**：`T-1` ~ `T-9` 全部通过；其中 T-7 由人工在真实终端验证，其余各项由 `bin-tests` 用例或静态检索覆盖。
 
-- [ ] **P1-016 WebUI 最小对话界面**
+- [ ] **P1-016 WebUI 最小对话界面（进行中）**
 
   - **目标**：浏览器中能完成“发问 → 看流式回答”的最小闭环，且全部调用走生成的 TS SDK。
   - **具体工作**：
@@ -318,6 +318,8 @@
     - [ ] 浏览器可发送消息并看到流式输出。
     - [ ] 所有 API 调用均来自生成 SDK（无手写 path 字面量）。
     - [ ] Server 关闭时界面显示可读错误而非白屏。
+    - **实现结论（代码已落地，验收未完成）**：Transport 在 `lingting-agent-ui/src/api/client.ts`（`AgentApiClient extends ApiClient`，负责拼地址、判定状态码、拆 `R<T>` 包装、把失败统一成 `ApiRequestError`；基地址留空 = 同源，开发期走 Vite 代理、发布态由 Rust 托管），SSE 消费在 `src/api/runStream.ts`（fetch 流式响应 + 自行切帧，path 取自 `ApiDefinitions.runStream.path`，不用 `EventSource`，理由见 D-007 的 P1-016 回填）。界面在 `src/pages/chat/`：`ChatMain`（布局 + 错误提示条 + 空状态）、`useChat`（会话创建 → `messageCreate` → 消费事件流 → 中止/取消的状态机）、`MessageList`（`@ant-design/x` 的 `Bubble.List`，流式气泡 `status=updating`、中断气泡 `abort`）、`Composer`（`Sender`，生成中显示停止按钮）、`chatMessage`（界面消息模型）。停止生成先 `AbortController.abort()` 再调 `api/run/cancel`；断线、`run_failed`、`server_shutdown` 都在回复末尾追加说明并把原因写进提示条。SDK 消费方式与目录约定见 D-010 的 P1-016 回填。
+    - **待验收**：三条验收标准均需浏览器实测（发送/流式、无手写 path 的静态检索、服务关闭时的提示条），尚未执行；`pnpm exec tsc --noEmit`、`vp lint`、`pnpm build` 已通过，但不作为验收依据。
 
 - [ ] **P1-017 WebUI 静态资源嵌入 Binary**
 

@@ -24,8 +24,12 @@ use tracing_subscriber::filter::LevelFilter;
 
 /// 默认监听地址。
 const DEFAULT_HOST: &str = "127.0.0.1";
-/// 默认监听端口（固定端口，见 D-022）。
+/// 默认监听端口（固定端口，见 D-022）：release 构建用服务端端口 20100。
+#[cfg(not(debug_assertions))]
 const DEFAULT_PORT: u16 = 20100;
+/// 默认监听端口（固定端口，见 D-022）：debug 构建用开发环境服务端端口 20102，与前端 Vite 的代理目标一致。
+#[cfg(debug_assertions)]
+const DEFAULT_PORT: u16 = 20102;
 /// 监听地址环境变量。
 const ENV_HOST: &str = "AGENT_SERVER_ADDR";
 /// 监听端口环境变量。

@@ -1,12 +1,13 @@
 //! `bin-tests`：lingting agent 端到端测试入口。
 //!
 //! 职责边界：只负责参数解析、运行时启动与退出码；用例选择、资源管理与并发调度在 `runner`，
-//! 服务端子进程在 `server`，用例本身在 `cases`。
+//! 服务端子进程在 `server`，运行期准备在 `prepare`，用例本身在 `cases`。
 
 mod case;
 mod cases;
 mod cli;
 mod context;
+mod prepare;
 mod report;
 mod runner;
 mod server;

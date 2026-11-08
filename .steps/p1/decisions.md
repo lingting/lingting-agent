@@ -25,10 +25,10 @@
 | D-004 | API Schema 唯一来源与元数据获取方式 | DECIDED |
 | D-005 | 代码生成时机 | DECIDED (P1-007 已固化) |
 | D-006 | 生成物是否纳入版本控制 | DECIDED |
-| D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011) |
+| D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011；浏览器侧消费 P1-016 定案) |
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
 | D-009 | WebUI 静态资源嵌入方案 | OPEN |
-| D-010 | WebUI 技术栈 | OPEN |
+| D-010 | WebUI 技术栈 | DECIDED (P1-016 脚手架与 SDK 接入已落地) |
 | D-011 | TUI 与 Server 的连接管理 | OPEN |
 | D-012 | Server 地址配置与发现 | DECIDED |
 | D-013 | 优雅关闭实现方式 | OPEN |
@@ -189,6 +189,7 @@
 - **决策理由**：方案 3 会破坏“路由与元数据来自同一次定义”的一致性，且需为鉴权、trace、错误处理做重复实现；方案 2 是正确终局，但需要同时改 `framework-proc-ts` 元数据枚举、`TypescriptApiBuilder` 与新的 `framework-proc-rust`，属于跨仓库的协议级改动，放进 P1 会拖住主线。方案 1 能在 P1 内跑通全链路，并把“事件契约”保持在单一来源（服务端事件枚举 → 生成两侧类型）。
 - **P1 必须接受的不完美**：SSE 路径的 path 仍需人工出现在客户端代码里（因元数据不表达流式）。**缓解**：让 SSE 端点 path 也由生成物导出为常量（元数据里它已是 `Blob` 接口，可导出其 path），客户端不手写字面量。
 - **P1-011 定案**：采用方案 1。缓解手段已验证 —— 生成物导出 `RUN_STREAM.path`（Rust）与 `ApiDefinitions.runStream.path`（TS），客户端不手写 path 字面量；事件类型来自生成的 `RunEvent` / `RunEventKind`。方案 2 仍是正确终局，留作框架演进项（P2 前评估）。具体事件契约与断线语义见 D-026。
+- **P1-016 WebUI 落地结论（客户端侧消费方式）**：浏览器端选 **fetch 流式响应 + 自行解析 SSE 帧**，不用原生 `EventSource`。三条理由：`EventSource` 拿不到订阅失败时的 4xx 错误体（只会 `onerror`）、断线后自动重连（同一 Run 重订阅会被服务端 400 拒绝）、且无法主动中断；而 `fetch` 的 `AbortSignal` 正好承载「停止生成」。实现落 `lingting-agent-ui/src/api/runStream.ts`：path 取自生成的 `ApiDefinitions.runStream.path`，帧按空行切分、只解析 `data:` 行后反序列化成生成的 `RunEvent`，`id:` / `event:` / `retry:` 不参与解析（与 Rust 侧 `lib-bin-cli` 的 `EventStream` 同构）。
 - **状态**：`DECIDED`（P1-011）
 
 ---
@@ -241,6 +242,11 @@
 - **约束（脚手架落地后修订）**：UI 组件库使用 antd 与 `lingting-react-ui`；路由、请求缓存与轻量状态分别使用 `@tanstack/react-router` / `@tanstack/react-query` / `@tanstack/react-store`，不再限定「原生 hooks、不引入额外状态库」。
 - **状态**：`DECIDED`（技术栈：React + Vite + TypeScript + antd/LRI；工程目录 `lingting-agent-ui/`，同时是 pnpm workspace 根）
 - **备注（裁决后回填）**：前端脚手架 `lingting-agent-ui/` 已落地，依赖含 antd、`lingting-react-ui` 与 `@tanstack/*` 系列，与原「不引入重型组件库、不引入额外状态库」的约束冲突；已裁决**保留当前依赖组合**，约束按本节修订条目执行。
+- **P1-016 落地结论**：
+  1. **SDK 生成物的消费方式**：`pnpm workspace` 路径依赖。`packages/sdk-ts` 由 `make gen` 产出（不入库），`lingting-agent-ui/package.json` 用 `"@lingting/agent-api": "workspace:*"` 引入，`pnpm-workspace.yaml` 的 `packages` 已包含 `../packages/*`；不使用 `file:` 或相对路径直连 `dist`，避免绕过包导出映射。
+  2. **Transport**：`src/api/client.ts` 的 `AgentApiClient extends ApiClient` 实现 `call`，负责拼地址、判定状态码、拆 `R<T>` 包装、把失败统一成 `ApiRequestError`。基地址留空 = 同源：开发期由 Vite 代理 `/api/` → `127.0.0.1:20102`，发布态由 Rust 同源托管（D-022、D-027），两种形态都不需要跨域地址。
+  3. **组件来源**：会话界面用 `@ant-design/x` 的 `Bubble.List` + `Sender`（`XProvider` 由 LRI 的 `BasicLayout` 提供），状态提示条、空状态用 antd。
+  4. **目录约定**：`src/api/`（Transport 与 SSE 消费）、`src/pages/chat/`（`ChatMain` 容器 / `useChat` 状态机 / `MessageList` / `Composer` / `chatMessage` 界面消息模型）。
 
 ---
 
@@ -505,6 +511,7 @@
   1. 端口冲突必须报错退出，不得静默改用随机端口。
   2. 端口表在 `docs/develop.md` 与本节各留一份，修改时必须同时更新。
   3. API 探针示例的默认端口已对齐到 `20103`（`crates/lib-web/examples/api_probe_server.rs`），仍可被环境变量 `AGENT_PROBE_PORT` 覆盖。
+  4. **默认端口按构建形态切换（P1-016 回填）**：`lib-bin-cli` 的未显式配置端口由 `#[cfg(debug_assertions)]` / `#[cfg(not(debug_assertions))]` 定义同名常量决定（编译期选择，无运行期分支） —— debug 构建用 `20102`（开发环境服务端），release 构建用 `20100`。服务端与客户端共用这一默认值，因此 `cargo run -p bin-agent -- server` 与 `pnpm dev` 的代理目标天然对齐，不需要额外 `--port`。显式来源（命令行 > 环境变量 > 配置文件）优先级不变。
 - **状态**：`DECIDED`
 
 ---

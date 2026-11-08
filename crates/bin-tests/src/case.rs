@@ -21,8 +21,28 @@ pub struct Case {
     pub name: &'static str,
     /// 需要的服务端形态。
     pub kind: CaseKind,
+    /// 执行前需要准备的测试环境；入口会在启动服务端之前按需准备一次。
+    pub prep: &'static [Prep],
     /// 执行函数。
     pub run: CaseFn,
+}
+
+/// 用例对测试环境的额外前置要求。
+///
+/// 与 [`CaseKind`] 分开：`kind` 决定用哪个服务端，`prep` 决定启动服务端之前要先准备什么环境。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Prep {
+    /// 需要 WebUI 构建产物（`lingting-agent-ui/dist`）才能执行。
+    WebUiBuild,
+}
+
+impl Prep {
+    /// 控制台与报告里展示的准备动作说明。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WebUiBuild => "构建 WebUI 产物",
+        }
+    }
 }
 
 /// 用例与服务端资源的绑定方式。
