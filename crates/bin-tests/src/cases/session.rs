@@ -14,6 +14,7 @@ pub(crate) fn cases() -> Vec<Case> {
     vec![Case {
         name: "session.message",
         kind: CaseKind::Shared,
+        prep: &[],
         run: message,
     }]
 }

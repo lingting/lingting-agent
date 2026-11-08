@@ -12,16 +12,19 @@ pub(super) fn cases() -> Vec<Case> {
         Case {
             name: "tui.ctrl_c_ignored",
             kind: CaseKind::Shared,
+            prep: &[],
             run: ctrl_c_ignored,
         },
         Case {
             name: "tui.esc_cancel",
             kind: CaseKind::Shared,
+            prep: &[],
             run: esc_cancel,
         },
         Case {
             name: "tui.ctrl_d_cancel",
             kind: CaseKind::Shared,
+            prep: &[],
             run: ctrl_d_cancel,
         },
     ]

@@ -3,6 +3,7 @@
 mod probe;
 mod session;
 mod tui;
+mod web;
 
 use crate::case::Case;
 
@@ -12,6 +13,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(probe::cases());
     cases.extend(session::cases());
     cases.extend(tui::cases());
+    cases.extend(web::cases());
     cases.sort_by_key(|case| case.name);
     cases
 }

@@ -10,6 +10,7 @@ pub(super) fn cases() -> Vec<Case> {
     vec![Case {
         name: "tui.render",
         kind: CaseKind::Shared,
+        prep: &[],
         run: render,
     }]
 }

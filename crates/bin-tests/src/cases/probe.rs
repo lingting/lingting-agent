@@ -19,16 +19,19 @@ pub(crate) fn cases() -> Vec<Case> {
         Case {
             name: "probe.health",
             kind: CaseKind::Shared,
+            prep: &[],
             run: health,
         },
         Case {
             name: "probe.echo",
             kind: CaseKind::Shared,
+            prep: &[],
             run: echo,
         },
         Case {
             name: "probe.error",
             kind: CaseKind::Shared,
+            prep: &[],
             run: error,
         },
     ];
@@ -37,6 +40,7 @@ pub(crate) fn cases() -> Vec<Case> {
     cases.push(Case {
         name: "probe.shutdown",
         kind: CaseKind::Isolated,
+        prep: &[],
         run: shutdown,
     });
     cases

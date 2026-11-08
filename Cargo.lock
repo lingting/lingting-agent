@@ -283,6 +283,7 @@ version = "26.11.0"
 dependencies = [
  "anyhow",
  "clap",
+ "framework-http",
  "futures-util",
  "lib-bin-cli",
  "lib-bin-tui",

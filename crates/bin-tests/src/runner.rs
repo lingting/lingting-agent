@@ -2,6 +2,7 @@
 
 use crate::case::{Case, CaseKind};
 use crate::context::TestContext;
+use crate::prepare;
 use crate::report::{self, CaseReport, RunReport};
 use crate::server::{self, Server};
 use anyhow::{Context, Result, anyhow};
@@ -85,6 +86,8 @@ pub async fn execute(config: Config) -> Result<Summary> {
     let run_dir = create_run_dir(&run_id)?;
     println!("测试运行目录：{}", run_dir.display());
 
+    // 准备必须早于服务端启动：静态托管在启动时记录产物状态，用例执行期间不再重建。
+    prepare::ensure(&config.cases).await?;
     let shared = start_shared(&config.cases, &run_dir).await?;
     let shared_base_url = shared.as_ref().map(|server| server.base_url().to_string());
     let shared_context = match shared_base_url.as_deref() {

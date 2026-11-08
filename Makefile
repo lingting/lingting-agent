@@ -34,7 +34,8 @@ fmt:
 	cargo fmt --all
 
 # 测试：ARGS 必填，传用例名前缀或 --all，例如 make test ARGS="--all"。
-# 前置：先重新生成 SDK，再构建 bin-agent（测试入口以子进程拉起服务端）。
+# 本目标只是入口：`gen` 必须在构建之前完成（`lib-bin-cli` 用 `#[path]` 引入生成物，缺生成物
+# 连 bin-tests 都编译不出来），其余运行期准备（如 ui-build）由 bin-tests 按选中用例自行执行。
 test: gen
 	cargo build --quiet -p bin-agent
 	cargo run --quiet -p bin-tests -- $(ARGS)

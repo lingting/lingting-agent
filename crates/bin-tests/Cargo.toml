@@ -16,6 +16,7 @@ lib-core = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
+framework-http = { workspace = true, features = ["reqwest"] }
 futures-util = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 

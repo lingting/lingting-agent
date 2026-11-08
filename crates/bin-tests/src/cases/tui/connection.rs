@@ -11,6 +11,7 @@ pub(super) fn cases() -> Vec<Case> {
     vec![Case {
         name: "tui.offline",
         kind: CaseKind::Shared,
+        prep: &[],
         run: offline_server,
     }]
 }

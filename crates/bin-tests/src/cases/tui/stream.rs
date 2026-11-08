@@ -14,6 +14,7 @@ pub(super) fn cases() -> Vec<Case> {
     let mut cases = vec![Case {
         name: "tui.stream",
         kind: CaseKind::Shared,
+        prep: &[],
         run: stream,
     }];
     // 关闭探针只在 debug 构建注册，断线用例靠它触发服务端关闭。
@@ -21,6 +22,7 @@ pub(super) fn cases() -> Vec<Case> {
     cases.push(Case {
         name: "tui.interrupted",
         kind: CaseKind::Isolated,
+        prep: &[],
         run: interrupted,
     });
     cases
