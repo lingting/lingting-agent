@@ -1,8 +1,8 @@
 # Personal Agent 开发路线图
 
-本目录是本项目的分阶段开发路线图。**P1 详细到可直接执行，P2–P6 只做阶段级规划。**
+本目录是本项目的分阶段开发路线图。**P1 已完成，P2 已细化到可直接执行（等待确认），P3–P6 只做阶段级规划。**
 
-本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构仍待 P1-016 前确认。
+本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构以 `docs/develop.md` 的「前端工程」一节为准。
 
 ---
 
@@ -39,8 +39,8 @@
 | WebUI | TypeScript + Vite（框架待定，见 `p1/decisions.md`） | P1 |
 | Serialize | Serde | P1 |
 | 日志与追踪 | logging 经 `framework-core`，后续接 tracing / OpenTelemetry | P1 / P6 |
-| LLM Provider 抽象 | Rig | P2 |
-| 持久化 | SQLite | P2 |
+| LLM Provider 抽象 | `rig-core`（不用 `rig` facade 的 `agent` 特性，见 `p2/decisions.md` D-P2-001） | P2 |
+| 持久化 | SQLite（`sqlx`，见 `p2/decisions.md` D-P2-002 / D-P2-003） | P2 |
 | MCP | rmcp | P4 |
 
 > 说明：`framework-*` 系列 crate（`framework-proc-web` / `framework-proc-ts` / `framework-proc-core` / `framework-web` / `framework-web-axum`）是作者自有框架，源码位于本地仓库 `D:/code/lingting/lingting-rust-framework`，workspace 版本 26.11.0。P1 中允许为满足 SDK 生成与优雅关闭需求向该框架提交改动。
@@ -52,7 +52,7 @@
 | 阶段 | 目标 | 核心产出 | 文档 |
 |------|------|----------|------|
 | **P1** | 基础工程架构 | 单 Binary 双运行模式、Server 基础能力、统一 API 契约、TS/Rust 双 SDK 生成、TUI/WebUI 最小闭环（Mock） | [p1/README.md](p1/README.md) |
-| **P2** | 基础 Agent Runtime | Rig Provider Adapter、Agent Loop、Session/Message/Context、Streaming、SQLite 持久化、Run 生命周期与取消 | [p2/README.md](p2/README.md) |
+| **P2** | 基础 Agent Runtime | Rig Provider Adapter、Agent Loop、Session/Message/Context、Streaming、SQLite 持久化、Run 生命周期与取消 | [p2/README.md](p2/README.md)（已细化：`tasks.md` / `acceptance.md` / `decisions.md`） |
 | **P3** | Tool System | Tool Trait / Registry / Executor、Tool Calling Loop、权限与审计、并行调用、5 个内置工具 | [p3/README.md](p3/README.md) |
 | **P4** | MCP Integration | 基于 rmcp 的 MCP Client Manager、Server Registry、工具发现与适配 | [p4/README.md](p4/README.md) |
 | **P5** | Skills | Skill 发现与加载、SKILL.md、渐进披露、Skill 与 Tool 协作 | [p5/README.md](p5/README.md) |
@@ -94,7 +94,8 @@ P6 Production Readiness
 | framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
 | SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
 | P1 | **已完成**：P1-001 ~ P1-020 全部完成并通过验收（九类条目全部通过，结论与证据见 [`reports/p1-020-acceptance.md`](../docs/reports/p1-020-acceptance.md)）；判据修订（A-1、E-3、E-4）见 `p1/decisions.md` D-032。下一步：P2 细化前先读该报告的「P2 输入清单」 |
-| P2–P6 | 未开始，仅有阶段级规划 |
+| P2 | **已细化，未开工**：`p2/tasks.md`（35 个任务、8 个批次）、`p2/acceptance.md`（14 类验收条目）、`p2/decisions.md`（27 项决策 + 6 项 OPEN）已就绪，**等待用户确认路线图**；P1 遗留项（A-1 / E-3 / E-4 / W-1）已在 P2 内分配任务 |
+| P3–P6 | 未开始，仅有阶段级规划 |
 
 ---
 
@@ -102,8 +103,8 @@ P6 Production Readiness
 
 1. **开始 P1 前**：先读 `p1/README.md` 的阶段边界与执行顺序，再读 `p1/decisions.md` 中所有 `OPEN` 项，确认哪些必须在动手前讨论。
 2. **执行任务**：按 `p1/tasks.md` 的依赖顺序取任务。任务分为若干批次（Batch），同一批次内可以并行，批次之间必须按顺序。
-3. **验收**：每个阶段结束时对照该阶段的 `acceptance.md`（P2–P6 为 README 中的“阶段验收方向”）逐条确认。
-4. **细化后续阶段**：P2 在 P1 验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`。P3–P6 同理，禁止提前细化。
+3. **验收**：每个阶段结束时对照该阶段的 `acceptance.md` 逐条确认（P1 / P2 已有该文件；P3–P6 暂以各自 README 中的“阶段验收方向”为准）。
+4. **细化后续阶段**：P1 已完成、P2 已细化（等待确认后开工）。P3–P6 在前一阶段验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`，禁止提前细化。
 5. **结构设计**：Cargo Workspace、Crate 划分与依赖方向以 `docs/workspace.md` 为准；前端工程结构在 P1-016 前确认。
 
 ---

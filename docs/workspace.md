@@ -620,20 +620,20 @@ manager-agent -> service-agent
 | `lib-core` | 无 | framework 基础能力 | 任何业务 / Agent / Web / Binary Crate |
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
-| `service-core` | `types-core`、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`）；P1-011 起用 Tokio（Mock 事件流的定时与通道） | 任何 `agent-*`、`lib-web*`、`bin-*` |
+| `service-core` | `types-core`、`agent-core`（仅类型层，P2 起）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`）；Tokio（异步 Service 接口与内部定时任务） | `agent-*` 中除 `agent-core` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`lib-web*`、`bin-*` |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
 | `agent-tool` | `agent-context-core`、`lib-core` | JSON Schema 相关库 | `agent-runtime`、`agent-mcp` |
 | `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
 | `agent-context` | `agent-context-core`、`agent-skill`、`agent-mcp`、`agent-tool`、`agent-core`、`lib-core` | 无 LLM SDK | `agent-runtime`、`lib-web*` |
-| `agent-route` | `service-core`、`types-core`、`lib-core` | Rig | `agent-runtime`、`lib-web*` |
-| `agent-runtime` | `agent-core`、`agent-context`、`agent-tool`、`agent-route`、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
+| `agent-route` | `agent-core`、`service-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`lib-web*` |
+| `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-tool`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
-| `lib-web` | `lib-web-core`、`service-core`、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体） | `lib-bin-*`、`bin-*` |
+| `lib-web` | `lib-web-core`、`service-core`、`agent-core`（契约类型，P2 起）、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体） | `lib-bin-*`、`bin-*` |
 | `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | `framework-http`（HTTP 收发，启用 `reqwest` 后端）、Clap、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber`、Tokio（客户端命令的运行时）、`url`（查询串编码） | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖）；也不得直接依赖 reqwest 发请求（HTTP 只经 `framework-http`） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui、Tokio（工作线程的异步运行时）、`unicode-width`（显示宽度与折行） | Agent Runtime、服务端业务实现 |
-| `lib-bin-web` | `lib-web`、`lib-web-core`、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 直接调用、业务逻辑 |
+| `lib-bin-web` | `lib-web`、`lib-web-core`、`service-core`、`agent-runtime`、`lib-db`（后三者用于启动装配，P2 起）、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 的业务方法调用（只做构造与注入）、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
@@ -741,14 +741,17 @@ flowchart BT
 3. `agent-skill`、`agent-tool`、`agent-mcp` 可以依赖 `agent-context-core`。
 4. `agent-mcp` 使用 `agent-tool` 作为内部工具适配目标。
 5. `agent-context` 负责协调 Skill、MCP、Tool 对 Context 的贡献。
-6. `agent-runtime` 负责调用 `agent-context`、`agent-tool` 和 `agent-route`。
+6. `agent-runtime` 负责调用 `agent-context`、`agent-tool`、`agent-route`，并通过 `service-core` 的 Service 持久化 Session / Message / Run（P2 起）；Runtime 不直接写 SQL。
 7. `agent-route` 可以读取 `service-core` 提供的 Provider / Model 配置。
-8. `service-core` 不反向依赖 `agent-runtime`、`agent-route`。
+8. `service-core` 不反向依赖 `agent-runtime`、`agent-route`、`agent-context*`；自 P2 起允许依赖 `agent-core` **且仅限其类型层**（契约类型迁移后的必然结果）。
 9. 工具模块、MCP 模块不得反向依赖 `agent-runtime`。
 10. `lib-web-core` 不反向依赖 `lib-web`。
 11. `lib-web` 不依赖 Binary。
 12. `lib-bin-web` 负责启动和组合 Web 能力。
 13. Binary 负责最终组合不同入口。
+14. 启动装配（构造 Repository、Service、Runtime 并注入）由 `lib-bin-web` 完成；它不得调用 Runtime 的业务方法，业务动作一律经 `lib-web` 的 Handler → Service / Runtime。
+15. `agent-route` 是唯一允许依赖 Rig 的 Crate，且 Rig 类型不得离开其 Adapter 模块。
+16. `lib-db` 只提供连接、迁移与事务，不含业务表与业务 SQL；业务 SQL 归 `service-core` 的 `repository`。
 
 ### 5.4 禁止依赖关系
 
@@ -852,6 +855,19 @@ P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此
 P1 阶段不创建任何 `agent-*` Crate：`lib-web` 在 P1 只暴露 Mock 契约接口，Agent 领域 Crate 按第 8.2 节的阶段推进。
 
 Session / Message / Run 的契约类型在 P1 是**阶段裁剪**：它们落在 `types-core` 的 `session` 模块（P2 建 `agent-core` 后按 6.2 整体迁移，类型名与字段不变），Mock 业务与内存存储落在 `service-core` 的 `session` 模块，`lib-web` 的 `session` 模块只做 Handler 与错误映射。详见 `.steps/p1/decisions.md` D-025。
+
+### 8.1.1 P2 计划的依赖边（尚未实现）
+
+P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`，并新增以下**目标架构**依赖边（已写入 5.1 / 5.3，实施时按任务同步各小节与本节）：
+
+| 边 | 说明 |
+|---|---|
+| `service-core -> agent-core` | 仅类型层；契约类型从 `types-core::session` 迁入 `agent-core` 后成立 |
+| `agent-runtime -> service-core` | Runtime 经 Service 持久化 Run / Message，不直接写 SQL |
+| `lib-web -> agent-core`、`lib-web -> agent-runtime` | Handler 的契约类型与事件流来源 |
+| `lib-bin-web -> service-core` / `agent-runtime` / `lib-db` | 启动装配与注入（对应 P1 D-025） |
+
+`RunEventStream` 由 `service-core` 迁入 `agent-runtime`，进程级 `holder` 由 `service-core` 迁入 `lib-web`（改为启动期显式初始化）。决策依据见 `.steps/p2/decisions.md` D-P2-018 / D-P2-019。
 
 ### 8.2 后续阶段创建范围
 
