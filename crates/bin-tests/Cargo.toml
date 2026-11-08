@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 lib-bin-cli = { workspace = true }
+lib-bin-tui = { workspace = true, features = ["testing"] }
 lib-core = { workspace = true }
 
 anyhow = { workspace = true }

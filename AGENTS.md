@@ -47,6 +47,11 @@
 26. 未经明确规划，不得提前创建 `bin-tui`、`bin-web`、`bin-mock-server`。
 27. 不得超出当前阶段的开发范围。
 
+### 测试
+
+28. 测试用例只写在 `bin-tests`，其他 Crate 不得包含 `#[cfg(test)]` 单元测试。
+29. 其他 Crate 为测试提供的入口必须由 feature 隔离（如 `lib-bin-tui` 的 `testing`），且只在 `bin-tests` 启用。
+
 ## 文档维护约束
 
 - `README.md` 仅保留功能介绍与文档索引。

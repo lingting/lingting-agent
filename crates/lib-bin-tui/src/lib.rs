@@ -17,6 +17,9 @@ mod text;
 mod ui;
 mod worker;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 use lib_bin_cli::config;
 use lib_bin_cli::result::CommandError;
 use lib_core::logger;

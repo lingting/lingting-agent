@@ -50,7 +50,8 @@
 
 约定：
 
-- 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总。
+- 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总；领域内用例变多时拆成 `cases/<领域>/` 子模块，由 `cases/<领域>.rs` 统一注册与放公共辅助。
+- 测试只写在 `bin-tests`：其他 crate 不写 `#[cfg(test)]` 单元测试，为测试提供的入口必须由 feature 隔离（如 `lib-bin-tui` 的 `testing`）且只在 `bin-tests` 启用。
 - 用例只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。
 - 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
 - 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。

@@ -169,7 +169,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
     let hint = match app.focus {
         Focus::Input => {
-            "Enter 发送 · Shift+Enter 换行 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+C 退出"
+            "Enter 发送 · Shift+Enter 换行 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+D 退出"
         }
         Focus::Sessions => "↑↓ 选择 · Enter 打开 · n 新建 · q 退出 · Tab/Esc 回到输入",
     };
@@ -219,61 +219,4 @@ fn border_style(focused: bool) -> Style {
 /// 次要文字样式。
 fn faded() -> Style {
     Style::new().fg(Color::DarkGray)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::layout::Position;
-
-    fn draw_app(app: &App, width: u16, height: u16) -> Position {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("测试终端");
-        terminal.draw(|frame| draw(frame, app)).expect("绘制一帧");
-        terminal.get_cursor_position().expect("读取光标位置")
-    }
-
-    #[test]
-    fn cursor_sits_at_text_end_of_input_box() {
-        let mut app = App::new("http://127.0.0.1:1".to_string());
-        app.handle_paste("ab中文");
-
-        // 输入框内容区左上角是 (1, 19)：状态栏 1 行、主体 17 行、上边框 1 行。
-        // 光标在 "ab中文" 之后，显示宽度 6 列。
-        assert_eq!(draw_app(&app, 80, 24), Position { x: 7, y: 19 });
-    }
-
-    #[test]
-    fn cursor_stays_inside_input_box_when_text_scrolls() {
-        let mut app = App::new("http://127.0.0.1:1".to_string());
-        app.handle_paste("第一行\n第二行\n第三行\n第四行\n第五行");
-
-        // 内容超过框内 3 行可见高度时，光标停在内容区最后一行，不会越界到底部提示行。
-        assert_eq!(draw_app(&app, 80, 24).y, 21);
-    }
-
-    #[test]
-    fn tiny_terminal_keeps_input_renderable() {
-        let mut app = App::new("http://127.0.0.1:1".to_string());
-        app.handle_paste("很长的输入内容会软换行\n第二行\n第三行\n第四行");
-
-        // 行数不足以放下全部固定高度时也不能 panic：光标位置只会落在终端可见范围内。
-        let position = draw_app(&app, 20, 6);
-        assert!(position.x < 20);
-        assert!(position.y < 6);
-    }
-
-    #[test]
-    fn cursor_is_hidden_when_sessions_focused() {
-        let mut app = App::new("http://127.0.0.1:1".to_string());
-        app.handle_paste("ab");
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        // 焦点不在输入框时不设置终端光标，位置由终端自己决定。
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("测试终端");
-        terminal.draw(|frame| draw(frame, &app)).expect("绘制一帧");
-        assert!(!terminal.backend().cursor_visible());
-    }
 }

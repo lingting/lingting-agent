@@ -15,10 +15,15 @@ use lib_bin_cli::sdk::{
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task::JoinSet;
+use tokio::time::timeout;
 
 /// 会话标题取任务文本时的最大字符数。
 const TITLE_CHARS: usize = 30;
+/// 界面退出后给已发出的请求留的收尾窗口：够一条取消请求落地，又不会被长事件流拖住退出。
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 /// 工作线程句柄与两侧通道。
 pub struct Worker {
@@ -56,7 +61,8 @@ impl Worker {
         self.updates.try_recv().ok()
     }
 
-    /// 停止工作线程：关掉下行通道让接收端读到 `None`，运行中的任务随运行时一起丢弃。
+    /// 停止工作线程：关掉下行通道让接收端读到 `None`，已发出的请求在收尾窗口内尽力完成，
+    /// 仍在运行的任务随运行时一起丢弃。
     pub fn shutdown(mut self) {
         drop(self.commands);
         if let Some(handle) = self.handle.take() {
@@ -93,42 +99,46 @@ fn run(base_url: String, mut commands: UnboundedReceiver<Command>, updates: Send
                 return;
             }
         };
+        let mut tasks = JoinSet::new();
         while let Some(command) = commands.recv().await {
-            dispatch(client.clone(), command, updates.clone());
+            dispatch(client.clone(), command, updates.clone(), &mut tasks);
         }
+        // 界面关掉下行通道说明开始退出：给刚发出的请求（退出时的取消）一个短暂窗口，
+        // 超时后仍在跑的任务（例如没被取消掉的事件流）随运行时一起丢弃，退出不被拖住。
+        let _ = timeout(SHUTDOWN_GRACE, async { while tasks.join_next().await.is_some() {} }).await;
     });
 }
 
 /// 把一条请求派发成任务：请求之间互不阻塞，因此中断不必等长回复。
-fn dispatch(client: Arc<Client>, command: Command, updates: Sender<Update>) {
+fn dispatch(client: Arc<Client>, command: Command, updates: Sender<Update>, tasks: &mut JoinSet<()>) {
     match command {
         Command::Refresh { session } => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 refresh(&client, session, &updates).await;
             });
         }
         Command::CreateSession => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 create_session(&client, &updates).await;
             });
         }
         Command::OpenSession { session_id } => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 open_session(&client, session_id, &updates).await;
             });
         }
         Command::Send { session_id, content } => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 send_message(&client, session_id, content, &updates).await;
             });
         }
         Command::Cancel { run_id } => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 cancel(&client, run_id, &updates).await;
             });
         }
         Command::Probe => {
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 probe(&client, &updates).await;
             });
         }

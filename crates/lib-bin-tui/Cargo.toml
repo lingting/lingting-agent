@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# 仅供测试入口使用：暴露无终端驱动，界面状态机与工作线程照常运行，但不碰真实终端。
+testing = []
+
 [dependencies]
 lib-bin-cli = { workspace = true }
 lib-core = { workspace = true }
