@@ -57,6 +57,7 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
             .await?;
         let mut reply = String::new();
         let mut last_seq = -1;
+        let mut event_count = 0;
         let mut completed = false;
 
         while let Some(event) = stream.recv().await? {
@@ -64,6 +65,7 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
             ensure!(event.session_id == session.id, "事件会话 ID 不一致");
             ensure!(event.seq > last_seq, "事件序号未递增：{}", event.seq);
             last_seq = event.seq;
+            event_count += 1;
 
             match event.event {
                 RunEventKind::RunStarted => {
@@ -109,6 +111,20 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
         ensure!(messages[0].content == content, "第一条消息内容不一致");
         ensure!(messages[1].role == MessageRole::Assistant, "第二条消息应为助手消息");
         ensure!(!messages[1].content.is_empty(), "助手消息内容为空");
-        Ok(())
+
+        Ok(vec![
+            format!("会话：id={}，title={}", session.id, session.title),
+            format!("用户消息：id={}，内容={}", sent.message.id, content),
+            format!(
+                "Run：id={}，初始状态={:?}，输出 token={}",
+                sent.run.id,
+                sent.run.status,
+                finished.output_tokens.unwrap_or_default()
+            ),
+            format!("事件流：{event_count} 条事件，最后序号 {last_seq}"),
+            format!("助手回复：{} 字符", reply.chars().count()),
+            format!("Run 终态：{:?}", finished.status),
+            format!("消息列表：{} 条（用户 + 助手）", messages.len()),
+        ])
     })
 }

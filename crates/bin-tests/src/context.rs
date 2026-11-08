@@ -1,4 +1,4 @@
-//! 用例上下文：生成的 SDK 客户端与用例内唯一标记。
+//! 用例上下文：服务基地址、生成的 SDK 客户端与用例内唯一标记。
 
 use anyhow::{Context, Result};
 use lib_bin_cli::client::Client;
@@ -7,14 +7,20 @@ use lib_core::time;
 /// 用例执行时拿到的上下文。
 pub struct TestContext {
     name: &'static str,
+    base_url: String,
     client: Client,
 }
 
 impl TestContext {
     /// 由服务基地址构建上下文。
     pub fn new(name: &'static str, base_url: String) -> Result<Self> {
-        let client = Client::new(base_url).context("创建客户端失败")?;
-        Ok(Self { name, client })
+        let client = Client::new(base_url.clone()).context("创建客户端失败")?;
+        Ok(Self { name, base_url, client })
+    }
+
+    /// 服务基地址，写入用例报告。
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// 生成的 SDK 客户端。

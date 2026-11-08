@@ -5,8 +5,11 @@ use anyhow::Result;
 use std::future::Future;
 use std::pin::Pin;
 
+/// 用例成功后返回的结果信息：按条目记录实际观测，写入用例报告文档。
+pub type CaseOutcome = Vec<String>;
+
 /// 用例执行函数返回的 future。
-pub type CaseFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+pub type CaseFuture<'a> = Pin<Box<dyn Future<Output = Result<CaseOutcome>> + Send + 'a>>;
 
 /// 用例执行函数：借用上下文，返回可并发调度的 future。
 pub type CaseFn = for<'a> fn(&'a TestContext) -> CaseFuture<'a>;
@@ -32,7 +35,7 @@ pub enum CaseKind {
 }
 
 impl CaseKind {
-    /// `--list` 与结果输出里的短标签。
+    /// `--list`、控制台与报告里的短标签。
     pub fn label(self) -> &'static str {
         match self {
             Self::Shared => "shared",

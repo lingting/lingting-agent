@@ -7,6 +7,7 @@ mod case;
 mod cases;
 mod cli;
 mod context;
+mod report;
 mod runner;
 mod server;
 

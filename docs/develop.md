@@ -46,6 +46,7 @@
 | 隔离服务端 | 用例注册为 `Isolated` 时自起 `bin-agent server` 子进程，端口动态取空闲端口，适合有副作用（如触发关闭）或需要干净状态的用例 |
 | 子进程文件 | 根目录为系统临时目录下的 `lingting-agent-tests/<运行 ID>/`：共享服务端用 `shard-shared/`，隔离用例用 `<用例名>/`；`server.log` 是子进程输出，`data/`、`config.toml`、`logs*/` 来自 `AGENT_HOME` |
 | 服务端二进制 | 默认取测试入口同目录的 `bin-agent`，可用 `AGENT_TEST_SERVER_BIN` 覆盖；缺失时提示先执行 `make build` |
+| 测试报告 | 全部用例结束后写入 `target/tests/<运行 ID>/README.md`（汇总与用例索引）；用例按领域汇总到同目录 `<领域>.md`，README 索引给出该用例在领域文档中的行号范围，领域文档顶部也提供行号索引；每条含结果、耗时、服务地址、日志目录与用例返回的结果信息 |
 
 约定：
 

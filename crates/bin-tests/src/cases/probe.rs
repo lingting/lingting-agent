@@ -55,7 +55,14 @@ fn health(context: &TestContext) -> CaseFuture<'_> {
         ensure!(health.started_at_ms > 0, "启动时间为 0");
         ensure!(health.uptime_ms >= 0, "运行时长为负");
         ensure!(health.running_run_count >= 0, "运行中 Run 数为负");
-        Ok(())
+
+        Ok(vec![
+            format!("服务版本：{}", health.version),
+            format!("协议版本：{}", health.protocol_version),
+            format!("启动时间（Unix 毫秒）：{}", health.started_at_ms),
+            format!("运行时长：{}ms", health.uptime_ms),
+            format!("运行中 Run 数：{}", health.running_run_count),
+        ])
     })
 }
 
@@ -87,13 +94,21 @@ fn echo(context: &TestContext) -> CaseFuture<'_> {
             .await
             .map_err(ClientError::from_call)?;
         ensure!(!defaulted.flag, "省略 flag 时应为 false");
-        Ok(())
+
+        Ok(vec![
+            format!(
+                "完整回显：id={}，text={}，tag_count={}，flag={}",
+                echoed.id, echoed.text, echoed.tag_count, echoed.flag
+            ),
+            format!("省略可选字段时 flag 默认值：{}", defaulted.flag),
+        ])
     })
 }
 
 fn error(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let client = context.client();
+        let mut notes = Vec::new();
 
         let parameter = client
             .probe_fail(ProbeQueryPO {
@@ -106,6 +121,7 @@ fn error(context: &TestContext) -> CaseFuture<'_> {
             Err(ApiCallError::Transport(ClientError::Status { code, message })) => {
                 ensure!(code == 400, "size 超限应返回 400，实际 {code}");
                 ensure!(message == "size 超出探针允许范围", "参数错误的对外消息不符：{message}");
+                notes.push(format!("参数错误：status={code}，message={message}"));
             }
             Err(error) => bail!("size 超限应返回 400，实际错误：{error:?}"),
             Ok(_) => bail!("size 超限应返回 400，实际成功"),
@@ -119,11 +135,13 @@ fn error(context: &TestContext) -> CaseFuture<'_> {
                     "内部错误的对外消息应固定为“服务器内部错误”，实际 {message}"
                 );
                 ensure!(!message.contains("sql"), "对外消息泄漏内部细节");
+                notes.push(format!("内部错误：status={code}，message={message}"));
             }
             Err(error) => bail!("内部错误应返回 500，实际错误：{error:?}"),
             Ok(_) => bail!("内部错误应返回 500，实际成功"),
         }
-        Ok(())
+
+        Ok(notes)
     })
 }
 
@@ -133,10 +151,14 @@ fn shutdown(context: &TestContext) -> CaseFuture<'_> {
         let client = context.client();
         client.probe_shutdown().await.map_err(ClientError::from_call)?;
 
-        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let started = Instant::now();
+        let deadline = started + SHUTDOWN_TIMEOUT;
         loop {
             if client.probe_health().await.is_err() {
-                return Ok(());
+                return Ok(vec![
+                    "关闭接口返回成功".to_string(),
+                    format!("关闭后探活请求失败，耗时 {}ms", started.elapsed().as_millis()),
+                ]);
             }
             if Instant::now() >= deadline {
                 bail!("关闭请求后服务在 {} 秒内仍可访问", SHUTDOWN_TIMEOUT.as_secs());
