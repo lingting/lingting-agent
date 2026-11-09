@@ -22,39 +22,37 @@ pub async fn probe_void() {}
 
 /// `Json<T>` 请求体 + `Result<T>` 返回值：验证请求体提取与错误响应。
 #[web_api_post(path = "api/probe/echo")]
-pub async fn probe_echo(echo: Json<ProbeEchoPO>) -> Result<ProbeEchoVO> {
-    let params = echo.0;
+pub async fn probe_echo(Json(po): Json<ProbeEchoPO>) -> Result<ProbeEchoVO> {
     Ok(ProbeEchoVO {
-        id: params.id,
-        text: params.text,
-        tag_count: params.tags.len() as i64,
-        flag: params.flag.unwrap_or_default(),
+        id: po.id,
+        text: po.text,
+        tag_count: po.tags.len() as i64,
+        flag: po.flag.unwrap_or_default(),
     })
 }
 
 /// `Query<T>` 查询参数 + `Result<T>` 返回值：验证查询参数提取。
 #[web_api_get(path = "api/probe/query")]
-pub async fn probe_query(query: Query<ProbeQueryPO>) -> Result<ProbeQueryVO> {
-    Ok(probe_result(query.0))
+pub async fn probe_query(Query(po): Query<ProbeQueryPO>) -> Result<ProbeQueryVO> {
+    Ok(probe_result(po))
 }
 
 /// 直接返回载荷类型，并显式声明匿名访问：验证 `R<T>` 包装与 `auth` 参数。
 #[web_api_get(path = "api/probe/typed", auth = AuthRule::anonymous())]
-pub async fn probe_typed(query: Query<ProbeQueryPO>) -> ProbeQueryVO {
-    probe_result(query.0)
+pub async fn probe_typed(Query(po): Query<ProbeQueryPO>) -> ProbeQueryVO {
+    probe_result(po)
 }
 
 /// 显式返回业务错误：验证 `WebError` 的状态码与响应体。
 #[web_api_get(path = "api/probe/fail")]
-pub async fn probe_fail(query: Query<ProbeQueryPO>) -> Result<ProbeQueryVO> {
-    let params = query.0;
-    let size = params.size.unwrap_or(DEFAULT_SIZE);
+pub async fn probe_fail(Query(po): Query<ProbeQueryPO>) -> Result<ProbeQueryVO> {
+    let size = po.size.unwrap_or(DEFAULT_SIZE);
     if size > MAX_SIZE {
         return Err(
             WebError::parameter("size 超出探针允许范围", format!("请求数量 {size} 超过上限 {MAX_SIZE}")).into(),
         );
     }
-    Ok(probe_result(params))
+    Ok(probe_result(po))
 }
 
 /// 直接返回 `WebResponse`：验证自定义状态码与响应头，并且在元数据里被标记为 Blob。

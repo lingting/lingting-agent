@@ -166,6 +166,7 @@
 | path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel` / `stream`，不造同义动词 |
 | 元数据名 | 由 handler 函数名（snake_case）派生，两侧 SDK 的标识符同源派生，不手工改 |
 | 请求 DTO | 请求体 `*PO`，查询参数 `*Params` |
+| handler 参数 | 请求体与查询参数一律解构到 `po`：`Json(po): Json<*PO>`、`Query(po): Query<*Params>`；函数体内直接用 `po`，不引入 `params` / `query` 之类的中间变量，也不写 `.0` 二次取值 |
 | 响应 DTO | `*VO` |
 | 枚举 | `<业务名>Kind`（与框架 `RCodeKind` 一致），生成侧为同名结构 + `<NAME>_ALL` / `<NAME>_MAP` 映射 |
 | 字段 | camelCase；id 用 `String`（D-018）；`i64` 在 wire 上以字符串传输（D-018）；查询参数不出现 `bool`（D-021） |

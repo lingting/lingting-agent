@@ -18,8 +18,8 @@ use types_core::session::{
 
 /// 创建会话。
 #[web_api_post(path = "api/session/create")]
-pub async fn session_create(params: Json<SessionCreatePO>) -> Result<SessionSummary> {
-    holder::session().create_session(params.0).map_err(api_error)
+pub async fn session_create(Json(po): Json<SessionCreatePO>) -> Result<SessionSummary> {
+    holder::session().create_session(po).map_err(api_error)
 }
 
 /// 列出全部会话，按最后更新时间倒序。
@@ -30,26 +30,26 @@ pub async fn session_list() -> Vec<SessionSummary> {
 
 /// 列出指定会话的消息，按写入顺序返回。
 #[web_api_get(path = "api/message/list")]
-pub async fn message_list(params: Query<MessageListParams>) -> Result<Vec<Message>> {
-    holder::session().list_messages(params.0).map_err(api_error)
+pub async fn message_list(Query(po): Query<MessageListParams>) -> Result<Vec<Message>> {
+    holder::session().list_messages(po).map_err(api_error)
 }
 
 /// 发送消息：写入用户消息并创建对应的 Run。
 #[web_api_post(path = "api/message/create")]
-pub async fn message_create(params: Json<MessageSendPO>) -> Result<MessageSendVO> {
-    holder::session().send_message(params.0).map_err(api_error)
+pub async fn message_create(Json(po): Json<MessageSendPO>) -> Result<MessageSendVO> {
+    holder::session().send_message(po).map_err(api_error)
 }
 
 /// 查询 Run。
 #[web_api_get(path = "api/run/get")]
-pub async fn run_get(params: Query<RunGetParams>) -> Result<Run> {
-    holder::session().get_run(params.0).map_err(api_error)
+pub async fn run_get(Query(po): Query<RunGetParams>) -> Result<Run> {
+    holder::session().get_run(po).map_err(api_error)
 }
 
 /// 取消未结束的 Run。
 #[web_api_post(path = "api/run/cancel")]
-pub async fn run_cancel(params: Json<RunCancelPO>) -> Result<Run> {
-    holder::session().cancel_run(params.0).map_err(api_error)
+pub async fn run_cancel(Json(po): Json<RunCancelPO>) -> Result<Run> {
+    holder::session().cancel_run(po).map_err(api_error)
 }
 
 /// 订阅 Run 的事件流：`text/event-stream`，每条事件是 `RunEvent`。
@@ -58,8 +58,8 @@ pub async fn run_cancel(params: Json<RunCancelPO>) -> Result<Run> {
 /// 元数据里本接口是 `Blob`（D-007）：SDK 只导出 path 常量，SSE 的消费由客户端自己实现，
 /// 事件类型用生成的 `RunEvent` 反序列化，`event:` 行等于 `event` 字段的取值。
 #[web_api_get(path = "api/run/stream")]
-pub async fn run_stream(params: Query<RunStreamParams>) -> Result<WebResponse> {
-    let events = holder::session().subscribe_run(params.0).map_err(api_error)?;
+pub async fn run_stream(Query(po): Query<RunStreamParams>) -> Result<WebResponse> {
+    let events = holder::session().subscribe_run(po).map_err(api_error)?;
     let mut response = WebResponse::stream(200, sse::CONTENT_TYPE, stream::body(events));
     response.headers.set(sse::HEADER_CACHE_CONTROL, sse::VALUE_NO_CACHE);
     response.headers.set(sse::HEADER_NO_BUFFERING, sse::VALUE_NO_BUFFERING);
