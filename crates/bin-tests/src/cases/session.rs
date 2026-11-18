@@ -105,7 +105,7 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
                     break;
                 }
                 RunEventKind::RunFailed => bail!("Run 失败：{}", event.error.unwrap_or_default()),
-                RunEventKind::Heartbeat | RunEventKind::ServerShutdown => {}
+                RunEventKind::Heartbeat | RunEventKind::ServerShutdown | RunEventKind::RunCancelled => {}
             }
         }
 

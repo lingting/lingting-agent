@@ -87,6 +87,7 @@ async fn execute_async(args: &RunArgs, client: &Client) -> Result<()> {
                     content.chars().count()
                 ));
             }
+            RunEventKind::RunCancelled => break,
             RunEventKind::RunStarted | RunEventKind::Heartbeat => {}
         }
     }

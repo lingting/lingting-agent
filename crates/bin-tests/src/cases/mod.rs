@@ -2,6 +2,7 @@
 
 mod client;
 mod probe;
+mod runtime;
 mod sdk;
 mod session;
 mod tui;
@@ -14,6 +15,7 @@ pub fn all() -> Vec<Case> {
     let mut cases = Vec::new();
     cases.extend(client::cases());
     cases.extend(probe::cases());
+    cases.extend(runtime::cases());
     cases.extend(sdk::cases());
     cases.extend(session::cases());
     cases.extend(tui::cases());

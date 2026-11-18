@@ -326,6 +326,10 @@ async fn consume(client: &Client, run_id: String, updates: &Sender<Update>) {
                 send(updates, Update::Interrupted { reason });
                 return;
             }
+            RunEventKind::RunCancelled => {
+                send(updates, Update::StreamEnded);
+                return;
+            }
             RunEventKind::Heartbeat => {}
         }
     }

@@ -367,6 +367,19 @@ max_bytes = 536870912
 
 ---
 
+## D-P1.1-009 `RunStreamParams` 的删除时机
+
+- **问题**：RT-005 要求删除 `RunStreamParams`，RT-018 又把同一文件的删除列为自己的范围，两处冲突；而 `run_stream` handler、`service_core::session::service::subscribe_run`、`bin-cli` / `bin-tui` 都引用该类型，RT-005 删除会让工作区无法编译，且此时还没有替代的事件生产方。
+- **可选方案**：
+  1. RT-005 只新增 `types-core::runtime` 契约，`RunStreamParams` 与 `run_stream` 一起留到 RT-018 删除。
+  2. RT-005 提前删除该类型，同时把 handler、`subscribe_run`、客户端消费路径一并改造（把 RT-018 前移至 Batch B）。
+- **决策**：方案 1。RT-005 只新增契约类型（含 `RunEventKind::RunCancelled`），`RunStreamParams` 的删除与端点移除统一归 RT-018。
+- **决策理由**：RT-018 依赖 Batch C + Batch E 的运行时会话，只有那时才有承接 `RunEvent` 的生产方；提前删除会让 P1 的对话闭环中断，且违反 Batch 之间的强序。
+- **配套约束**：RT-005 的验收判据中“`RunStreamParams` 已消失”与“path 常量”两项随 RT-007 / RT-014 / RT-018 收口，`generate` 侧只需确认新类型已进入两份 SDK。
+- **状态**：`DECIDED`。
+
+---
+
 ## 被本阶段修订的既有决策
 
 按仓库 `AGENTS.md` 的文档维护约束，回填写入对应文件（任务 RT-021），本阶段不动它们：

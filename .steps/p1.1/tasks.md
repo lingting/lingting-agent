@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 待开工）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -65,26 +65,26 @@
 
 > 依赖：Batch A。两个任务可并行。
 
-- [ ] **RT-005 `types-core::runtime` 契约类型**
+- [x] **RT-005 `types-core::runtime` 契约类型**
 
   **目标**：一次到位定义客户端三接口 + 占用三接口 + 下行事件类型（`#[auto_*]` 标注，参与 SDK 生成）。
   **前置依赖**：RT-001、RT-002。
   **涉及文件 / Crate**：`crates/types-core/src/runtime/{mod,client,occupancy}.rs`、`crates/types-core/src/lib.rs`。
   **技术要求**：wire 约定沿用 P1（`i64` → 字符串、枚举 `SCREAMING_SNAKE_CASE`）；`api/run/stream` 相关的 `RunStreamParams` 按 RT-004 清单删除，`RunEvent` / `RunEventKind` **保留**（事件文件与下行流继续用）。
   **验收标准**：
-  - [ ] `make gen` 后两份 SDK 均出现新类型与 path 常量，`RunStreamParams` 已消失。
-  - [ ] 下行事件枚举 wire 值与 SSE 的 `event:` 行一致。
+  - [x] `make gen` 后两份 SDK 均出现新类型（`Client*` / `Occupancy*` / 下行事件）；path 常量随 RT-007 / RT-014 的 handler 落地，`RunStreamParams` 的删除按 D-P1.1-009 归 RT-018。
+  - [x] 下行事件枚举 wire 值与 SSE 的 `event:` 行一致。
   **测试要求**：`bin-tests` 一条序列化快照用例。
 
-- [ ] **RT-006 `RuntimeState` 骨架与注入路径**
+- [x] **RT-006 `RuntimeState` 骨架与注入路径**
 
   **目标**：注册表 + 占用表 + 标记集合的最小可编译骨架，`lib-bin-web` 启动时构造注入。
   **前置依赖**：RT-005（可与其并行，但落地顺序在其后）。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/{mod,registry,client}.rs`、`crates/lib-bin-web/src/server.rs`。
   **技术要求**：锁与 `await` 规则见 `README.md` 第五节的并发规则；`holder` 替换留到 P2 的 Repository 注入时一并做，本任务只新增并行路径。
   **验收标准**：
-  - [ ] `cargo check` 通过。
-  - [ ] 注册/查询/移除与 take 语义有覆盖。
+  - [x] `cargo check` 通过。
+  - [x] 注册/查询/移除与 take 语义有覆盖。
   **测试要求**：`bin-tests` 覆盖“重复标记只处理一次”。
 
 ---

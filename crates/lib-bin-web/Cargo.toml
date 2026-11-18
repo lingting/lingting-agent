@@ -13,6 +13,7 @@ publish = false
 lib-core = { workspace = true }
 lib-web = { workspace = true }
 lib-web-core = { workspace = true }
+service-core = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

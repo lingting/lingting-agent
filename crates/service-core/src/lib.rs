@@ -4,4 +4,5 @@
 //! `service` / `repository` / `holder` 分层，P2 只替换存储实现，不动契约。
 
 pub mod holder;
+pub mod runtime;
 pub mod session;

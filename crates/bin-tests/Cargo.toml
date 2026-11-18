@@ -13,6 +13,8 @@ publish = false
 lib-bin-cli = { workspace = true }
 lib-bin-tui = { workspace = true, features = ["testing"] }
 lib-core = { workspace = true }
+service-core = { workspace = true }
+types-core = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -290,7 +290,9 @@ dependencies = [
  "lib-bin-tui",
  "lib-core",
  "serde_json",
+ "service-core",
  "tokio",
+ "types-core",
 ]
 
 [[package]]
@@ -1732,6 +1734,7 @@ dependencies = [
  "lib-core",
  "lib-web",
  "lib-web-core",
+ "service-core",
  "tokio",
  "tracing",
 ]
