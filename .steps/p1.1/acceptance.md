@@ -1,6 +1,6 @@
 # P1.1 验收清单
 
-**状态：未开工。** 阶段边界与协议见 [README.md](README.md)，任务见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)。
+**状态：已开工（RT-001~RT-004 已完成）。** 阶段边界与协议见 [README.md](README.md)，任务见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)。
 
 逐条判据，全部通过才算本阶段完成。用例落在 `crates/bin-tests`（仓库 `AGENTS.md` 第 28 条）；除明确标注「人工」的条目，其余以自动化用例的结果为准。
 

@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已细化，未开工，等待确认本阶段。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 待开工）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -10,40 +10,40 @@
 
 > 依赖：本阶段确认。**本批次不写业务代码**，结论回填 `README.md` 与 `decisions.md`。
 
-- [ ] **RT-001 上行协议细节定稿**
+- [x] **RT-001 上行协议细节定稿**
 
   **目标**：把“SSE 下行 + POST 上行”落成可实现的细节：ping 与应答的请求形态、下行流断开的服务端感知方式、`clientId` 只在查询参数/请求体（无路径占位符，D-008）。
   **涉及文件 / Crate**：`decisions.md`（D-P1.1-001）；不写代码。
   **验收标准**：
-  - [ ] 每个端点的入参位置、返回形态（`R<T>` / `Blob`）明确。
-  - [ ] 下行流断开后“先标记、后由处理链清理”的时序写明。
-  - [ ] 明确 `service-core` 不感知传输（事件值类型 + 通道）。
+  - [x] 每个端点的入参位置、返回形态（`R<T>` / `Blob`）明确。
+  - [x] 下行流断开后“先标记、后由处理链清理”的时序写明。
+  - [x] 明确 `service-core` 不感知传输（事件值类型 + 通道）。
   **完成产物**：D-P1.1-001 定稿。
   **测试要求**：无（本任务不写代码）。
 
-- [ ] **RT-002 显式占用契约定稿**
+- [x] **RT-002 显式占用契约定稿**
 
   **目标**：定稿 `api/occupancy/create|delete|get` 的语义边界。
   **涉及文件 / Crate**：`decisions.md`（D-P1.1-002）；不写代码。
   **实施步骤**：确定占用与运行时会话的创建顺序（先占用成功后建会话/建文件）；确定冲突的三条固定 message；确定“客户端已占用其他会话”时是否需要客户端先 delete；确定占用释放与 Run 执行的联动（释放后仍在跑的 Run 落 `CANCELLED`）。
   **验收标准**：
-  - [ ] 一对一约束、冲突表达、释放与 Run 状态的联动三条结论明确。
-  - [ ] 与 `docs/api/readme.md` 错误契约不冲突。
+  - [x] 一对一约束、冲突表达、释放与 Run 状态的联动三条结论明确。
+  - [x] 与 `docs/api/readme.md` 错误契约不冲突。
   **完成产物**：D-P1.1-002 定稿。
   **测试要求**：无。
 
-- [ ] **RT-003 事件文件与轮转配置定稿**
+- [x] **RT-003 事件文件与轮转配置定稿**
 
   **目标**：定稿路径、格式、seq、写序、flush 粒度、终态事件、轮转配置默认值与触发时机。
   **涉及文件 / Crate**：`decisions.md`（D-P1.1-003）；不写代码。
   **验收标准**：
-  - [ ] `README.md` 第六节表格逐行有结论（含 `max_sessions` / `max_bytes` 默认值）。
-  - [ ] 数据量估算与“保护占用中会话”的实现方式写明。
-  - [ ] `[runtime.events]` 在 `ServerConfig` 中的字段与透传路径写明。
+  - [x] `README.md` 第六节表格逐行有结论（含 `max_sessions` / `max_bytes` 默认值）。
+  - [x] 数据量估算与“保护占用中会话”的实现方式写明。
+  - [x] `[runtime.events]` 在 `ServerConfig` 中的字段与透传路径写明。
   **完成产物**：D-P1.1-003 定稿。
   **测试要求**：无。
 
-- [ ] **RT-004 Run 触发点与 `run/stream` 移除定稿**
+- [x] **RT-004 Run 触发点与 `run/stream` 移除定稿**
 
   **目标**：`api/run/stream` 已定移除，需定稿替代触发点与迁移清单。
   **涉及文件 / Crate**：`decisions.md`（D-P1.1-004）；不写代码。
@@ -53,9 +53,9 @@
   3. 列迁移清单：`lib-web/src/session/api.rs` 的 `run_stream`、`lib-web/src/session/stream.rs`、`lib-bin-cli::client::subscribe_run`、TUI/WebUI 的流消费、`RunStreamParams` 类型、SDK 生成物。
   4. 列 P1/P2 回填项：D-007（SSE 契约）、D-011（TUI 连接管理）、D-026（run/stream 订阅即运行）、D-P2-006（Run 由订阅触发）、`docs/reports/p1-020-acceptance.md` 的 E-1 判据。
   **验收标准**：
-  - [ ] 触发点规则单一且无歧义。
-  - [ ] 迁移清单覆盖服务端、客户端、类型、文档四处。
-  - [ ] 已确认“移除后无订阅者的 `QUEUED` Run 永不执行”这一后果被接受。
+  - [x] 触发点规则单一且无歧义。
+  - [x] 迁移清单覆盖服务端、客户端、类型、文档四处。
+  - [x] 已确认“移除后无订阅者的 `QUEUED` Run 永不执行”这一后果被接受。
   **完成产物**：D-P1.1-004 定稿。
   **测试要求**：无。
 

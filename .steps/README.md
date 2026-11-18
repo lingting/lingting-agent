@@ -1,6 +1,6 @@
 # Personal Agent 开发路线图
 
-本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已细化（等待确认），P2 内容已过期（等 P1.1 完成后重新生成），P3–P6 只做阶段级规划。**
+本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已开工，P2 内容已过期（等 P1.1 完成后重新生成），P3–P6 只做阶段级规划。**
 
 本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构以 `docs/develop.md` 的「前端工程」一节为准。
 
@@ -98,7 +98,7 @@ P6 Production Readiness
 | framework 版本 | 本地源码 26.11.0（含未发布的 Rust 导出改动）；**P1-003 定稿：全部走 `path` 引入，暂不带 `version` 约束**；本地框架已删除 `framework-proc-ts`，TS/Rust 导出并入 `framework-proc-core` 的 `ts` / `rust` 特性，见 `p1/decisions.md` D-015 回填 |
 | SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
 | P1 | **已完成**：P1-001 ~ P1-020 全部完成并通过验收（九类条目全部通过，结论与证据见 [`reports/p1-020-acceptance.md`](../docs/reports/p1-020-acceptance.md)）；判据修订（A-1、E-3、E-4）见 `p1/decisions.md` D-032。下一步：P2 细化前先读该报告的「P2 输入清单」 |
-| P1.1 | **已细化，未开工**：`p1.1/tasks.md`（22 个任务、7 个批次）、`p1.1/acceptance.md`（21 条判据）、`p1.1/decisions.md`（8 项决策 + 既有决策回填清单）已就绪，**等待用户确认**；本阶段移除 `api/run/stream`，是 P2 的前置 |
+| P1.1 | **已开工（Batch A 定稿完成）**：`p1.1/tasks.md`（22 个任务、7 个批次）、`p1.1/acceptance.md`（21 条判据）、`p1.1/decisions.md`（8 项决策 + 既有决策回填清单）已就绪，本阶段移除 `api/run/stream`，是 P2 的前置 |
 | P2 | **内容已过期**：原 `p2/`（35 个任务、14 类验收、27 项决策 + 6 项 OPEN）建立在“Run 由 `api/run/stream` 订阅触发”的前提上（D-P2-006），该前提被 P1.1 改变；**等 P1.1 验收通过后按 P2 的目标重新生成方案**，不再直接采用现有内容 |
 | P3–P6 | 未开始，仅有阶段级规划 |
 
@@ -109,7 +109,7 @@ P6 Production Readiness
 1. **开始 P1 前**：先读 `p1/README.md` 的阶段边界与执行顺序，再读 `p1/decisions.md` 中所有 `OPEN` 项，确认哪些必须在动手前讨论。
 2. **执行任务**：按 `p1/tasks.md` 的依赖顺序取任务。任务分为若干批次（Batch），同一批次内可以并行，批次之间必须按顺序。
 3. **验收**：每个阶段结束时对照该阶段的 `acceptance.md` 逐条确认（P1 / P1.1 已有该文件；P2 待重新生成；P3–P6 暂以各自 README 中的“阶段验收方向”为准）。
-4. **细化后续阶段**：P1 已完成、P1.1 已细化（等待确认后开工）；P2 现有内容已过期，等 P1.1 完成后重新生成。P3–P6 在前一阶段验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`，禁止提前细化。
+4. **细化后续阶段**：P1 已完成、P1.1 已开工；P2 现有内容已过期，等 P1.1 完成后重新生成。P3–P6 在前一阶段验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`，禁止提前细化。
 5. **结构设计**：Cargo Workspace、Crate 划分与依赖方向以 `docs/workspace.md` 为准；前端工程结构在 P1-016 前确认。
 
 ---

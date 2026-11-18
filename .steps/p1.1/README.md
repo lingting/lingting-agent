@@ -1,6 +1,6 @@
 # P1.1 客户端连接与会话运行时
 
-**状态：已细化，未开工，等待确认。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 待开工）。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 **设计依据**：`.plan/运行时设计.md`。本阶段把该设计的语义（注册客户端、心跳、断连处理、会话占用、原始事件文件）落成服务端运行时内核，并因此**移除 `api/run/stream`**。
 
@@ -81,14 +81,16 @@ stateDiagram-v2
 | 语义 | 接口 | 说明 |
 |---|---|---|
 | 注册 | `POST api/client/create`（`ClientCreatePO {}`） | 返回 `ClientCreateVO { clientId, pongAtMs }`，**响应里的首个 pong 即注册成功信号** |
-| 下行流 | `GET api/client/stream`（`ClientStreamParams { clientId }`） | `text/event-stream`，承载 `pong`、`inquiry`、`session_event`、`client_closed` |
-| ping / 问询应答 | `POST api/client/update`（`ClientUpdatePO { clientId, kind }`，`kind ∈ {PING, INQUIRY_ACK}`） | 同步返回 pong；不再额外下发 `pong` 事件，避免一问两帧 |
-| 主动断开 | `POST api/client/delete`（`ClientDeletePO { clientId }`） | 幂等：已移除也返回成功 |
-| 建立占用 | `POST api/occupancy/create`（`OccupancyCreatePO { clientId, sessionId }`） | 成功即启动该会话运行时会话并打开事件文件；返回 `OccupancyVO` |
-| 释放占用 | `POST api/occupancy/delete`（`OccupancyDeletePO { clientId }`） | 幂等；释放即停止运行时会话、追加终态事件、flush |
-| 查询占用 | `GET api/occupancy/get`（`OccupancyGetParams { sessionId }`） | 返回当前占用者（无人占用时 404） |
+| 下行流 | `GET api/client/stream`（`ClientStreamParams { clientId }`） | `text/event-stream`，承载 `inquiry`、`session_event`、`client_closed`；空闲时每 15s 一帧 `: keepalive` 注释帧；不支持 `Last-Event-ID`（不续传） |
+| ping / 问询应答 | `POST api/client/update`（`ClientUpdatePO { clientId, kind }`，`kind ∈ {PING, INQUIRY_ACK}`） | 同步返回 pong（`R<ClientUpdateVO { pongAtMs }>`）；`pong` **不**进下行流，一次心跳只有一帧 |
+| 主动断开 | `POST api/client/delete`（`ClientDeletePO { clientId }`） | 幂等：已移除也返回成功；返回 204（`Void`） |
+| 建立占用 | `POST api/occupancy/create`（`OccupancyCreatePO { clientId, sessionId }`） | 成功即启动该会话运行时会话并打开事件文件；返回 `OccupancyVO`；同一对 (clientId, sessionId) 重复调用幂等返回当前占用 |
+| 释放占用 | `POST api/occupancy/delete`（`OccupancyDeletePO { clientId }`） | 幂等；返回 204（`Void`）；释放即停止运行时会话，该会话 `QUEUED` / `RUNNING` 的 Run 一律落 `CANCELLED`，追加终态事件后 flush |
+| 查询占用 | `GET api/occupancy/get`（`OccupancyGetParams { sessionId }`） | 返回当前占用者 `OccupancyVO`（无人占用时 404 `会话未被占用`） |
 
 `api/run/stream` **移除**；事件推送只剩 `api/client/stream` 一条通道。
+
+占用三接口的校验顺序、冲突表达、创建/释放顺序与 Run 联动见 [decisions.md](decisions.md) 的 D-P1.1-002「RT-002 定稿细节」。
 
 ### 4.2 错误表达
 
@@ -123,6 +125,10 @@ sequenceDiagram
     C->>S: POST api/client/update {INQUIRY_ACK}
 ```
 
+下行流本身不承载心跳：客户端每 15s 用 `POST api/client/update {PING}` 上行，pong 就在该请求的响应体里。因此下行流可能长时间空闲，由 `lib-web` 在帧合成层每 15s 注入一条 SSE 注释帧 `: keepalive`（不进入 `ClientEvent`、不占 `seq`、不落事件文件），同时充当写失败探测。
+
+端点入参位置与返回形态、下行帧结构、断开感知与标记时序的定稿见 [decisions.md](decisions.md) 的 D-P1.1-001「RT-001 定稿细节」。
+
 ### 4.4 断连判定（已定稿参数）
 
 | 来源 | 判定条件 | 标记原因 |
@@ -132,8 +138,9 @@ sequenceDiagram
 | 客户端主动断开 | `POST api/client/delete` | `ClientClosed` |
 | 下行流断 | SSE 响应体被 drop | `StreamClosed` |
 | 服务关闭 | `lifecycle::is_shutdown` 置位 | `ServerShutdown` |
+| 事件文件写失败 | append / flush 失败 | `JournalError` |
 
-五条来源**只允许造成一次标记**；重复触发被 take 语义吞掉。数值收敛为常量（不开放配置，见 D-P1.1-006）。
+六条来源**只允许造成一次标记**；重复触发被 take 语义吞掉。数值收敛为常量（不开放配置，见 D-P1.1-006）。
 
 ---
 
@@ -174,11 +181,11 @@ sequenceDiagram
 | 项 | 方案 |
 |---|---|
 | 路径 | `<应用根目录>/data/events/<sessionId>/<runtimeSessionId>.jsonl`（`lib_core::directorys` 推导，与 P2 的 `agent.db` 同级） |
-| 独占 | `OpenOptions::new().create_new(true)`；进程内再加 `sessionId` 级锁。不使用平台文件锁 |
+| 独占 | 文件以 `create(true).append(true)` 打开（不截断），`runtimeSessionId` 每次占用新生成；进程内再加 `sessionId` 级锁保证独占。不使用平台文件锁 |
 | 格式 | 行分隔 JSON，一行一条 `RunEvent`（**沿用 `types-core::session::RunEvent`**，不另造事件模型），`\n` 结尾，UTF-8 |
 | seq | 文件内单调递增、从 0 开始，写者持计数器 |
 | 写序 | **先落盘 flush，再转发**：文件是事实源，转发失败不影响落盘 |
-| 终态 | 收到 `run_completed` / `run_failed` / `server_shutdown` 或会话被停止时，追加终态事件后关闭文件；文件保留 |
+| 终态 | 收到 `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` 或会话被停止时，追加终态事件后关闭文件；文件保留 |
 | 异常 | 写入失败：停止该运行时会话、标记占用客户端、走断连链补偿；只进日志 |
 | 轮转 | **做**，配置见下表 |
 
@@ -200,7 +207,7 @@ max_bytes = 536870912
 | 保护 | 正在占用/写入的会话目录**永不删除**；保护项计入统计但不计入删除候选 |
 | 失败 | 删除失败（如 Windows 上文件被占用）跳过并继续下一个，只记日志 |
 
-> 默认值只作建议，最终值在 RT-003 定稿。
+> 默认值已定稿（RT-003）：`max_sessions = 200`、`max_bytes = 536870912`（512 MiB）；`0` 表示该维度不限。取消事件、`seq`、flush 粒度与清理保护的实现方式见 [decisions.md](decisions.md) 的 D-P1.1-003。
 
 ---
 
@@ -221,6 +228,8 @@ sequenceDiagram
     S-->>C: event: session_event（run_started / message_delta / run_completed）
     C->>S: GET api/run/get（对账终态）
 ```
+- 同一会话的 Run **串行**执行：`occupancy/create` 把存量 `QUEUED` 按创建时间排序，一次只跑一个；`message/create` 在已占用时排到队尾。
+- 会话未被占用时创建的 Run 停在 `QUEUED`，不会自执行；`message/create` 失败不会自动释放占用（客户端直接重试）。
 
 ### 7.2 断连处理链
 
