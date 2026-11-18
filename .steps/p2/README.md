@@ -1,6 +1,11 @@
 # P2：基础 Agent Runtime
 
-**状态：已细化，未开工，等待用户确认本路线图（`tasks.md` / `acceptance.md` / `decisions.md`）**
+> **⚠ 内容已过期（2026-11 更新）：本阶段方案建立在“Run 由 `api/run/stream` 订阅触发”的前提上（D-P2-006），
+> 该前提已被 **P1.1 客户端连接与会话运行时**（[`../p1.1/README.md`](../p1.1/README.md)）改变。
+> 本目录的 `README.md` / `tasks.md` / `acceptance.md` / `decisions.md` 不再作为实施依据，
+> **等 P1.1 验收通过后，按 P2 的目标重新生成方案**。
+
+**状态：已过期，待 P1.1 完成后重新生成。**
 
 > 本阶段在 P1 验收结论（[`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）与仓库实际代码之上细化。
 > 凡与 P1 文档不一致之处，以代码为准并记入 `decisions.md`。
