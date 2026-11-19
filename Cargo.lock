@@ -2969,10 +2969,13 @@ dependencies = [
 name = "service-core"
 version = "26.11.0"
 dependencies = [
+ "framework-bus",
  "framework-proc-timer",
  "framework-timer",
  "lib-core",
+ "serde_json",
  "tokio",
+ "tracing",
  "types-core",
 ]
 

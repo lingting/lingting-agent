@@ -13,6 +13,7 @@ mod prepare;
 mod report;
 mod runner;
 mod server;
+mod support;
 
 use std::process::ExitCode;
 

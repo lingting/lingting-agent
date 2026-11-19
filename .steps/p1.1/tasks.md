@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 部分完成：RT-014、RT-015）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -139,31 +139,31 @@
 
 > 依赖：Batch C。三个任务强序。
 
-- [ ] **RT-011 断连通知与串行处理入口**
+- [x] **RT-011 断连通知与串行处理入口**
 
   **目标**：断连事件类型定义在 `types-core`；`service-core` 订阅 `framework-bus` 并**串行**执行处理链。
   **涉及文件 / Crate**：`crates/types-core/src/runtime/`、`crates/service-core/src/runtime/handler.rs`。
   **技术要求**：通知不携带数据 → 处理函数只做唤醒，原因从 `RuntimeState` 读；`Dispatcher` 必须保证同一处理函数不并发。
   **验收标准**：
-  - [ ] 五条来源触发同一入口，处理函数不并发。
-  - [ ] 通知合并时结果不变。
+  - [x] 五条来源触发同一入口，处理函数不并发。
+  - [x] 通知合并时结果不变。
   **测试要求**：`bin-tests` 覆盖“合并通知只处理一次”。
 
-- [ ] **RT-012 反注册与拒绝语义**
+- [x] **RT-012 反注册与拒绝语义**
 
   **目标**：移除记录 → 释放占用记录 → 关闭下行通道；此后 `update` / `delete` / `occupancy/*` 一律 400 固定 message。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/{handler,registry}.rs`。
   **验收标准**：
-  - [ ] 重新注册后可再次占用同一会话，无残留记录与残留文件句柄。
+  - [x] 重新注册后可再次占用同一会话，无残留记录与残留文件句柄。
   **测试要求**：`bin-tests` 覆盖“断开 → 旧 id 被拒 → 重新注册 → 再次占用成功”。
 
-- [ ] **RT-013 运行时会话停止与占用取消的补偿**
+- [x] **RT-013 运行时会话停止与占用取消的补偿**
 
   **目标**：停止该客户端占用的运行时会话、追加终态事件、flush、释放占用；任一步失败都继续后续步骤并记日志。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/{handler,session,occupancy}.rs`。
   **验收标准**：
-  - [ ] 断开后事件文件以终态事件收尾，占用表无残留。
-  - [ ] 单步失败不影响其余清理。
+  - [x] 断开后事件文件以终态事件收尾，占用表无残留。
+  - [x] 单步失败不影响其余清理。
   **测试要求**：`bin-tests` 覆盖多会话同停与单点失败。
 
 ---
@@ -172,24 +172,24 @@
 
 > 依赖：Batch B。RT-014 ~ RT-016 可与 Batch C/D 并行；RT-017 依赖 Batch D。
 
-- [ ] **RT-014 显式占用接口**
+- [x] **RT-014 显式占用接口**
 
   **目标**：`api/occupancy/create|delete|get` 落地；一对一约束；成功即建运行时会话与事件文件。
   **涉及文件 / Crate**：`crates/lib-web/src/runtime/occupancy_api.rs`、`crates/service-core/src/runtime/occupancy.rs`。
   **验收标准**：
-  - [ ] 第二个客户端占用同一会话得到 400 `会话已被其他客户端占用`。
-  - [ ] 客户端已占一个会话时再占第二个得到 400 `客户端已占用其他会话`。
-  - [ ] 释放后同一会话可再次占用（新运行时会话、新文件）。
+  - [x] 第二个客户端占用同一会话得到 400 `会话已被其他客户端占用`。
+  - [x] 客户端已占一个会话时再占第二个得到 400 `客户端已占用其他会话`。
+  - [x] 释放后同一会话可再次占用（新运行时会话、新文件）。
   **测试要求**：`bin-tests` 覆盖三类冲突与释放后重占。
 
-- [ ] **RT-015 事件按序写入与转发**
+- [x] **RT-015 事件按序写入与转发**
 
   **目标**：生产方 → 写者 → 文件 + 下行通道；seq 单调；先落盘后转发。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/{journal,session}.rs`。
   **技术要求**：文件写入走 `spawn_blocking` 或专用写者任务，不占 worker；慢客户端 `try_send` 失败即标记 `StreamClosed`。
   **验收标准**：
-  - [ ] 文件内 seq 连续且顺序等于生产顺序。
-  - [ ] 客户端断开后事件仍全部落盘。
+  - [x] 文件内 seq 连续且顺序等于生产顺序。
+  - [x] 客户端断开后事件仍全部落盘。
   **测试要求**：`bin-tests` 覆盖“无占用也落盘”与“慢客户端不阻塞落盘”。
 
 - [ ] **RT-016 轮转清理**

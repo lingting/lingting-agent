@@ -1,6 +1,9 @@
 //! 用例注册：新增领域时在这里汇总。
 
 mod client;
+mod disconnect;
+mod journal;
+mod occupancy;
 mod probe;
 mod runtime;
 mod sdk;
@@ -14,6 +17,9 @@ use crate::case::Case;
 pub fn all() -> Vec<Case> {
     let mut cases = Vec::new();
     cases.extend(client::cases());
+    cases.extend(disconnect::cases());
+    cases.extend(journal::cases());
+    cases.extend(occupancy::cases());
     cases.extend(probe::cases());
     cases.extend(runtime::cases());
     cases.extend(sdk::cases());

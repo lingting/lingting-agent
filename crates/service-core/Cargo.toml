@@ -20,5 +20,12 @@ tokio = { workspace = true }
 framework-timer = { workspace = true }
 framework-proc-timer = { workspace = true }
 
+# 断连通知：纯通知总线，处理链订阅后串行执行（`runtime/handler.rs`）。
+framework-bus = { workspace = true }
+# 断连处理链与事件文件写失败只记日志，不外泄内部细节。
+tracing = { workspace = true }
+# 事件文件是一行一条 `RunEvent` 的 JSON（`runtime/journal.rs`）。
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

@@ -4,6 +4,7 @@
 //! 帧编码集中在 [`stream`]，错误映射集中在本文件（D-P1.1-005 的收敛点）。
 
 pub mod api;
+pub mod occupancy_api;
 mod stream;
 
 use framework_web::WebError;
@@ -11,11 +12,25 @@ use service_core::runtime::{RuntimeError, RuntimeState};
 
 /// 「客户端未注册」的固定 message（D-P1.1-005）：客户端按 message 识别并重新注册。
 const MESSAGE_CLIENT_NOT_REGISTERED: &str = "客户端未注册，请重新连接";
+/// 「会话已被其他客户端占用」的固定 message。
+const MESSAGE_SESSION_OCCUPIED: &str = "会话已被其他客户端占用";
+/// 「客户端已占用其他会话」的固定 message。
+const MESSAGE_CLIENT_BUSY: &str = "客户端已占用其他会话";
+/// 「会话未被占用」的固定 message。
+const MESSAGE_NOT_OCCUPIED: &str = "会话未被占用";
+/// 内部失败对外只有这一句，细节只进日志。
+const MESSAGE_INTERNAL: &str = "服务器内部错误";
 
 /// 运行时错误的统一出口：框架支持自定义 code 后只改这里。
 fn runtime_error(error: RuntimeError) -> anyhow::Error {
     match error {
         RuntimeError::ClientNotRegistered => WebError::parameter(MESSAGE_CLIENT_NOT_REGISTERED, error).into(),
+        RuntimeError::SessionOccupied => WebError::parameter(MESSAGE_SESSION_OCCUPIED, error).into(),
+        RuntimeError::ClientBusy => WebError::parameter(MESSAGE_CLIENT_BUSY, error).into(),
+        // 会话不存在时带上 `sessionId`，与 session 领域既有文案风格一致。
+        RuntimeError::SessionNotFound(_) => WebError::not_found(error.to_string()).into(),
+        RuntimeError::NotOccupied => WebError::not_found(MESSAGE_NOT_OCCUPIED).into(),
+        RuntimeError::Internal(detail) => WebError::internal(MESSAGE_INTERNAL, detail).into(),
     }
 }
 

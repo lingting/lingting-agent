@@ -115,3 +115,9 @@ pub struct ClientEvent {
     /// `client_closed` 的关闭原因。
     pub close_reason: Option<ClientCloseReason>,
 }
+
+/// 客户端断连通知（RT-011）：纯通知、不携带任何数据。
+///
+/// 六条断连来源都只在注册表里写一次标记，再用它唤醒处理链；原因存在注册表里，因此
+/// 处理函数必须幂等，通知被合并触发也只处理一次（take 语义）。
+pub struct ClientDisconnected;

@@ -8,7 +8,7 @@ mod client;
 mod occupancy;
 
 pub use client::{
-    ClientCloseReason, ClientCreatePO, ClientCreateVO, ClientDeletePO, ClientEvent, ClientEventKind,
-    ClientStreamParams, ClientUpdateKind, ClientUpdatePO, ClientUpdateVO,
+    ClientCloseReason, ClientCreatePO, ClientCreateVO, ClientDeletePO, ClientDisconnected, ClientEvent,
+    ClientEventKind, ClientStreamParams, ClientUpdateKind, ClientUpdatePO, ClientUpdateVO,
 };
 pub use occupancy::{OccupancyCreatePO, OccupancyDeletePO, OccupancyGetParams, OccupancyVO};

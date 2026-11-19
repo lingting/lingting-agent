@@ -9,7 +9,9 @@ use framework_web::{Json, Query, WebResponse, web_api_get, web_api_post};
 use lib_core::id;
 use lib_web_core::sse;
 use service_core::runtime::ClientRecord;
-use types_core::runtime::{ClientCreatePO, ClientCreateVO, ClientStreamParams, ClientUpdatePO, ClientUpdateVO};
+use types_core::runtime::{
+    ClientCreatePO, ClientCreateVO, ClientDeletePO, ClientStreamParams, ClientUpdatePO, ClientUpdateVO,
+};
 
 /// 注册客户端：`clientId` 由服务端生成，首个 pong 随注册响应下发。
 #[web_api_post(path = "api/client/create")]
@@ -42,4 +44,14 @@ pub async fn client_stream(Query(po): Query<ClientStreamParams>) -> Result<WebRe
 pub async fn client_update(Json(po): Json<ClientUpdatePO>) -> Result<ClientUpdateVO> {
     let pong_at_ms = state()?.heartbeat(&po.client_id, po.kind).map_err(runtime_error)?;
     Ok(ClientUpdateVO { pong_at_ms })
+}
+
+/// 主动断开：只打标记并通知断连处理链，反注册与资产清理都在处理链里完成。
+///
+/// 已移除的 `clientId` 返回 400 + 固定 message（D-P1.1-005），客户端据此重新注册；
+/// 标记到清理之间的窗口中重复调用同样返回成功，因此调用方可以安全重试。
+#[web_api_post(path = "api/client/delete")]
+pub async fn client_delete(Json(po): Json<ClientDeletePO>) -> Result<()> {
+    state()?.disconnect(&po.client_id).map_err(runtime_error)?;
+    Ok(())
 }

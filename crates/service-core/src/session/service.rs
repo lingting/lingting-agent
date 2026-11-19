@@ -75,6 +75,11 @@ impl SessionService {
         self.store.running_run_count()
     }
 
+    /// 会话是否存在：占用建立前的校验，避免为不存在的会话开事件文件。
+    pub fn has_session(&self, session_id: &str) -> bool {
+        self.store.session(session_id).is_some()
+    }
+
     /// 取指定会话的消息，按写入顺序返回。
     pub fn list_messages(&self, params: MessageListParams) -> Result<Vec<Message>, SessionError> {
         self.require_session(&params.session_id)?;
