@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -93,44 +93,44 @@
 
 > 依赖：Batch B。RT-007 与 RT-010 可并行；RT-008 依赖 RT-007；RT-009 依赖 RT-008。
 
-- [ ] **RT-007 注册与下行流端点**
+- [x] **RT-007 注册与下行流端点**
 
   **目标**：`POST api/client/create` + `GET api/client/stream` 打通，首个 pong 落在注册响应。
   **涉及文件 / Crate**：`crates/lib-web/src/runtime/{api,stream}.rs`、`crates/service-core/src/runtime/{registry,client}.rs`。
   **实施步骤**：handler 只做解包/调用/映射；下行流用 `WebBody::Stream` + `sse::json_frame`；流 drop 时只标记 `StreamClosed`，清理交给处理链。
   **验收标准**：
-  - [ ] 注册返回 `clientId` 与 pong 时间戳。
-  - [ ] 下行流断开后注册表出现 `StreamClosed` 标记，且只出现一次。
+  - [x] 注册返回 `clientId` 与 pong 时间戳。
+  - [x] 下行流断开后注册表出现 `StreamClosed` 标记，且只出现一次。
   **测试要求**：`bin-tests` 覆盖注册 → 建流 → 断流 → 标记。
 
-- [ ] **RT-008 心跳上行与未注册拒绝**
+- [x] **RT-008 心跳上行与未注册拒绝**
 
   **目标**：`POST api/client/update {PING}` 更新 `lastSeen` 并同步返回 pong；未注册返回 **400 + 固定 message**。
   **涉及文件 / Crate**：`crates/lib-web/src/runtime/api.rs`、`crates/service-core/src/runtime/client.rs`。
   **技术要求**：错误映射集中在一处函数，便于框架支持自定义 code 后只改这里。
   **验收标准**：
-  - [ ] 已注册 ping 前进 `lastSeen`；已移除的 `clientId` 得到 400 `客户端未注册，请重新连接`。
-  - [ ] 心跳路径不产生业务事件。
+  - [x] 已注册 ping 前进 `lastSeen`；已移除的 `clientId` 得到 400 `客户端未注册，请重新连接`。
+  - [x] 心跳路径不产生业务事件。
   **测试要求**：`bin-tests` 覆盖已注册 / 未注册两种结果。
 
-- [ ] **RT-009 问询与应答**
+- [x] **RT-009 问询与应答**
 
   **目标**：超过 `INQUIRY_AFTER` 未心跳时下行一条 `inquiry`；`INQUIRY_WINDOW` 内收到 `INQUIRY_ACK` 清除待答状态。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/client.rs`、`crates/lib-web/src/runtime/api.rs`。
   **技术要求**：同一客户端同刻最多一个未答问询；应答不重置 `lastSeen`（否则超时判定失效）。
   **验收标准**：
-  - [ ] 无应答 → `InquiryTimeout`；有应答 → 不标记。
-  - [ ] 不叠加多条问询。
+  - [x] 无应答 → `InquiryTimeout`；有应答 → 不标记。
+  - [x] 不叠加多条问询。
   **测试要求**：`bin-tests` 覆盖两种结局。
 
-- [ ] **RT-010 定时任务（心跳扫描 + 问询投递）**
+- [x] **RT-010 定时任务（心跳扫描 + 问询投递）**
 
   **目标**：`framework-timer` 任务，周期扫描超时与问询，统一走 registry 的标记接口。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/timer.rs`、`crates/service-core/Cargo.toml`（新增 `framework-timer` / `framework-proc-timer`）。
   **技术要求**：幂等、无阻塞；只做标记 + 通知；关闭后不再投递问询。
   **验收标准**：
-  - [ ] 超时客户端在 TTL + 一个扫描周期内被标记。
-  - [ ] 关闭后任务停止，无残留通知。
+  - [x] 超时客户端在 TTL + 一个扫描周期内被标记。
+  - [x] 关闭后任务停止，无残留通知。
   **测试要求**：`bin-tests` 用缩短常量覆盖，不引入真实等待。
 
 ---

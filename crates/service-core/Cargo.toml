@@ -16,5 +16,9 @@ types-core = { workspace = true }
 # Mock 事件流生产任务：定时投递事件 + 用通道向消费方投递事件。
 tokio = { workspace = true }
 
+# 运行时定时任务：`#[timer]` 注册与心跳扫描（`runtime/timer.rs`）。
+framework-timer = { workspace = true }
+framework-proc-timer = { workspace = true }
+
 [lints]
 workspace = true

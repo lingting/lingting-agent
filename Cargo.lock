@@ -285,6 +285,7 @@ dependencies = [
  "clap",
  "framework-http",
  "framework-proc-core",
+ "framework-timer",
  "futures-util",
  "lib-bin-cli",
  "lib-bin-tui",
@@ -1018,12 +1019,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "framework-proc-timer"
+version = "26.11.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "framework-proc-web"
 version = "26.11.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "framework-timer"
+version = "26.11.0"
+dependencies = [
+ "anyhow",
+ "framework-core",
+ "framework-proc-timer",
+ "futures-util",
+ "inventory",
+ "log",
+ "tokio",
 ]
 
 [[package]]
@@ -1729,6 +1752,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "flate2",
+ "framework-timer",
  "framework-web",
  "framework-web-axum",
  "lib-core",
@@ -2945,6 +2969,8 @@ dependencies = [
 name = "service-core"
 version = "26.11.0"
 dependencies = [
+ "framework-proc-timer",
+ "framework-timer",
  "lib-core",
  "tokio",
  "types-core",

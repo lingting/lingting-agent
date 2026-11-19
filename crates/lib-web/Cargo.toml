@@ -22,14 +22,14 @@ specta = { workspace = true }
 # SSE 适配：`WebBody::Stream` 需要 `BoxStream` 与 `Bytes`（`session/stream.rs`）。
 bytes = { workspace = true }
 futures-util = { workspace = true }
+# 下行流的保活定时器与通道接收端（`runtime/stream.rs`）。
+tokio = { workspace = true }
 
 framework-proc-auto = { workspace = true, features = ["collect"] }
 framework-web = { workspace = true, features = ["collect"] }
 framework-web-axum = { workspace = true, features = ["collect"] }
 framework-proc-core = { workspace = true, features = ["collect", "ts", "rust"] }
 
-[dev-dependencies]
-tokio = { workspace = true }
 
 [lints]
 workspace = true

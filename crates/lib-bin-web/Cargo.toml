@@ -22,7 +22,8 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }
 framework-web = { workspace = true }
 framework-web-axum = { workspace = true }
-
+# 启动运行时定时任务（心跳扫描 / 问询投递）。
+framework-timer = { workspace = true }
 [build-dependencies]
 flate2 = { workspace = true }
 

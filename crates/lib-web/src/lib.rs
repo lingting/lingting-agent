@@ -3,6 +3,7 @@
 pub mod error;
 pub mod probe;
 mod router;
+pub mod runtime;
 pub mod session;
 
 pub use error::ApiError;

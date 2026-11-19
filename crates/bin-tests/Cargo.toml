@@ -19,6 +19,8 @@ types-core = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 framework-http = { workspace = true, features = ["reqwest"] }
+# 校对定时任务注册（间隔与常量一致），见 `cases/runtime.rs` 的 `runtime.scan`。
+framework-timer = { workspace = true }
 framework-proc-core = { workspace = true, features = ["ts", "rust"] }
 futures-util = { workspace = true }
 serde_json = { workspace = true }

@@ -34,6 +34,8 @@ async fn run(host: &str, port: u16) -> Result<()> {
     if !service_core::runtime::install(service_core::runtime::RuntimeState::new()) {
         tracing::warn!("运行时状态已注入，跳过重复注入");
     }
+    // 运行时定时任务（心跳扫描 / 问询投递 / 超时标记）：运行时唯一，关闭后由任务自己停手。
+    framework_timer::start(None, framework_timer::TimerOption::default());
     // 链接锚点：不引用路由收集函数时，inventory 注册项会被链接器丢弃，接口会全部 404。
     let routes = lib_web::web_routes();
     info!(count = routes.len(), "已收集的接口数量");
