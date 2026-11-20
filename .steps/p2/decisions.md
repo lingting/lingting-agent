@@ -307,7 +307,7 @@
 ## D-P2-016 Provider 配置只走文件与环境变量，不新增 API
 
 - **决策**：
-  1. 配置来源：`<应用根目录>/config.toml` 的 `[provider]` / `[[provider.models]]` / `[agent]`，环境变量覆盖（清单见 `README.md`）。
+  1. 配置来源：`<应用根目录>/config.toml` 的 `[provider]` / `[[provider.models]]` / `[agent]`；**不由环境变量提供**（D-P2-037 修订）。
   2. **不新增任何 Provider / Model 配置接口**；不做热更新（改配置需重启）。
   3. `service-core` 提供只读的 `provider` 服务（装载 + 校验 + 解析），`agent-route` 只消费。
 - **理由**：P2 的范围是运行时而不是配置管理界面；一旦开口返回 Provider 配置，就要处理「密钥是否出现在响应里」这类安全设计（D-P2-025 `DEFERRED`）。文件 + 环境变量足以支撑 P2 的全部验收。
@@ -319,7 +319,7 @@
 ## D-P2-017 API Key 明文存配置文件 + 脱敏规则
 
 - **决策**：
-  1. 存放：`config.toml` 的 `provider.api_key`（明文）或环境变量 `AGENT_PROVIDER_API_KEY`；环境变量优先。
+  1. 存放：`config.toml` 的 `provider.api_key`（明文）；**不提供环境变量来源**（D-P2-037 修订）。
   2. `api_key` **不进入任何 DTO / 响应**；`Secret` 的 `Debug` 与 `Display` 均为 `***`，取值只能 `expose()`。
   3. 日志：不记录请求头；Provider 相关日志只允许 `provider id` 与 `base_url` 的 host。
   4. 错误：`LlmError::public_message()` 为固定脱敏文案；Provider 原始错误只进 `source`（日志），且日志路径也不打印 key。
@@ -727,6 +727,22 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 - **理由**：空列表与数据库故障在客户端无法区分，会把故障伪装成「没有会话」，属于隐藏错误。
 - **状态**：`DECIDED`。
 - **承接任务**：P2-013、P2-027（客户端展示错误）。
+## D-P2-037 配置只走 `config.toml` 与命令行；Provider 配置服务归 `agent-route`
+
+- **问题**：P2-017 清单写「`service-core/src/provider/{mod,service}.rs`」并规划 `AGENT_PROVIDER_*` / `AGENT_*` 环境变量覆盖；但 D-P2-035 已让 `service-core` 去掉 `types-core` 依赖，且环境变量是进程级全局状态，进程内并行用例无法安全注入。
+- **决策**：
+  1. **不提供任何配置项的环境变量来源**：`AGENT_SERVER_ADDR` / `AGENT_SERVER_PORT` / `AGENT_LOG_LEVEL` 一并删除，优先级改为「命令行 > `config.toml` > 默认值」。唯一保留的环境变量是 `AGENT_HOME`（应用根目录，不是配置项）。
+  2. `ProviderService` 放 `agent-route`（`provider/service.rs`），与 `ModelRoute` 同处，模型查找只有一份实现；新增依赖边 `manager-agent -> agent-route`（装配层持有它，`docs/workspace.md` 5.1 / 5.2 已同步）。
+  3. `[provider]` 整段可缺省：缺省即「Provider 未配置」，服务端照常启动，调用模型返回 `LlmError::Unconfigured`（文案「调用模型失败：未配置 Provider」）。段存在时全部硬校验：`default_model` 必须出现在 `models`、`models` 非空且 id 唯一、`base_url` 可解析、模型数值为正且 `max_output_tokens <= context_window`，任一不满足即启动失败（退出码 2）。`api_key` 为空允许启动。
+  4. 装载与校验留在 `lib-bin-cli::config`（`parse_llm` 是纯函数，用例直接喂 TOML 文本），装配参数经 `AssemblyOptions { provider, agent }` 透传；`lib-bin-web::serve` 改为接收 `AssemblyOptions`。
+  5. `session/create` 的模型归属校验放装配层（`manager_agent::create_session`）：无 `[provider]` 段不校验；有配置时缺省用 `default_model`，未知 id 返回 400「模型不可用：<id>」（D-P2-015）。
+  6. 测试注入方式统一为「往隔离的 `AGENT_HOME` 写 `config.toml`」，不再依赖环境变量。
+- **理由**：配置只有文件与命令行两个来源，用例能给出确定输入；`service-core` 保持不感知配置类型；模型查找不与 `agent-route` 重复。
+- **状态**：`DECIDED`（用户确认的口径变更，修订 D-P2-016 第 1 条与 D-P2-017 第 1 条）。
+- **承接任务**：P2-017、P2-018、P2-020、P2-025、P2-031。
+
+---
+
 ## OPEN 待确认项
 
 | ID | 问题 | 现状 | 承接任务 |

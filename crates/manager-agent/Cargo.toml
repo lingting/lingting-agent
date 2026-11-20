@@ -13,6 +13,8 @@ publish = false
 lib-core = { workspace = true }
 lib-db = { workspace = true }
 service-core = { workspace = true }
+# Provider 配置的只读承载与模型解析；装配层只持有它，不自己定义模型查找（P2-017）。
+agent-route = { workspace = true }
 # 事件与 Run / Message / Session 契约类型（`RunEvent`、`Run`）。
 agent-core = { workspace = true }
 # 客户端连接与会话占用契约（`ClientEvent`、`OccupancyVO` 等）。

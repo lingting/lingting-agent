@@ -6,7 +6,7 @@
 use anyhow::{Context, Result, bail};
 use lib_bin_cli::client::Client;
 use lib_bin_cli::sdk::ApiClient;
-use lib_core::directorys::ENV_HOME;
+use lib_core::directorys::{CONFIG_FILE, ENV_HOME};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -22,6 +22,23 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// 子进程输出文件名。
 const LOG_FILE: &str = "server.log";
 
+/// 服务端的最小 `config.toml`：写一个能校验模型归属的 Provider（D-P2-015）。
+///
+/// `default_model` 与服务端原来的兜底值同名（`mock-model`），因此其余用例的可见行为不变；
+/// `base_url` 指向不可达地址——P2 在 Mock LLM Server 接入前不真正调用模型（P2-018 / P2-022）。
+const TEST_CONFIG: &str = r#"[provider]
+id = "mock"
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1/v1"
+api_key = ""
+default_model = "mock-model"
+
+[[provider.models]]
+id = "mock-model"
+context_window = 8192
+max_output_tokens = 1024
+"#;
+
 /// 运行中的服务端子进程。
 pub struct Server {
     child: Child,
@@ -35,6 +52,9 @@ impl Server {
     /// `log_dir` 同时作为子进程的 `AGENT_HOME`，配置、数据与应用日志都落在该目录内。
     pub async fn start(port: u16, log_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&log_dir).with_context(|| format!("创建测试目录失败：{}", log_dir.display()))?;
+        // 配置随应用根目录落地：`[provider]` 段存在时 `session/create` 会校验模型归属（D-P2-015）。
+        std::fs::write(log_dir.join(CONFIG_FILE), TEST_CONFIG)
+            .with_context(|| format!("写入测试配置失败：{}", log_dir.display()))?;
         // 追加写：同一 `AGENT_HOME` 重启时保留上一次运行的日志，便于排查启动失败。
         let output = std::fs::OpenOptions::new()
             .create(true)

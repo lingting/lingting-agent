@@ -15,6 +15,8 @@ pub enum LlmError {
         /// 请求里给出的模型标识。
         id: String,
     },
+    /// 没有配置 Provider（`config.toml` 缺 `[provider]` 段）：服务可以启动，但调用不了模型。
+    Unconfigured,
     /// 内部请求不合法（例如没有任何消息）：属于调用方缺陷，不是上游错误。
     InvalidRequest {
         /// 内部原因，只进 `Debug`。
@@ -57,6 +59,7 @@ impl LlmError {
     pub fn public_message(&self) -> String {
         match self {
             Self::UnknownModel { id } => format!("模型不可用：{id}"),
+            Self::Unconfigured => "调用模型失败：未配置 Provider".to_owned(),
             Self::InvalidRequest { .. } => "调用模型失败：请求无效".to_owned(),
             Self::Authentication { .. } => "调用模型失败：认证失败".to_owned(),
             Self::Upstream { .. } => "调用模型失败：上游服务错误".to_owned(),
@@ -83,7 +86,7 @@ impl Error for LlmError {
             | Self::Truncated { source }
             | Self::InvalidResponse { source }
             | Self::IdleTimeout { source } => Some(source.as_ref()),
-            Self::UnknownModel { .. } | Self::InvalidRequest { .. } => None,
+            Self::UnknownModel { .. } | Self::Unconfigured | Self::InvalidRequest { .. } => None,
         }
     }
 }

@@ -289,7 +289,7 @@
 - **问题**：客户端如何知道 Server 地址？
 - **背景**：`framework-web-axum` 的 `axum_builder(addr, port)` 在端口 ≤ 0 或越界时使用**随机端口**，这会破坏客户端默认寻址。
 - **可选方案**：
-  1. 固定优先级：命令行 > 环境变量 `AGENT_SERVER_ADDR` > 配置文件 `[server] addr` > 默认 `http://127.0.0.1:20100`（见 D-022）。
+  1. 固定优先级：命令行 > 环境变量 `AGENT_SERVER_ADDR` > 配置文件 `[server] addr` > 默认 `http://127.0.0.1:20100`（见 D-022）。**P2 修订（D-P2-037）：环境变量层级已删除，改为「命令行 > `config.toml` > 默认值」。**
   2. 仅环境变量 + 命令行。
   3. 端口文件（server 启动写 `<config_dir>/agent/server.port`，client 读取）。
 - **推荐方案**：方案 1 为主，方案 3 作为将来“多实例/随机端口”时的扩展，P1 只预留不实现。
@@ -298,7 +298,7 @@
 - **P1-008 落地（目录与配置文件）**：
   1. 应用根目录取 `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`，即 Windows `%USERPROFILE%\.lingting\agent`、Linux/macOS `$HOME/.lingting/agent`；debug 构建取可执行文件同级的 `runtime` 目录。不使用 `%APPDATA%`。
   2. 配置文件为 `<应用根目录>/config.toml`（`lib-core` 的 `AppDirectories::config_file`），只存路径、不预创建；数据目录为 `<应用根目录>/data`，P2 的 SQLite 预期落该目录，与配置文件不同层级。
-  3. 服务端专属环境变量：`AGENT_SERVER_ADDR`（接受 `host`、`host:port`、`http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL`；配置文件键为 `[server] addr` / `port` / `log_level`；优先级仍是命令行 > 环境变量 > 配置文件 > 默认值，默认 `127.0.0.1:20100`。
+  3. 服务端专属环境变量：`AGENT_SERVER_ADDR`（接受 `host`、`host:port`、`http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL`；配置文件键为 `[server] addr` / `port` / `log_level`；优先级仍是命令行 > 环境变量 > 配置文件 > 默认值，默认 `127.0.0.1:20100`。**P2 修订（D-P2-037）：三个环境变量已删除，配置项只来自命令行与 `config.toml`（保留的 `AGENT_HOME` 只决定应用根目录）。**
   4. 日志目录与配置/数据同级：`logs`（服务端）、`logs-cli`、`logs-tui`（见 D-023）。
 - **状态**：`DECIDED`（优先级、目录命名与配置文件位置均已定）
 
@@ -731,7 +731,7 @@
 - **问题**：单 Binary 如何承载全部命令，客户端如何通过生成的 SDK 访问 Server，超时与错误如何分类？
 - **决策（P1-014 落地）**：
   1. **命令树**：无子命令 → `tui`（默认 `Mode::Tui`）；`tui` / `server` / `run` / `status` 四个子命令。`--server` 只出现在客户端命令上，`server` 仍用 `--addr` / `--port` / `--log-level`。退出码映射留在 `bin-agent`，`lib-bin-cli` 只返回 `CommandError::{Argument, Runtime}`（库不决定退出码）。
-  2. **地址解析**：服务端与客户端共用 `lib-bin-cli::config` 的同一份四级来源（命令行 > `AGENT_SERVER_ADDR` / `AGENT_SERVER_PORT` > `config.toml [server]` > 默认 `127.0.0.1:20100`），客户端把结果拼成 `http://host:port` 基地址；客户端没有独立端口参数。`tui` / `run` / `status` 三者共用，TUI 入口 `lib_bin_tui::run(server)` 也走同一条链路。
+  2. **地址解析**：服务端与客户端共用 `lib-bin-cli::config` 的同一份四级来源（命令行 > `AGENT_SERVER_ADDR` / `AGENT_SERVER_PORT` > `config.toml [server]` > 默认 `127.0.0.1:20100`），客户端把结果拼成 `http://host:port` 基地址；客户端没有独立端口参数。`tui` / `run` / `status` 三者共用，TUI 入口 `lib_bin_tui::run(server)` 也走同一条链路。**P2 修订（D-P2-037）：环境变量层级已删除，现在是三级来源（命令行 > `config.toml` > 默认值）。**
   3. **Transport 选型**：HTTP 收发只经 `framework-http`（`reqwest` 后端），`Client` 实现生成 SDK 的 `ApiClient`，`send` 负责拼地址、加请求头、判状态码与解包。**客户端代码不出现任何 path 字面量**，地址一律取 `ApiDefinition.path`。
   4. **超时**：两个 `HttpClient` 分工——普通接口 30 秒总超时；事件流不设总超时（一次回复可能持续很久，总超时会在回复中途截断），存活由服务端 15 秒心跳与用户中断判断。
   5. **`R<T>` 解包**：服务端成功响应统一是 `{"code":200,"message":"Success","data":<载荷>}`，生成的 SDK 直接按载荷类型反序列化，因此解包放在 Transport。判据是能反序列化成生成的 `R<Value>`；`data` 缺失（`Void` 的 204 空响应）与非 JSON 响应体（`Blob`）原样透传。**这是 P1-014 的实测发现：漏掉解包会让所有接口报 `missing field`。**

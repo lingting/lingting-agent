@@ -5,25 +5,41 @@
 
 use std::sync::{Arc, OnceLock};
 
+use agent_route::ProviderService;
 use service_core::session::SessionService;
+use types_core::config::AgentConfig;
 
 use crate::runtime::{RuntimeState, handler};
 
-/// 一次装配的产物：会话业务服务 + 进程内运行时。
+/// 一次装配的产物：会话业务服务 + 进程内运行时 + 只读的 Provider / Agent 配置。
 ///
-/// 两者互相引用（运行时用 Service 校验会话与取消 Run，发送消息后要唤醒运行时的执行队列），
-/// 因此由装配层持有并集中注入。
+/// 会话服务与运行时互相引用（运行时用 Service 校验会话与取消 Run，发送消息后要唤醒运行时的执行队列），
+/// 因此由装配层持有并集中注入；Provider 配置也从这里交给运行时使用，Runtime 不自己读配置。
 pub struct AgentHolder {
     /// 会话业务服务。
     session: Arc<SessionService>,
     /// 运行时状态：客户端注册表、占用表与运行时会话。
     runtime: RuntimeState,
+    /// Provider 配置服务：装载结果只读，未配置时照常存在。
+    provider: ProviderService,
+    /// Agent 运行参数。
+    agent: AgentConfig,
 }
 
 impl AgentHolder {
-    /// 由装配流程构造：`session` 与 `runtime` 必须来自同一次装配。
-    pub(crate) fn new(session: Arc<SessionService>, runtime: RuntimeState) -> Self {
-        Self { session, runtime }
+    /// 由装配流程构造：各部件必须来自同一次装配。
+    pub(crate) fn new(
+        session: Arc<SessionService>,
+        runtime: RuntimeState,
+        provider: ProviderService,
+        agent: AgentConfig,
+    ) -> Self {
+        Self {
+            session,
+            runtime,
+            provider,
+            agent,
+        }
     }
 
     /// 会话业务服务。
@@ -34,6 +50,16 @@ impl AgentHolder {
     /// 运行时状态。
     pub fn runtime(&self) -> &RuntimeState {
         &self.runtime
+    }
+
+    /// Provider 配置服务：`configured()` 为假表示 `[provider]` 段缺省。
+    pub fn provider(&self) -> &ProviderService {
+        &self.provider
+    }
+
+    /// Agent 运行参数（并发、超时与 Context 预算）。
+    pub fn agent(&self) -> &AgentConfig {
+        &self.agent
     }
 }
 

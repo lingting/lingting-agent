@@ -311,6 +311,27 @@ fn error(context: &TestContext) -> CaseFuture<'_> {
             other => ensure!(false, "空白消息应返回 400，实际 {other:?}"),
         }
 
+        // 未知模型（D-P2-015）：清单来自 `[provider.models]`，不在其中就是 400。
+        let unknown = format!("no-such-model-{}", context.token());
+        match client
+            .session_create(SessionCreatePO {
+                title: None,
+                model: Some(unknown.clone()),
+            })
+            .await
+            .map_err(ClientError::from_call)
+        {
+            Err(ClientError::Status { code, message }) => {
+                ensure!(code == 400, "未知模型应返回 400，实际 {code}");
+                ensure!(
+                    message == format!("模型不可用：{unknown}"),
+                    "未知模型的错误消息不符：{message}"
+                );
+                notes.push(format!("未知模型：{code} {message}"));
+            }
+            other => ensure!(false, "未知模型应返回 400，实际 {other:?}"),
+        }
+
         Ok(notes)
     })
 }

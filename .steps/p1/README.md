@@ -102,9 +102,8 @@ P1 的目标不是做出 Agent，而是把「单 Binary + Server/Client + 统一
 ```text
 优先级（高 → 低）
 1. 命令行参数     --server http://127.0.0.1:20100
-2. 环境变量       AGENT_SERVER_ADDR
-3. 配置文件       <应用根目录>/config.toml  [server] addr
-4. 内置默认值      http://127.0.0.1:20100
+2. 配置文件       <应用根目录>/config.toml  [server] addr
+3. 内置默认值      http://127.0.0.1:20100
 ```
 
 配套约束：

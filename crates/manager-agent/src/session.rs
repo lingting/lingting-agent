@@ -1,19 +1,49 @@
 //! 会话业务的对外入口：转调 `service-core` 的 Service，并补齐装配层的协调动作。
 //!
-//! 唯一的协调点是「发送消息后唤醒该会话的执行队列」：Run 只有在会话被占用时才会被执行
-//! （D-P1.1-004），而占用信息在运行时会话里，因此这个动作只能在装配层完成（D-P2-035）。
+//! 两个协调点：一是「发送消息后唤醒该会话的执行队列」：Run 只有在会话被占用时才会被执行
+//! （D-P1.1-004），而占用信息在运行时会话里，因此这个动作只能在装配层完成（D-P2-035）；
+//! 二是「创建会话时的模型归属校验」：模型清单来自 Provider 配置（D-P2-015），校验放在这里
+//! 可以让 `service-core` 继续不感知 Provider。
 
 use agent_core::session::{
     Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
     SessionSummary,
 };
+use agent_route::{LlmError, ProviderService};
 use service_core::session::{SessionError, SessionService};
 
 use crate::holder::{holder, runtime};
 
 /// 创建会话。
-pub async fn create_session(po: SessionCreatePO) -> Result<SessionSummary, SessionError> {
+///
+/// 未指定模型时用 `provider.default_model`；指定了就必须出现在 `[provider.models]` 里，否则对外
+/// 400「模型不可用：<id>」（D-P2-015）。没有 `[provider]` 段时不校验，沿用 `service-core` 的兜底值，
+/// 保证「缺省配置可启动」。
+pub async fn create_session(mut po: SessionCreatePO) -> Result<SessionSummary, SessionError> {
+    if let Some(model) = resolve_model(provider()?, po.model.take())? {
+        po.model = Some(model);
+    }
     session()?.create_session(po).await
+}
+
+/// 按 Provider 配置决定本次会话的模型标识。
+///
+/// 返回 `Some` 表示要写回请求（默认模型，或已校验过的显式模型）；`None` 表示 Provider 未配置，
+/// 请求原样交给 `service-core`。
+fn resolve_model(provider: &ProviderService, requested: Option<String>) -> Result<Option<String>, SessionError> {
+    if !provider.configured() {
+        return Ok(requested);
+    }
+    let model = match requested.filter(|id| !id.trim().is_empty()) {
+        Some(id) => provider.model(Some(&id)).map_err(invalid)?,
+        None => provider.default_model().map_err(invalid)?,
+    };
+    Ok(Some(model.id.clone()))
+}
+
+/// Provider 侧的错误对外一律是参数错误（400），文案直接取脱敏后的公开文案。
+fn invalid(error: LlmError) -> SessionError {
+    SessionError::Invalid(error.public_message())
 }
 
 /// 列出全部会话，按最后更新时间倒序。
@@ -64,4 +94,11 @@ fn session() -> Result<&'static SessionService, SessionError> {
     holder()
         .map(|holder| holder.session().as_ref())
         .ok_or_else(|| SessionError::Internal("启动装配未完成：会话服务未注入".to_string()))
+}
+
+/// 取已注入的 Provider 配置服务；未注入说明启动装配不完整，属服务端内部错误。
+fn provider() -> Result<&'static ProviderService, SessionError> {
+    holder()
+        .map(|holder| holder.provider())
+        .ok_or_else(|| SessionError::Internal("启动装配未完成：Provider 配置未注入".to_string()))
 }

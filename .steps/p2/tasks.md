@@ -352,23 +352,30 @@
   - 未做：`CompletionResponse::error` / `finish_reason` 的语义判断留给 P2-022 / P2-026；P2 不消费 reasoning 与 tool 事件。
   - 注意：验收 A-4 / P-7 的 `grep -rn "rig" crates/agent-route/src` 会命中 `lib.rs` 的一行 doc（写依赖方向），代码引用只在 `rig/` 内；该条按代码引用核对。
 
-- [ ] **P2-017 Provider 配置装载与密钥安全**
+- [x] **P2-017 Provider 配置装载与密钥安全**
 
-  **目标**：把配置装载进 `service-core` 的只读 `provider` 服务，并保证密钥不泄漏。
+  **目标**：把配置装载成只读的 Provider 服务，并保证密钥不泄漏。
   **前置依赖**：P2-009、P2-015、P2-013。
-  **涉及文件 / Crate**：`crates/lib-bin-cli/src/config.rs`（新增 `[provider]` / `[[provider.models]]` / `[agent]` 段与模块文档示例）、`crates/service-core/src/provider/{mod,service}.rs`、`crates/lib-bin-web/src/server.rs`。
-  **实施步骤**：
-  1. 配置解析与校验：`kind` 只支持 `openai-compatible`；`default_model` 必须出现在 `models` 中；数值项校验范围。
-  2. 环境变量覆盖（清单见 `README.md`）；环境变量优先于文件。
-  3. `ProviderService` 只读：装载一次、提供 `provider()` / `model(id)`；未知模型返回 `UnknownModel`。
-  4. 脱敏：`Secret` 的 `Debug` / `Display`；错误只带 provider id 与 base_url 的 host；日志不打印请求头。
+  **涉及文件 / Crate**：`crates/lib-bin-cli/src/config.rs`（新增 `[provider]` / `[[provider.models]]` / `[agent]` 段、校验与模块文档示例，删除环境变量层）、`crates/agent-route/src/provider/service.rs`、`crates/manager-agent/src/{assemble,holder,session}.rs`、`crates/lib-bin-web/src/server.rs`、`crates/bin-agent/src/main.rs`。
+  **实施步骤**（按 D-P2-037 口径落地）：
+  1. 配置解析与校验：`kind` 只支持 `openai-compatible`（serde 拒绝）；`default_model` 必须出现在 `models` 中；`models` 非空且 id 唯一；`base_url` 可解析；数值项全部为正且 `max_output_tokens <= context_window`；任一不满足即启动失败（退出码 2）。
+  2. 配置项只来自命令行与 `config.toml`：删除 `AGENT_SERVER_ADDR` / `AGENT_SERVER_PORT` / `AGENT_LOG_LEVEL`，`[provider]` / `[agent]` 不引入任何环境变量来源（`AGENT_HOME` 仍决定应用根目录）。
+  3. `ProviderService` 只读：`provider()` / `default_model()` / `model(id)`；未知模型返回 `LlmError::UnknownModel`，未配置 Provider 返回 `LlmError::Unconfigured`。
+  4. 脱敏：`Secret` 的 `Debug` / `Display`；错误只带脱敏文案；日志不打印请求头。
   **验收标准**：
-  - [ ] 缺省配置可启动（`api_key` 为空时 `chat` 调用失败但不 panic，错误可读）。
-  - [ ] 未知模型 → 400 `模型不可用：<id>`（用例 `session.error` 扩展）。
-  - [ ] 密钥不出现在日志、响应、`Debug` 输出中。
-  **测试要求**：`llm.config`（环境变量覆盖与缺省值）、`llm.security`（canary 检索）。
+  - [x] 缺省配置可启动（`[provider]` 缺省即「Provider 未配置」；`api_key` 为空时 `chat` 调用失败但不 panic，错误可读）。
+  - [x] 未知模型 → 400 `模型不可用：<id>`（用例 `session.error` 扩展；服务端 `config.toml` 提供 `[provider]`）。
+  - [x] 密钥不出现在响应、`Debug` 输出与错误文案中（日志文件的检索归 Z-1 / P2-032）。
+  **测试要求**：`llm.config`（配置文件装载、缺省判断与非法取值）、`llm.security`（canary 检索）。
   **完成产物**：Provider 配置服务。
 
+  **落地记录（2026-11-21）**：
+  - 归属调整（D-P2-037）：`ProviderService` 落在 `agent-route`（`provider/service.rs`，`provider.rs` 保留 `LlmProvider` 并新增 `pub mod service`），模型查找委托 `ModelRoute`，未配置时新增 `LlmError::Unconfigured`（`public_message` =「调用模型失败：未配置 Provider」，`source` 为 `None`）。`service-core` 不加 `types-core` 依赖（与 D-P2-035 一致）。
+  - 装配：新增依赖边 `manager-agent -> agent-route`；`AssemblyOptions` 增 `provider: Option<ProviderConfig>` / `agent: AgentConfig`，`AgentHolder` 增 `provider()` / `agent()`；`lib-bin-web::serve(host, port, AssemblyOptions)` 与 `bin-agent` 的装配参数同步调整。
+  - 装载：`lib-bin-cli::config` 用 `types-core` 的 `ProviderConfig` / `AgentConfig` 直接反序列化（`[provider]` 为 `Option`），`parse_llm(text)` 是纯函数入口；校验文案只点名字段，密钥不参与任何文案。删除环境变量层后地址来源为「命令行 > `config.toml` > 默认值」。
+  - `session/create`：装配层先用 `provider.default_model` 补缺省模型，未知 id 用 `LlmError::public_message()` 转 `SessionError::Invalid`（400）；无 `[provider]` 段不校验。
+  - 用例：新增 `llm` 领域（`llm.config` / `llm.security`），`session.error` 扩展未知模型分支；`bin-tests` 服务端在 `AGENT_HOME` 下写最小 `config.toml`（`default_model = "mock-model"`，其余用例可见行为不变）。
+  - 未做：日志文件的 canary 检索（Z-1，需真实调用模型，归 P2-031 / P2-032）。
 - [ ] **P2-018 `bin-tests` 内置 OpenAI 兼容 Mock Server**
 
   **目标**：让 P2 的用例不依赖付费 API，且能精确构造异常场景。
@@ -429,7 +436,7 @@
   **涉及文件 / Crate**：`crates/bin-tests/src/cases/chat.rs`（新增 `chat.context` / `chat.truncate`）。
   **实施步骤**：
   1. `chat.context`：三轮对话，断言 `/mock/last-request` 的 messages 顺序、首条 system、末条为本次输入。
-  2. `chat.truncate`：把 `AGENT_CONTEXT_MAX_MESSAGES` 压到 2、`AGENT_CONTEXT_SAFETY_TOKENS` 调大，断言请求体只含被保留的消息且包含本次输入。
+  2. `chat.truncate`：在 `config.toml` 里把 `[agent] context_max_messages` 压到 2、`context_safety_tokens` 调大，断言请求体只含被保留的消息且包含本次输入。
   3. 源码核对：`TokenEstimator` 为 trait，构造点唯一。
   **验收标准**：
   - [ ] 两条用例通过，报告落 `target/tests/<运行 ID>/chat.md`。
@@ -504,7 +511,7 @@
   2. 同会话串行继续由 P1.1 执行队列保证，不引入 Session 租约。
   3. 排队不产生事件；`probe/health` 的 `runningRunCount` 只统计 `RUNNING`。
   **验收标准**：
-  - [ ] `AGENT_MAX_CONCURRENT_RUNS=1` 时两个会话的 Run 不同时进入 `RUNNING`，且都最终落终态。
+  - [ ] `config.toml` 的 `[agent] max_concurrent_runs = 1` 时两个会话的 Run 不同时进入 `RUNNING`，且都最终落终态。
   - [ ] 排队超时分支可被用例触发（把超时压到毫秒级）。
   **测试要求**：`run.concurrency` / `run.queue_timeout`（P2-026）。
   **完成产物**：并发与排队。
@@ -520,7 +527,7 @@
   3. `run.cancel` / `run.disconnect` / `run.shutdown`：三条终止路径 + 事件文件终态。
   4. `run.concurrency` / `run.queue_timeout`：全局上限与排队超时。
   5. `run.journal_consistency`：同一 Run 的下行事件序列与事件文件序列一致（`event` 与 `seq` 一一对应）。
-  **技术要求**：全部经生成的 SDK；Mock LLM 由用例进程内的 Mock Server 提供（服务端通过 `AGENT_PROVIDER_BASE_URL` 指向它）。
+  **技术要求**：全部经生成的 SDK；Mock LLM 由用例进程内的 Mock Server 提供（服务端 `config.toml` 的 `[provider] base_url` 指向它）。
   **验收标准**：
   - [ ] `make test ARGS="chat"` 与 `make test ARGS="run"` 全绿，报告落 `target/tests/<运行 ID>/`。
   - [ ] 每条用例的断言能区分「Mock 行为」与「真实执行」。

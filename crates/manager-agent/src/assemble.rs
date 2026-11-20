@@ -6,11 +6,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use agent_route::ProviderService;
 use anyhow::{Context, Result};
 use lib_core::time;
 use lib_db::{DATABASE_FILE, Database, DbConfig};
 use service_core::repository::Repository;
 use service_core::session::SessionService;
+use types_core::config::{AgentConfig, ProviderConfig};
 
 use crate::holder::AgentHolder;
 use crate::runtime::{JournalConfig, RuntimeState};
@@ -27,6 +29,10 @@ pub struct AssemblyOptions {
     pub events_root: Option<PathBuf>,
     /// 事件文件轮转配置；由启动方从 `config.toml` 解析后透传。
     pub journal: JournalConfig,
+    /// Provider 配置；`None` 表示 `config.toml` 没有 `[provider]` 段（服务可启动，调用模型才失败）。
+    pub provider: Option<ProviderConfig>,
+    /// Agent 运行参数；由启动方从 `config.toml` 解析后透传。
+    pub agent: AgentConfig,
     /// 数据库连接参数。
     pub database: DbConfig,
 }
@@ -57,11 +63,15 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         tracing::warn!(healed, "启动自愈：残留 Run 已落成终态");
     }
 
+    let provider = ProviderService::new(options.provider);
+    if !provider.configured() {
+        tracing::info!("未配置 Provider（config.toml 缺 [provider] 段）：服务可启动，调用模型时才会失败");
+    }
     let session = Arc::new(SessionService::new(repository));
     let runtime = RuntimeState::new(Arc::clone(&session)).with_journal_config(options.journal);
     let runtime = match options.events_root {
         Some(root) => runtime.with_events_root(root),
         None => runtime,
     };
-    Ok(AgentHolder::new(session, runtime))
+    Ok(AgentHolder::new(session, runtime, provider, options.agent))
 }

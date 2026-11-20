@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 /// 配置文件名，位于应用根目录。
-const CONFIG_FILE: &str = "config.toml";
+///
+/// 对外公开：用例要往隔离的 `AGENT_HOME` 里写同一份配置文件，不能再拼一次字面量。
+pub const CONFIG_FILE: &str = "config.toml";
 /// CLI 日志目录名称。
 const LOGS_CLI_DIRECTORY: &str = "logs-cli";
 /// TUI 日志目录名称。

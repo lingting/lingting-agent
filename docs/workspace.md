@@ -177,8 +177,9 @@ Agent 装配、进程内运行时与跨 Service 编排（P2-013 / P2-035 起）�
 职责：
 
 - 启动装配：应用目录 → 数据库（迁移 + 残留 Run 自愈）→ Repository → Service → 运行时状态。
-- 进程级 holder（`AgentHolder`）：持有 `session: Arc<SessionService>` 与 `runtime: RuntimeState`，
-  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session`）。
+- 进程级 holder（`AgentHolder`）：持有 `session: Arc<SessionService>`、`runtime: RuntimeState`、
+  `provider: ProviderService`（模型查找下沉在 `agent-route`）与 `agent: AgentConfig`，
+  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent`）。
 - 进程内运行时：客户端注册表、会话占用、事件文件与轮转、断连处理链、心跳扫描（`runtime/`）。
 - Run 执行：串行执行队列与事件生产（`runner/`，P2 后续由 `agent-runtime` 替换 Mock 生产方）。
 - 跨组件协调：发送消息后唤醒该会话的执行队列；停止运行时会话时取消未结束的 Run。
@@ -338,11 +339,14 @@ Provider / Model 请求路由与模型调用适配。
 - Provider 选择。
 - Model 选择。
 - Fallback（后续）。
+- 承载装载后的 Provider 配置（`ProviderService`）：`provider()` / `default_model()` / `model(id)`，
+  未知模型返回 `LlmError::UnknownModel`，未配置 Provider 返回 `LlmError::Unconfigured`（P2-017）。
 
 边界与约定：
 
-- Provider / Model 配置的增删改查归 `service-core`；`agent-route` 只读取配置并执行实际模型请求。
-- **不得把 Provider 配置管理逻辑重复实现到 `agent-route`**。
+- Provider 配置**没有**增删改查接口（D-P2-016 / D-P2-025，P2 只读 `config.toml`）；
+  文件装载与启动期校验归启动方 `lib-bin-cli`，本 Crate 只承载装载结果（`ProviderService`）并做模型解析。
+- **不得把 Provider 配置的装载与校验重复实现到 `agent-route`**。
 - Rig 的类型必须被限制在本 Crate 的 Adapter 内，不得向上泄漏。
 
 #### agent-runtime
@@ -670,14 +674,14 @@ manager-agent -> service-agent
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
 | `service-core` | `agent-core`（仅类型层，P2 起）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
-| `manager-agent` | `service-core`、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现 |
+| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
 | `agent-tool` | `agent-context-core`、`lib-core` | JSON Schema 相关库 | `agent-runtime`、`agent-mcp` |
 | `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
 | `agent-context` | `agent-context-core`、`agent-skill`、`agent-mcp`、`agent-tool`、`agent-core`、`lib-core` | 无 LLM SDK | `agent-runtime`、`lib-web*` |
-| `agent-route` | `agent-core`、`service-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`lib-web*` |
+| `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-tool`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
 | `lib-web` | `lib-web-core`、`manager-agent`（会话业务入口、运行时状态与装配结果，P2-035 起）、`agent-core`（契约类型，P2 起）、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体）、Tokio（下行流的保活定时器与通道接收端） | `lib-bin-*`、`bin-*`；不直接持有进程级单例（holder 归 `manager-agent`） |
@@ -705,6 +709,7 @@ flowchart BT
     manager --> typescore["types-core"]
     manager --> agentcore["agent-core"]
     manager --> libdb
+    manager --> agentroute["agent-route"]
     manager --> libcore
 ```
 

@@ -67,13 +67,13 @@
 
 ## 配置装载
 
-服务端与客户端（`tui` / `run` / `status`）共用同一份配置来源，按「命令行 > 环境变量 > 配置文件 > 默认值」装载（D-012）。
+服务端与客户端（`tui` / `run` / `status`）共用同一份配置来源，按「命令行 > 配置文件 > 默认值」装载（D-012）。**配置项一律不由环境变量提供**（P2-017），唯一的环境变量是应用根目录覆盖。
 
 | 项 | 说明 |
 |---|---|
-| 配置文件 | `<应用根目录>/config.toml`，内容为 `[server]` 下的 `addr` / `port` / `log_level`；文件不存在时全部取默认值 |
+| 配置文件 | `<应用根目录>/config.toml`：`[server]` 的 `addr` / `port` / `log_level`、`[runtime.events]` 的事件文件轮转、`[provider]` / `[[provider.models]]` 的模型清单、`[agent]` 的运行参数；文件不存在时全部取默认值（`[provider]` 缺省即「Provider 未配置」，服务端照常启动） |
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
-| 环境变量 | `AGENT_SERVER_ADDR`（接受 `host` / `host:port` / `http://host:port`）、`AGENT_SERVER_PORT`、`AGENT_LOG_LEVEL` |
+| 环境变量 | 只有 `AGENT_HOME`（应用根目录覆盖）；地址 / 端口 / 日志级别等配置项不再支持环境变量 |
 | 应用根目录覆盖 | 环境变量 `AGENT_HOME` 指向的目录；设置后 `data`、`config.toml`、`logs` / `logs-cli` / `logs-tui` 全部落在该目录，默认位置不再使用（测试用它隔离每个服务端实例） |
 | 默认值 | 监听 `127.0.0.1:20100`（release 构建）/ `127.0.0.1:20102`（debug 构建，见“固定端口”），日志级别 `info` |
 | 目录字段 | `lib-core` 的 `AppDirectories`：`data`、`config_file`、`logs_server`、`logs_cli`、`logs_tui` |

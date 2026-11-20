@@ -3,6 +3,8 @@
 //! 上层只与这里打交道：Rig 的 `Message` / `Streamed` / `ProviderError` 一律不出现在签名里
 //! （D-P2-001 第 2、7 条）。取消由调用方 drop [`LlmStream`] 完成，不额外传取消信号。
 
+pub mod service;
+
 use std::future::Future;
 use std::pin::Pin;
 
@@ -10,6 +12,8 @@ use agent_core::session::MessageRole;
 use futures_util::Stream;
 
 use crate::error::LlmError;
+
+pub use service::ProviderService;
 
 /// 一次 LLM 请求。
 #[derive(Debug, Clone)]

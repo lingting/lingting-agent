@@ -65,7 +65,7 @@
 | 编号 | 条目 | 验证方式 |
 |---|---|---|
 | P-1 | 真实 HTTP 调用 | 用例 `chat.multiturn`（服务端通过真实 HTTP 访问 Mock LLM Server） |
-| P-2 | 配置生效 | 环境变量注入（`AGENT_PROVIDER_BASE_URL` 等）后用例通过；`config.toml` 同名项可覆盖默认值 |
+| P-2 | 配置生效 | 在隔离的 `AGENT_HOME` 下写 `config.toml`（`[provider] base_url` 指向 Mock Server）后用例通过；调整文件中的同名项会改变行为 |
 | P-3 | 流式增量 | 用例 `chat.multiturn` 断言「拼接所有 `message_delta` == 完整回复」且 `message_delta` 条数 > 1 |
 | P-4 | usage 落库 | 用例 `chat.multiturn` 断言 `run/get` 的 `inputTokens` / `outputTokens` 有值且 > 0 |
 | P-5 | 错误映射 | 用例 `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout` |
@@ -132,7 +132,7 @@
 |---|---|---|
 | Q-1 | 多会话并发不串扰 | 用例 `run.concurrency` |
 | Q-2 | 同会话串行 | 用例 `run.concurrency`（同一会话第二个 Run 在第一个终态前保持 `QUEUED`） |
-| Q-3 | 全局上限生效 | `AGENT_MAX_CONCURRENT_RUNS=1` 时采样 `runningRunCount ≤ 1` |
+| Q-3 | 全局上限生效 | `config.toml` 的 `[agent] max_concurrent_runs = 1` 时采样 `runningRunCount ≤ 1` |
 | Q-4 | 排队超时 | 用例 `run.queue_timeout`（把 `run_queue_timeout_ms` 压到毫秒级，Run 落 `FAILED`「执行排队超时」） |
 
 ## 12. Recovery（V-1 ~ V-5）
@@ -161,7 +161,7 @@
 
 | 编号 | 条目 | 验证方式 |
 |---|---|---|
-| Z-1 | 密钥不入日志 | 在 `AGENT_PROVIDER_API_KEY=<canary>` 下跑 `chat.multiturn` 与 `run.failed_auth`，检索服务端日志文件无 canary |
+| Z-1 | 密钥不入日志 | 在 `config.toml` 的 `provider.api_key` 写入 canary 后跑 `chat.multiturn` 与 `run.failed_auth`，检索服务端日志文件无 canary |
 | Z-2 | 密钥不入响应 | 检索失败响应体与 `run/get`、`message/list`、`probe/health` 的输出无 canary |
 | Z-3 | `Debug` 脱敏 | 源码核对 `Secret` 的 `Debug` / `Display` 为 `***`；无直接暴露 key 的派生 `Debug` 结构 |
 | Z-4 | 错误不含内部细节 | `run.failed_*` 断言 `error` 不含 `http`、`/v1`、盘符路径、`SELECT`、堆栈关键字 |

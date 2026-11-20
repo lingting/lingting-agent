@@ -107,6 +107,7 @@ CLI / TUI / WebUI
 | `agent-runtime -> service-core` | Run / Message 的持久化规则属于 `service-core`，Runtime 通过其 Service 读写；同时在该方向实现 `service-core` 定义的执行端口。方向仍为「上层依赖下层」。 |
 | `lib-web -> agent-core`、`lib-web -> agent-runtime` | Handler 的 DTO 来自 `agent-core`；运行时会话的事件来源经 `service-core` 的端口注入，`lib-web` 只在启动装配期接触 `agent-runtime` 的类型（若为空则不必依赖，落地时以 `cargo tree` 为准）。 |
 | `manager-agent -> service-core` / `lib-db` | 启动装配与进程级 holder（P2-013 起）；`service-core` 不反向依赖它，运行时状态与会话服务的互相引用在此层解决。 |
+| `manager-agent -> agent-route` | Provider 配置的只读承载与模型解析（P2-017 起，D-P2-037）：装配层持有 `ProviderService`，自己不实现模型查找。 |
 | `lib-web -> manager-agent`、`lib-bin-web -> manager-agent` | Handler 的会话业务入口与装配结果；启动方只调装配入口，装配细节（数据库 / Repository / Service / 运行时状态）留在 `manager-agent`。 |
 
 **不再需要的迁移**：P1.1 已删除 `RunEventStream` 与 `lib-web/src/session/stream.rs`，因此不存在「事件流类型迁入 `agent-runtime`」这件事；事件生产方就是传给执行端口的 `mpsc::Sender<RunEvent>`（见 D-P2-028）。
@@ -126,7 +127,7 @@ CLI / TUI / WebUI
 
 ### 配置面（P2 定型，后续只追加）
 
-`<应用根目录>/config.toml` 新增段落；环境变量覆盖同名项（**测试通过 `AGENT_HOME` + 环境变量注入**，不需要新增接口）：
+`<应用根目录>/config.toml` 新增段落；**配置项一律不由环境变量提供**（D-P2-037，测试同样通过写 `AGENT_HOME` 下的 `config.toml` 注入，不需要新增接口）：
 
 ```toml
 [server]
@@ -143,7 +144,7 @@ max_bytes = 536870912
 id = "default"
 kind = "openai-compatible"          # P2 只支持 OpenAI 兼容协议
 base_url = "https://api.openai.com/v1"
-api_key = ""                        # 明文；也可由 AGENT_PROVIDER_API_KEY 提供（D-P2-017）
+api_key = ""                        # 明文；写在文件里，不由环境变量提供（D-P2-017）
 default_model = "gpt-4o-mini"
 
 [[provider.models]]
@@ -159,12 +160,8 @@ context_max_messages = 40
 context_safety_tokens = 256
 ```
 
-| 环境变量 | 覆盖项 |
-|---|---|
-| `AGENT_PROVIDER_BASE_URL` / `AGENT_PROVIDER_API_KEY` / `AGENT_PROVIDER_MODEL` | Provider 连接与默认模型 |
-| `AGENT_MAX_CONCURRENT_RUNS` / `AGENT_RUN_QUEUE_TIMEOUT_MS` / `AGENT_LLM_IDLE_TIMEOUT_MS` | 并发与超时 |
-| `AGENT_CONTEXT_MAX_MESSAGES` / `AGENT_CONTEXT_SAFETY_TOKENS` | Context 预算 |
-
+> 上下文窗口 `context_window` 缺省 8192、单次输出上限 4096 之类只作兜底；模型必须出现在
+> `[[provider.models]]` 里（未知模型一律 400，D-P2-015）。
 > 连接保活不新增配置：下行流的 `: keepalive` 间隔与客户端心跳都是 P1.1 的常量（15s，D-P1.1-006）。
 
 ---

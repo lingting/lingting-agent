@@ -4,23 +4,24 @@ use crate::{cors, shutdown, webui};
 use anyhow::{Context, Result, anyhow};
 use framework_web::{WebRoute, use_web};
 use framework_web_axum::{WebRouteWrapper, axum_builder};
-use manager_agent::runtime::JournalConfig;
+use manager_agent::AssemblyOptions;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{Instrument, info, info_span};
 
 /// 启动 Web Server 并常驻运行，收到关闭信号后完成优雅关闭再返回。
 ///
-/// `events` 是事件文件轮转配置：由 `bin-agent` 从 `config.toml` 解析后透传，启动时注入一次。
+/// `options` 是装配参数（事件文件轮转、Provider / Agent 配置等）：由 `bin-agent` 从 `config.toml`
+/// 解析后透传，装配时注入一次。
 /// 关闭链路与超时策略见 D-028：超时未能排空时以错误返回，由调用方转成非 0 退出码。
 /// 内部创建 Tokio 运行时，调用方按同步方式调用即可。
-pub fn serve(host: &str, port: u16, events: JournalConfig) -> Result<()> {
+pub fn serve(host: &str, port: u16, options: AssemblyOptions) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("创建 Tokio 运行时失败")?;
 
-    let result = runtime.block_on(run(host, port, events));
+    let result = runtime.block_on(run(host, port, options));
     if let Err(error) = &result {
         // 日志已初始化，运行期错误写入日志（控制台 + 文件），调用方只需处理退出码。
         tracing::error!("服务运行失败：{error:#}");
@@ -28,16 +29,12 @@ pub fn serve(host: &str, port: u16, events: JournalConfig) -> Result<()> {
     result
 }
 
-async fn run(host: &str, port: u16, events: JournalConfig) -> Result<()> {
+async fn run(host: &str, port: u16, options: AssemblyOptions) -> Result<()> {
     // 记录启动时刻，供 health 接口返回启动时间与运行时长。
     lib_web::probe::mark_startup();
     // 装配（P2-013）：应用目录 → 数据库（迁移 + 自愈）→ Repository → Service → 运行时状态，
     // 任一步失败都带着可读错误返回，由调用方转成非 0 退出码。
-    let state = manager_agent::assemble(manager_agent::AssemblyOptions {
-        journal: events,
-        ..Default::default()
-    })
-    .await?;
+    let state = manager_agent::assemble(options).await?;
     if !manager_agent::install(state) {
         tracing::warn!("装配结果已注入，跳过重复注入");
     }
