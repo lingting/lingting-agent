@@ -1,6 +1,6 @@
 # P2：基础 Agent Runtime
 
-**状态：方案已重新生成（2026-11-20），未开工。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
+**状态：进行中（2026-11-20 开工）：Batch A（P2-001 ~ P2-005）已定稿，Batch B 待开工。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
 
 > 依据：P1 验收结论（[`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）、P1.1 验收结论（[`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)）与仓库实际代码。凡与既有文档不一致之处，以代码为准并记入 `decisions.md`。
 > 任务见 [`tasks.md`](tasks.md)，判据见 [`acceptance.md`](acceptance.md)，决策见 [`decisions.md`](decisions.md)。
@@ -173,7 +173,7 @@ context_safety_tokens = 256
 
 | 批次 | 主题 | 任务 | 出口 |
 |---|---|---|---|
-| A | 架构与技术决策 | P2-001 ~ P2-005 | 决策定稿、契约清单、`workspace.md` 变更清单 |
+| A | 架构与技术决策 | P2-001 ~ P2-005（已完成） | 决策定稿、契约清单、`workspace.md` 变更清单 |
 | B | Agent 领域模型与类型迁移 | P2-006 ~ P2-009 | `agent-core` 建立、契约类型迁移完成、SDK 语义零差异 |
 | C | SQLite 与 Repository | P2-010 ~ P2-014 | 内存存储换成 SQLite，重启可恢复、残留自愈 |
 | D | Provider 与 Rig Adapter | P2-015 ~ P2-018 | 可真实调用 OpenAI 兼容服务，Mock LLM Server 就绪 |

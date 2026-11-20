@@ -1,6 +1,6 @@
 # P2 技术决策记录
 
-**状态：方案已重新生成（2026-11-20）。** 本文件记录 P2 的阶段级决策。编号 `D-P2-xxx`；被否决与被修订的方案保留记录，不删除。
+**状态：Batch A 已定稿（2026-11-20），后续批次按需增补。** 本文件记录 P2 的阶段级决策。编号 `D-P2-xxx`；被否决与被修订的方案保留记录，不删除。
 
 > 上一版记录（35 个任务时期）中，凡以「Run 由 `api/run/stream` 订阅触发」为前提的结论，已在 P1.1 后作废，并在正文以 **P1.1 修订** 标注；本版新增 D-P2-028 / D-P2-029。
 
@@ -24,8 +24,8 @@
 
 | ID | 主题 | 状态 |
 |---|---|---|
-| D-P2-001 | LLM 接入层：`rig-core` 0.46 + 自有 Adapter，不用 Rig 的 Agent Loop | DECIDED (待验证) |
-| D-P2-002 | 持久化：`sqlx` 而非 `rusqlite` | DECIDED (待验证) |
+| D-P2-001 | LLM 接入层：`rig-core` 0.46 + 自有 Adapter，不用 Rig 的 Agent Loop | DECIDED |
+| D-P2-002 | 持久化：`sqlx` 而非 `rusqlite` | DECIDED |
 | D-P2-003 | `sqlx` feature 组合（不启用 `macros`） | DECIDED |
 | D-P2-004 | 数据库位置、连接参数与测试隔离 | DECIDED |
 | D-P2-005 | 消息顺序用 `seq` 列；会话消息数用 `COUNT` | DECIDED |
@@ -53,17 +53,22 @@
 | D-P2-027 | Framework 依赖与 CI 策略（P2 不变） | DECIDED |
 | D-P2-028 | Run 触发点继承 P1.1；执行端口由 `agent-runtime` 实现并注入 | DECIDED |
 | D-P2-029 | 终态事件归属与「事件文件 / 数据库」事实源分工 | DECIDED |
+| D-P2-030 | SQLite 表结构草案与迁移执行方式（不用 `sqlx::migrate!`） | DECIDED |
 
 ---
 
 ## D-P2-001 LLM 接入层：`rig-core` 0.46 + 自有 Adapter，不用 Rig 的 Agent Loop
 
 - **问题**：P2 如何接入 Rig，才既不重复实现 Provider 协议，又不让 Rig 侵占自研 Agent Loop 的职责？
-- **背景（已核实）**：
-  - `rig` facade crate 的 `default` 特性包含 `agent`（→ `rig-agent`），而 `rig-agent` 就是 Rig 自己的 Agent 运行时（`Agent` / `AgentBuilder` / `AgentRun` / `AgentRunner` / tool loop）。
-  - `rig-core` 0.46 的 `default = ["derive", "rustls"]`，`reqwest` 是独立特性；OpenAI 兼容路径为 `providers::openai::{OpenAIConfig, Route, OpenAI}`，配置含 `api_key` / `base_url` / `route` 字段并有 `with_base_url` / `with_route` 构造器。
-  - 完成调用的入口是 `driver::Model::{call, stream}`；流式返回 `Streamed<Completion>`，可用 `finish()` 取 `CompletionResponse { choice, usage, ... }`；错误类型 `ProviderError` 含认证失败 / 上游响应 / HTTP / stalled / truncated / JSON 变体。
-  - 仓库现状：`Cargo.toml` 仍无 Rig 依赖（P1 / P1.1 未引入）。
+- **背景（已核实，源码：本地 registry `rig-core-0.46.0`）**：
+  - `rig` facade crate 的 `default` 含 `agent`（`dep:rig-agent`），而 `rig-agent` 就是 Rig 自己的 Agent 运行时（`Agent` / `AgentBuilder` / `AgentRun` / tool loop）；`rig-core` 的 `default = ["derive", "rustls"]`，`reqwest` 是独立特性。
+  - 构造（`client/openai.rs:25-70`、`providers/openai/wire.rs:580-800`）：`OpenAIConfig::new(api_key)`（或 `with_key(&dialect, key)`）→ `with_base_url(..)` / `with_route(Route)` → `.client()`（共享 reqwest 客户端）或 `.connect(http)` → `OpenAI`；`OpenAI::chat(model)` 固定走 Chat Completions wire（`POST /chat/completions`），`OpenAI::completion(model)` 走配置的 `completion_route`（可能落到 `/responses`）。
+  - 调用（`driver.rs:400-436`）：`Model::{call, stream}`；`call(impl Into<Request<W>>)` → `Result<Response<W>, ProviderError>`，`stream(..)` → `Result<Streamed<W::Op>, ProviderError>`；`OpenAI::chat(..)` 得到的正是 `driver::Model<Chat>`。
+  - 流式（`streaming/mod.rs:92-300`）：`Streamed<Op>` 实现 `Stream<Item = Result<Item<Op::Event>, ProviderError>>`（即 `Streamed<Completion>` = `CompletionStream`）；文本增量是 `StreamEvent::Text { part, text }`；错误是流的最后一项，此后流结束；`finish()` 折叠出 `CompletionResponse`（`choice` + `Usage { input_tokens, output_tokens, total_tokens }`，三个计数都是 `Option`）；`partial()` 给出已到达内容。
+  - 空闲超时（`driver.rs:63-97, 500-590`）：`Model::with_idle_timeout(Option<Duration>)`，默认 `STREAM_IDLE_TIMEOUT = 300s`，只对 `Mode::Streaming` 计时（首帧前与帧间），超时产出 `ProviderError::Stalled(Duration)`。
+  - 消息类型（`completion/message.rs:14-54`、`completion/request.rs:1203`）：`Message` 是**枚举**（`System { content }` / `User { content: Vec<UserContent> }` / `Assistant(AssistantMessage)`），不是 `{ role, content }` 结构体；`CompletionRequest { chat_history: Vec<Arc<Message>>, max_tokens: Option<u64>, tools, documents, … }`。
+  - 错误（`error.rs:313-369`）：`ProviderError::{Http, Json, Url, Request, Response, Provider, ProviderResponse, InvalidAuthentication, Truncated, Stalled(Duration), Relayed, UnsupportedOption, CacheExpired, MismatchedDimensions}`。
+  - 仓库现状：`Cargo.toml` 仍无 Rig 依赖；本地 registry 已有 `rig-core-0.46.0`，但 `rig-http` / `rig-reqwest` 尚未落地，传输层（`send_streaming` 的字节流实现）本轮无法逐行引用。
 - **可选方案**：
   1. 依赖 facade `rig`（含 `agent`）——REJECTED：会把 Rig 的 Agent Loop 拉进依赖树，与「Agent Runtime 自研」直接冲突。
   2. 依赖 `rig-core`（`default-features = false, features = ["reqwest","rustls"]`），在 `agent-route` 内做 Adapter——**采用**。
@@ -73,9 +78,13 @@
   2. `rig` 的类型只允许出现在 `crates/agent-route/src/rig/` 下；上层只见项目自有 `LlmProvider` / `LlmRequest` / `LlmStreamEvent` / `LlmError`。
   3. **禁止**使用 `rig_agent`、`AgentBuilder`、`AgentRun`、任何 tool loop API；Agent Loop 由 `agent-runtime` 实现（P2 只做单轮）。
   4. Provider 协议范围：P2 只支持 OpenAI 兼容（`Route::Chat`，即 `POST /chat/completions`）。
+  5. 完成模型只用 `OpenAI::chat(model)` 构造，不用 `OpenAI::completion(model)` 的自动路由（避免 provider 默认路由漂移到 `/responses`）。
+  6. 流式空闲超时用 `Model::with_idle_timeout(Some(Duration::from_millis(agent.llm_idle_timeout_ms)))`，不自研计时器；`ProviderError::Stalled` 映射 `LlmError::IdleTimeout`。
+  7. Rig 的 `Message` 枚举构造收敛在 `agent-route/src/rig/`：项目自有 `LlmMessage { role, content }` 在 Adapter 内翻译成 `Message::System` / `User` / `Assistant`，上层不出现 Rig 类型。
 - **理由**：职责边界最清晰（Rig = 传输 + 协议编解码；项目 = 循环 + 状态 + 持久化 + 事件），且不会因为 Rig 的运行时抽象而把 Run 生命周期交给第三方。
 - **代价与风险**：`rig-core` 依赖面较大（`schemars`、`uuid`、`web-time`、`rig-http`、`rig-reqwest`），编译时间与体积上升；只记录数据不设阈值（P2-032）。
-- **状态**：`DECIDED (待验证)`——构造 / 流式 / 错误映射细节由 P2-001 勘察、P2-016 实测确认。
+- **O-1 结论（源码级，未实测）**：`Streamed` 只持有 `shared`（`Arc<Mutex<Shared<Op>>>`）与 `reading`（`driver::read` 返回的 `async_stream`），没有后台任务持有它们，`select!` 命中取消分支后 drop `Streamed` 即 drop `reading` 与底层 body 流。`rig-http` / `rig-reqwest` 未落地，因此「reqwest body 释放即关闭 TCP 连接」只能作为**推断**。**影响范围**：`run.cancel` / `run.disconnect` / `run.shutdown` 只断言「终态 + 事件文件有终态 + Mock LLM 不再收到后续分块」，不断言连接立即 FIN；P2-016 实测若发现连接不随之关闭，只在此处补记录，不改用例结构。
+- **状态**：`DECIDED`（P2-001 勘察完成：构造 / 流式 / 错误三段均有上方源码出处；O-1 见本条结论）。
 - **承接任务**：P2-001、P2-015、P2-016、P2-032。
 
 ---
@@ -92,8 +101,9 @@
   2. `rusqlite`：同步 API，需要 `spawn_blocking` + 自建连接池与线程模型；迁移要自己写或额外用 `rusqlite_migration`。
   3. 两者共存——REJECTED：禁止同时引入两套数据库框架。
 - **决策**：采用 `sqlx`；`rusqlite` 记为 `REJECTED`（单进程多会话并发下需要手写阻塞线程模型与连接池，与既有 Tokio 运行时和「Repository + 事务」的写法不匹配）。
+- **O-3 结案（版本定格）**：本地 registry 有 `sqlx-0.8.6` 与 `sqlx-0.9.0`。0.9.0 的 `rust-version = 1.94.0`（工作区 1.98.0 满足），但 feature 名与语义已变：`runtime-tokio-rustls` 不存在（拆为 `runtime-tokio` + `tls-*`），`sqlite` 展开成 `sqlite-bundled` + `sqlite-deserialize` + `sqlite-load-extension` + `sqlite-unlock-notify` 四项，`macros` 额外带上 `offline`。P2 只用 SQLite 单文件，升级收益为零而验证面变大，**定格 0.8.6**；0.9 的评估留给后续阶段独立验证。
 - **理由**：与现有 Tokio + Repository 分层一致；迁移内建；bundled SQLite 免去系统库依赖，符合单 Binary 分发目标。
-- **状态**：`DECIDED (待验证)`——版本与 bundled 编译在 P2-010 落地时确认（含 Windows 上是否需要 cc）。
+- **状态**：`DECIDED`（O-3 结案见上，定格 0.8.6）；bundled SQLite 的编译在 P2-010 落地时确认（Windows 上走 cc）。
 - **承接任务**：P2-002、P2-010。
 
 ---
@@ -103,8 +113,9 @@
 - **问题**：`sqlx` 的 feature 怎么选，才能既够用又不引入编译期数据库依赖？
 - **背景（已核实）**：`macros` 特性启用 `query!` / `query_as!` 编译期校验，需要 `DATABASE_URL` 或 `.sqlx` 离线数据；当前声明里带着 `macros`。
 - **决策**：
-  1. `features = ["runtime-tokio-rustls", "sqlite", "json", "migrate"]`，去掉 `macros` 与 `any`。
-  2. 查询一律用运行时 API（`sqlx::query` / `query_as`），SQL 统一写在 `service-core` 的 `repository` 内。
+  1. `sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "sqlite"] }`——去掉已声明的 `macros` / `any` / `json` / `migrate`：P2 只有 SQLite 单文件、没有网络数据库（不需要 TLS）、不存 JSON 列、不使用 `sqlx::migrate!`（迁移见 D-P2-030）。
+  2. 查询一律用运行时 API（`sqlx::query` / `query_as`），SQL 统一写在 `service-core` 的 `repository` 内；行映射手写（`Row::try_get`），不启用 `derive` / `FromRow`。
+  3. `sqlx::migrate!` 在 0.8 里由 `macros` 特性提供（`sqlx/src/lib.rs` 的 `pub extern crate sqlx_macros` 与 `#[cfg(feature = "macros")] mod macros`），与「不启用 `macros`」直接冲突；迁移改由 `lib-db` 自建 runner 执行，见 D-P2-030。
 - **理由**：CI 与本地构建不应需要数据库连接或离线缓存文件；Repository 层本来就要手写 SQL 与行映射。
 - **状态**：`DECIDED`。
 - **承接任务**：P2-002、P2-010。
@@ -188,7 +199,18 @@
   1. 所有终态写入都是条件更新：`UPDATE runs SET status=?, ... WHERE id=? AND status IN ('QUEUED','RUNNING')`。
   2. 受影响行数为 0 = 已被他人提交终态 → 本次什么都不写、不发终态事件、静默退出。
   3. 成功路径额外要求 `WHERE status='RUNNING'`，保证 `QUEUED` 的 Run 不会被误判为完成。
+
   4. 内存侧不设「终态锁」；数据库是唯一裁决者（注册表只用于取消信号与单生产方占位）。
+- **状态转换表（P2-004 定稿，P2-012 / P2-022 / P2-024 实施依据）**：
+
+| 起点 | 终点 | 触发方 | 守卫 |
+|---|---|---|---|
+| — | `QUEUED` | `api/message/create` | 单事务写用户消息 + Run |
+| `QUEUED` | `RUNNING` | 会话执行队列（仅在占用存在时） | `WHERE status='QUEUED'` |
+| `RUNNING` | `COMPLETED` | 执行器成功收尾 | 事务内条件更新 + 插入助手消息 |
+| `RUNNING` | `FAILED` | 执行器失败收尾 | 条件更新 + 脱敏 `error` |
+| `QUEUED` / `RUNNING` | `CANCELLED` | `api/run/cancel`、客户端断连、服务关闭、启动自愈 | 条件更新，影响 0 行即放弃 |
+| 任意终态 | 任意 | — | 禁止；条件更新影响 0 行视为「已终态」，不报错 |
 - **P1.1 补充**：`QUEUED → RUNNING` 的推进仍走 `Store::start_next_run` 的状态 CAS（P1.1 已实现），与终态条件更新同属一条规则：任何状态推进都必须由条件更新裁决。
 - **理由**：内存锁在崩溃、panic 后不可靠；条件更新是 SQLite 单写者模型下最简洁的正确解。
 - **状态**：`DECIDED`。
@@ -234,6 +256,7 @@
   2. 估算：`tokens ≈ ceil(ascii_chars / 4) + non_ascii_chars + 4`（每条消息固定开销 4）。
   3. 预算：`available = context_window - max_output_tokens - safety_tokens(默认 256) - system_prompt_tokens`。
   4. 可替换：`TokenEstimator` trait + `HeuristicEstimator` 默认实现，构造点唯一（`agent-context`）。
+- **O-4 结案**：`context_window` 8192 / `max_output_tokens` 1024 只是缺省兜底——模型必须出现在 `[[provider.models]]`（D-P2-015 拒绝未知模型），实际预算由配置显式给出，因此不构成「本地模型被频繁裁剪」的风险。
 - **理由**：不引入 tokenizer 依赖（体积与离线要求）；启发式对「中英混排」偏保守（CJK 按 1 字符 1 token 估），宁可提前裁剪也不越界。
 - **状态**：`DECIDED`。
 - **承接任务**：P2-003、P2-020、P2-021。
@@ -436,6 +459,30 @@
   2. `agent-runtime` 实现端口：组装 Context → 调 `agent-route` → 逐段写 `Sender<RunEvent>` → 经 `service-core` 的 Service 落库 → 发终态事件。
   3. 注册点在 `lib-bin-web` 启动装配；未注册时（`api_probe_server`、部分进程内用例）退化为「Run 落 `FAILED`，`error` = 「执行器未装配」」并记日志。
   4. 触发点、串行队列、事件落盘与转发**全部沿用 P1.1**，P2 只替换 `run_one` 里的执行实现。
+- **端口定义（P2-022 实施依据，`service-core/src/session/driver.rs`）**：
+
+```rust
+pub struct RunInput {
+    pub run: Run,
+    pub prompt: String,
+    pub events: mpsc::Sender<RunEvent>,
+    pub cancel: CancellationToken,
+}
+
+pub enum RunOutcome {
+    Completed,               // 助手消息 + COMPLETED 已在同一事务提交
+    Failed { public_error: String },
+    Cancelled { reason: String },
+    SessionGone,             // 运行时会话已停止，未提交任何终态
+}
+
+#[async_trait]
+pub trait RunDriver: Send + Sync {
+    async fn drive(&self, input: RunInput) -> RunOutcome;
+}
+```
+
+  `RunOutcome` 只描述结局，不承载「谁来写库」：`agent-runtime` 经 `service-core` 的 Service 完成终态提交（`COMPLETED` 与助手消息同事务），条件更新影响 0 行即视为「已终态」并跳过终态事件（D-P2-009）。
 - **理由**：不新增依赖边、不改触发语义、不动事件通路，改动面最小且边界最清晰；端口只在 `service-core` 内出现一次调用点，便于将来插入 Tool Loop（P3）。
 - **状态**：`DECIDED`。
 - **承接任务**：P2-004、P2-022、P2-023。
@@ -461,14 +508,135 @@
 
 ---
 
+## D-P2-030 SQLite 表结构草案与迁移执行方式
+
+- **问题**：`sessions` / `messages` / `runs` 的列、约束与索引怎么定？`sqlx::migrate!` 需要 `macros` 特性，而 D-P2-003 不启用它，迁移由谁执行？
+- **决策**：
+  1. 表结构（`crates/lib-db/migrations/0001_init.sql`，P2-011 落地）：
+
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+    id            TEXT    PRIMARY KEY,
+    title         TEXT    NOT NULL,
+    model         TEXT    NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id             TEXT    PRIMARY KEY,
+    session_id     TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    status         TEXT    NOT NULL,
+    model          TEXT    NOT NULL,
+    error          TEXT,
+    input_tokens   INTEGER,
+    output_tokens  INTEGER,
+    created_at_ms  INTEGER NOT NULL,
+    updated_at_ms  INTEGER NOT NULL,
+    finished_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_runs_session_created ON runs (session_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs (status);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id            TEXT    PRIMARY KEY,
+    session_id    TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    run_id        TEXT             REFERENCES runs(id) ON DELETE SET NULL,
+    role          TEXT    NOT NULL,
+    content       TEXT    NOT NULL,
+    model         TEXT,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    seq           INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE (session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq);
+```
+
+  2. 列与契约类型一一对应：`SessionSummary.message_count` 用 `COUNT(*)`（D-P2-005），不落列；`Run` / `Message` 的 `*_at_ms` 用 `INTEGER`，`*_tokens` 用可空 `INTEGER`，`error` / `model` / `run_id` 可空；枚举列（`role` / `status`）存 serde wire 值（`auto_enum` 注入 `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]`，即 `USER` / `QUEUED` 等），**不加 CHECK**——P3 追加枚举值时不需要迁移。
+  3. 索引只建三类：`(session_id, seq)`（消息按序读）、`(session_id, created_at_ms)`（Run 按创建时间取队头）、`(status)`（启动自愈与 `runningRunCount`）。
+  4. 终态写入语句（P2-012 的唯一形态，与 D-P2-009 一致，全部以受影响行数判断「已终态」、0 行不报错）：
+     - 成功：`UPDATE runs SET status='COMPLETED', input_tokens=?, output_tokens=?, updated_at_ms=?, finished_at_ms=? WHERE id=? AND status='RUNNING'`
+     - 失败：`UPDATE runs SET status='FAILED', error=?, updated_at_ms=?, finished_at_ms=? WHERE id=? AND status IN ('QUEUED','RUNNING')`
+     - 取消：`UPDATE runs SET status='CANCELLED', error=?, updated_at_ms=?, finished_at_ms=? WHERE id=? AND status IN ('QUEUED','RUNNING')`
+     - 启动自愈：`UPDATE runs SET status='FAILED', error=?, finished_at_ms=? WHERE status='RUNNING'`；`UPDATE runs SET status='CANCELLED', error=?, finished_at_ms=? WHERE status='QUEUED'`
+  5. 迁移执行方式：`lib-db` 自建 runner，不用 `sqlx::migrate!`（该宏要求 `macros` 特性）。
+     - 迁移账本表 `schema_migrations(version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL)` 是唯一事实源（不使用 `PRAGMA user_version`）。
+     - 迁移脚本以 `include_str!` 编进二进制，按 `version` 升序执行；每个脚本包在一个事务里，成功后写 `schema_migrations`，失败即回滚并返回 `DbError`。
+     - 幂等：版本已存在则跳过，连续启动不重复执行。
+- **理由**：外键与 `UNIQUE(session_id, seq)` 把 D-P2-005 的顺序保证交给数据库；枚举列存 wire 值让「DTO 序列化」与「落库」共用一套映射，不维护第二份字典；自建 runner 只多几十行代码，换来零 `macros` 依赖，且脚本编进二进制、不依赖运行时文件树（单 Binary 分发）。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-002、P2-010、P2-011、P2-012。
+
+---
+
+## 附：API 契约核对（P2-005 产出）
+
+25 条接口逐条核对 `method` / `path` / 入参 / 出参，**P2 全部不变**（D-P2-014）。入参 / 出参列给的是 P1.1 落地后的类型名。
+
+| # | 方法 | path | 入参 | 出参 | P2 结论 |
+|---|---|---|---|---|---|
+| 1 | GET | `api/probe/void` | 无 | 空（204） | 不变 |
+| 2 | POST | `api/probe/echo` | `Json<ProbeEchoPO>` | `ProbeEchoVO` | 不变 |
+| 3 | GET | `api/probe/query` | `Query<ProbeQueryPO>` | `ProbeQueryVO` | 不变 |
+| 4 | GET | `api/probe/typed` | `Query<ProbeQueryPO>` | `ProbeQueryVO`（匿名） | 不变 |
+| 5 | GET | `api/probe/fail` | `Query<ProbeQueryPO>` | 错误响应 | 不变 |
+| 6 | GET | `api/probe/response` | 无 | `WebResponse`（Blob） | 不变 |
+| 7 | GET | `api/probe/response_of` | 无 | `WebResponseOf<ProbeQueryVO>` | 不变 |
+| 8 | GET | `api/probe/internal` | 无 | 固定文案错误 | 不变 |
+| 9 | GET | `api/probe/panic` | 无 | 固定文案错误 | 不变 |
+| 10 | GET | `api/probe/health` | 无 | `ProbeHealthVO`（匿名） | 不变（未装配时 `runningRunCount = 0`） |
+| 11 | GET | `api/probe/version` | 无 | `ProbeVersionVO`（匿名） | 不变 |
+| 12 | POST | `api/probe/shutdown` | 无 | 空 | 不变（仅 debug 构建注册） |
+| 13 | POST | `api/client/create` | `Json<ClientCreatePO>` | `ClientCreateVO` | 不变 |
+| 14 | GET | `api/client/stream` | `Query<ClientStreamParams>` | SSE（Blob） | 不变（事件内容从 Mock 变为真实执行） |
+| 15 | POST | `api/client/update` | `Json<ClientUpdatePO>` | `ClientUpdateVO` | 不变 |
+| 16 | POST | `api/client/delete` | `Json<ClientDeletePO>` | 空 | 不变 |
+| 17 | POST | `api/occupancy/create` | `Json<OccupancyCreatePO>` | `OccupancyVO` | 不变 |
+| 18 | POST | `api/occupancy/delete` | `Json<OccupancyDeletePO>` | 空 | 不变 |
+| 19 | GET | `api/occupancy/get` | `Query<OccupancyGetParams>` | `OccupancyVO` | 不变 |
+| 20 | POST | `api/session/create` | `Json<SessionCreatePO>` | `SessionSummary` | 不变（新增拒绝路径，见 D-P2-015） |
+| 21 | GET | `api/session/list` | 无 | `Vec<SessionSummary>` | 不变 |
+| 22 | GET | `api/message/list` | `Query<MessageListParams>` | `Vec<Message>` | 不变 |
+| 23 | POST | `api/message/create` | `Json<MessageSendPO>` | `MessageSendVO` | 不变（改为真实执行，仍返回 `QUEUED` Run） |
+| 24 | GET | `api/run/get` | `Query<RunGetParams>` | `Run` | 不变 |
+| 25 | POST | `api/run/cancel` | `Json<RunCancelPO>` | `Run` | 不变（新增 `用户取消执行` 原因文本，见 D-P2-029） |
+
+`RunEventKind` 仍是 7 个取值（`run_started` / `message_delta` / `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` / `heartbeat`）；P2 只让 `run_failed` 从「无产出方」变为真实产出，`heartbeat` 保留不产出。
+
+---
+
+## 附：`docs/workspace.md` 变更清单（P2-005 产出，P2-030 回填）
+
+| 位置 | 现状 | P2 落地后 |
+|---|---|---|
+| 3.1 `types-core` | 含 `session` 模块（契约类型） | 删除 `session`，保留 `runtime` / `probe`；新增 `config`（Provider / Model / Agent 配置，内部类型） |
+| 3.1 `service-core` | 内存 `store` + Mock 生产方 + `holder` | Repository（SQLite）+ Service；`RunDriver` 执行端口 trait；`holder` 删除；`RuntimeState` 持 `SessionService` |
+| 3.1 `lib-db` | 未创建 | 新增：连接池（WAL / `busy_timeout` / `foreign_keys`）、自有迁移 runner、`DbError` |
+| 3.2 `agent-core` | 计划 | 新增：契约类型唯一来源、`RunStatus` 状态机、`AgentError` |
+| 3.2 `agent-context-core` / `agent-context` | 计划 | 新增（P2 只做 System / History / User 三类来源与预算裁剪） |
+| 3.2 `agent-route` | 计划；依赖列写着 `service-core` | 新增；**删除 `service-core` 依赖**（只消费 `types-core` 的配置类型） |
+| 3.2 `agent-runtime` | 计划 | 新增：单轮 Agent Loop + `RunDriver` 实现（无 Tool Loop） |
+| 4.4 holder 规则 | 泛述 | 补具体归属：`lib-web` 持 `OnceLock<AppState>`，`service-core` 内由 `RuntimeState` 持 `SessionService` |
+| 5.1 依赖清单 | 已写目标边，带「P2 起」括号 | 去掉「P2 起」括号，改为既成事实；`bin-tests` 增 `agent-core`（契约类型迁移后） |
+| 5.2 依赖图 | 缺 `service-core --> agent-core` 等新边 | 补 `servicecore --> agentcore`、`agentroute --> typescore`、`agentruntime --> servicecore`、`agentruntime --> agentroute`、`agentruntime --> agentcontext` |
+| 5.3 / 5.4 约束 | 已含反向禁止 | 补：`agent-route` 不得依赖 `service-core`；`service-core` 对 `agent-*` 只允许 `agent-core` 类型层 |
+| 6.2 / 6.3 类型归属 | 「P2 建 `agent-core` 后按 6.2 整体迁移」 | 改为既成事实 + 迁移时间点，并写明 Provider 配置类型留在 `types-core` |
+| 8.1 / 8.1.1 | 「P2 计划、尚未实现」；8.1.1 仍写 `RunEventStream` 迁入 `agent-runtime` | 改为已实现；**删除 `RunEventStream` 条目**（P1.1 已移除该类型，事件生产方就是 `mpsc::Sender<RunEvent>`）；`holder` 一句改为「`lib-web` 新增、`service-core::holder` 删除」 |
+| 8.2 | P2 行仍列出 6 个新 crate | 移除 P2 行，保留 P3–P6 |
+| `docs/develop.md` 目录约定 | 只写 `data` / `config.toml` / `logs` | 补 `data/agent.db`（与 `data/events/` 并列） |
+
+---
+
 ## OPEN 待确认项
 
 | ID | 问题 | 现状 | 承接任务 |
 |---|---|---|---|
-| O-1 | drop `LlmStream` 后底层 HTTP 连接是否立即关闭（Rig 内部是否有后台任务继续读取） | 未实测；影响取消类判据的强度 | P2-001、P2-016 |
+| O-1 | drop `LlmStream` 后底层 HTTP 连接是否立即关闭（Rig 内部是否有后台任务继续读取） | **结案（源码级）**：`Streamed` 无后台任务持有读取流，drop 即释放 body 流；reqwest 侧「释放即关闭连接」为推断，未实测（影响面见 D-P2-001 的 O-1 结论） | P2-001、P2-016 |
 | O-2 | `rig-core` 0.46 对编译时间与 release 体积的实际影响 | 未实测；只记录不设阈值 | P2-016、P2-032 |
-| O-3 | `sqlx` 走 0.8（现状声明）还是升到 0.9 | 未定；升级需独立验证 | P2-002、P2-010 |
-| O-4 | `context_window` / `max_output_tokens` 的默认值（8192 / 1024）是否覆盖常见本地模型 | 未实测；偏小会触发频繁裁剪 | P2-002、P2-021 |
+| O-3 | `sqlx` 走 0.8（现状声明）还是升到 0.9 | **结案**：定格 0.8.6（0.9 的 feature 改名与展开见 D-P2-002） | P2-002、P2-010 |
+| O-4 | `context_window` / `max_output_tokens` 的默认值（8192 / 1024）是否覆盖常见本地模型 | **结案**：8192 / 1024 只作缺省兜底；模型必须出现在 `[[provider.models]]`（D-P2-015 拒绝未知模型），因此实际预算由配置显式给出 | P2-002、P2-021 |
 | O-5 | 排队中（Run 停在 `QUEUED`）在 TUI / WebUI 上如何提示最合适 | 未定；P2 只做「等待执行…」最小提示 | P2-027、P2-028 |
 
 ---

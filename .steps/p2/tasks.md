@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已重新生成（2026-11-20），未开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -12,7 +12,7 @@
 
 > 依赖：P1.1 验收通过。**本批次不写业务代码**，结论回填 `README.md` 与 `decisions.md`。
 
-- [ ] **P2-001 Rig 适配边界勘察**
+- [x] **P2-001 Rig 适配边界勘察**
 
   **目标**：确认 `rig-core` 0.46 的调用面、流式面与错误面，钉死「Rig 只做 Provider 传输与协议编解码」的边界。
   **涉及文件 / Crate**：`decisions.md`（D-P2-001、OPEN O-1 / O-2）；不写代码。
@@ -27,7 +27,7 @@
   **完成产物**：D-P2-001 定稿、O-1 结论。
   **测试要求**：无。
 
-- [ ] **P2-002 SQLite 选型与 Schema 草案**
+- [x] **P2-002 SQLite 选型与 Schema 草案**
 
   **目标**：定稿 `sqlx` 版本、feature 组合、表结构与索引，作为 P2-011 的唯一依据。
   **涉及文件 / Crate**：`Cargo.toml` 的 `[workspace.dependencies]`（P2-010 落地时改）、`decisions.md`（D-P2-002、D-P2-003、D-P2-004、D-P2-005、O-3）。
@@ -43,7 +43,7 @@
   **完成产物**：D-P2-002 ~ D-P2-005 定稿、Schema 草案。
   **测试要求**：无。
 
-- [ ] **P2-003 Context Budget 与 Token 估算策略**
+- [x] **P2-003 Context Budget 与 Token 估算策略**
 
   **目标**：定稿 Token 预算来源、估算公式、裁剪顺序与超限失败行为。
   **涉及文件 / Crate**：`decisions.md`（D-P2-012、D-P2-013、O-4）；不写代码。
@@ -58,7 +58,7 @@
   **完成产物**：D-P2-012、D-P2-013 定稿。
   **测试要求**：无。
 
-- [ ] **P2-004 Run 执行模型定稿（继承 P1.1 通路）**
+- [x] **P2-004 Run 执行模型定稿（继承 P1.1 通路）**
 
   **目标**：在 P1.1 的执行队列之上钉死「P2 只换执行内容」的接入方式、状态转换表、持久化时序、并发与取消，作为 P2-022 ~ P2-026 的唯一依据。
   **涉及文件 / Crate**：`decisions.md`（D-P2-028、D-P2-029；修订 D-P2-007、D-P2-008、D-P2-009、D-P2-010、D-P2-011）。
@@ -88,7 +88,7 @@
   **完成产物**：D-P2-028、D-P2-029 新增；D-P2-007 ~ D-P2-011 修订。
   **测试要求**：无。
 
-- [ ] **P2-005 API 契约、密钥策略与决策归档**
+- [x] **P2-005 API 契约、密钥策略与决策归档**
 
   **目标**：把 P2 对契约的影响定成零变更结论，给出密钥规则，并归档 `docs/workspace.md` 变更清单。
   **涉及文件 / Crate**：`decisions.md`（D-P2-014 ~ D-P2-018、D-P2-021 ~ D-P2-027）；`docs/workspace.md` 变更清单。
