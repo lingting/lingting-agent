@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）完成，结论见 `decisions.md`；Batch D 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿），结论见 `decisions.md`；Batch D 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -22,8 +22,8 @@
   3. 核实 `ProviderError` 的变体与可映射字段（认证失败 / 上游错误 / 网络 / 截断 / JSON）。
   4. 实测「drop `LlmStream` 后底层连接是否立即关闭」（O-1），记录方法与本机结果。
   **验收标准**：
-  - [ ] 三段调用面（构造 / 流式 / 错误）各有源码出处与最小示例。
-  - [ ] O-1 有实测结论或明确的「未实测 + 影响范围」标注。
+  - [x] 三段调用面（构造 / 流式 / 错误）各有源码出处与最小示例。
+  - [x] O-1 有实测结论或明确的「未实测 + 影响范围」标注。
   **完成产物**：D-P2-001 定稿、O-1 结论。
   **测试要求**：无。
 
@@ -37,9 +37,9 @@
   3. 定稿终态条件更新语句形态（`WHERE id=? AND status IN ('QUEUED','RUNNING')`）。
   4. 记录数据库位置、连接参数（`max_connections` / WAL / `busy_timeout` / `foreign_keys`）与测试隔离方式（`AGENT_HOME`）。
   **验收标准**：
-  - [ ] 版本与 feature 组合唯一确定，无 `macros`。
-  - [ ] 表结构覆盖 Session / Message / Run 的全部契约字段，含唯一约束与外键。
-  - [ ] 终态更新语句与索引一并写明。
+  - [x] 版本与 feature 组合唯一确定，无 `macros`。
+  - [x] 表结构覆盖 Session / Message / Run 的全部契约字段，含唯一约束与外键。
+  - [x] 终态更新语句与索引一并写明。
   **完成产物**：D-P2-002 ~ D-P2-005 定稿、Schema 草案。
   **测试要求**：无。
 
@@ -53,8 +53,8 @@
   3. 裁剪顺序：先按 `context_max_messages` 截断最旧，再逐条丢弃直到不超预算；系统提示与最新用户消息永不裁。
   4. 超限失败：最新用户消息单条即超预算 → Run `FAILED`、`error` = 「上下文超出模型预算」，不发起上游请求。
   **验收标准**：
-  - [ ] 公式、缺省值、裁剪顺序、失败文案四处唯一确定。
-  - [ ] 估算器为 trait + 默认实现，构造点唯一。
+  - [x] 公式、缺省值、裁剪顺序、失败文案四处唯一确定。
+  - [x] 估算器为 trait + 默认实现，构造点唯一。
   **完成产物**：D-P2-012、D-P2-013 定稿。
   **测试要求**：无。
 
@@ -78,13 +78,13 @@
   5. 终态事件归属：**执行层负责每条 Run 的终态事件**；P1.1 写者的「停止时兜底补写」只在最后一条事件不是终态时触发，作为安全网保留。
   6. 并发：同会话串行由 P1.1 执行队列保证；P2 只加全局 `Semaphore(max_concurrent_runs)`，获取顺序「先队列执行（已串行）→ 再全局信号量」；排队超时 `run_queue_timeout_ms` 到点落 `FAILED`「执行排队超时」。
   7. 取消归属：每 Run 一个 `CancellationToken`；`api/run/cancel` 先条件更新（数据库权威）再触发 token；断连/关闭由 P1.1 的 `SessionStop` 触发，与取消同权；模型流中断方式 = `select!` 命中后 drop 流。
-  8. 启动自愈：`RUNNING → FAILED`（「服务重启，执行已中断」）、`QUEUED → CANCELLED`（「服务重启，未开始的执行已取消」），在迁移之后、监听之前执行一次；占用表不恢复（D-P1.1-007）。
+  8. 启动自愈：`RUNNING → FAILED`（「服务重启，执行中的 Run 已终止」）、`QUEUED → CANCELLED`（「服务重启，排队中的 Run 已取消」），在迁移之后、监听之前执行一次；占用表不恢复（D-P1.1-007）。
   **技术要求**：只写结论与时序，不写实现；所有判定必须能转成用例。
   **验收标准**：
-  - [ ] 执行端口的输入输出与注入点唯一确定，依赖方向不与 `docs/workspace.md` 冲突。
-  - [ ] 状态转换表完整，含终态不可再转与幂等取消。
-  - [ ] 六条持久化路径各有明确写时序，且标明终态事件由谁发出。
-  - [ ] 并发、排队与取消参数齐备；与 P1.1 的断连/关闭链路无冲突。
+  - [x] 执行端口的输入输出与注入点唯一确定，依赖方向不与 `docs/workspace.md` 冲突。
+  - [x] 状态转换表完整，含终态不可再转与幂等取消。
+  - [x] 六条持久化路径各有明确写时序，且标明终态事件由谁发出。
+  - [x] 并发、排队与取消参数齐备；与 P1.1 的断连/关闭链路无冲突。
   **完成产物**：D-P2-028、D-P2-029 新增；D-P2-007 ~ D-P2-011 修订。
   **测试要求**：无。
 
@@ -101,10 +101,10 @@
   6. 归档：把 D-P2-xxx 全部状态定稿；把需要在实施中修改 `docs/workspace.md` 的条目独立成清单（Crate 新增、四条依赖边、`holder` 归属、§8.1 / §8.2 状态）。
   7. 记录 CI 策略：本地 `path` 依赖不变，P2 不碰 GitHub Actions；`make ci` 失败不作为阻塞条件，但 `make gen-check` / `make check` / `make ui-check` 必须本地通过。
   **验收标准**：
-  - [ ] 25 条接口逐条标注「不变」。
-  - [ ] 新增拒绝路径有 doc 与用例归属（P2-017 / P2-026 / P2-031）。
-  - [ ] 密钥规则可执行（脱敏位置、禁止出现的结构、可检索断言）。
-  - [ ] `docs/workspace.md` 需改动的位置列成清单。
+  - [x] 25 条接口逐条标注「不变」。
+  - [x] 新增拒绝路径有 doc 与用例归属（P2-017 / P2-026 / P2-031）。
+  - [x] 密钥规则可执行（脱敏位置、禁止出现的结构、可检索断言）。
+  - [x] `docs/workspace.md` 需改动的位置列成清单。
   **完成产物**：D-P2-014 ~ D-P2-018、D-P2-021 ~ D-P2-027 定稿 + `workspace.md` 变更清单。
   **测试要求**：无。
 
@@ -216,8 +216,8 @@
   4. 事务句柄 `Transaction`：`Database::begin` 开启、`commit` / `rollback` 收尾，未提交即 `Drop` 回滚（D-P2-034）。
   **技术要求**：`lib-db` 不依赖 `types-core` / `service-core` / `agent-*`；不写业务 SQL。
   **验收标准**：
-  - [ ] `cargo tree -p lib-db` 只有 `lib-core` + `sqlx` + `tokio`。
-  - [ ] 打开失败 / 迁移失败给出可读错误，退出码非 0（由 P2-013 装配路径验证）。
+  - [x] `cargo tree -p lib-db` 只有 `lib-core` + `sqlx` + `tokio`。
+  - [x] 打开失败 / 迁移失败给出可读错误，退出码非 0（由 P2-013 装配路径验证）。
   **测试要求**：不新增单元测试；由 `persist.*` 用例覆盖。
   **完成产物**：`lib-db`。
 
@@ -232,8 +232,8 @@
   3. `runs(id PK, session_id FK, status, model, error NULL, input_tokens NULL, output_tokens NULL, created_at_ms, updated_at_ms, finished_at_ms NULL)` + 索引 `(session_id, created_at_ms)` / `(status)`。
   4. 迁移幂等：重复执行不报错、不改数据。
   **验收标准**：
-  - [ ] 约束（PK / FK / UNIQUE / 必要 CHECK）齐全，启动日志无约束错误。
-  - [ ] 连续两次启动同一 data 目录不报错（P2-014 用例）。
+  - [x] 约束（PK / FK / UNIQUE / 必要 CHECK）齐全，启动日志无约束错误。
+  - [x] 连续两次启动同一 data 目录不报错（P2-014 用例）。
   **测试要求**：`persist.migration`（P2-014）。
   **完成产物**：迁移脚本。
 
@@ -249,8 +249,8 @@
   4. 事务边界：`message_create`、完成收尾、失败、取消各自一个事务。
   **技术要求**：SQL 只出现在 `repository`；Service 不拼 SQL；条件更新影响 0 行返回「已终态」而非错误。
   **验收标准**：
-  - [ ] 全部读写有 Repository 方法，无裸 SQL 出现在 Service / Handler。
-  - [ ] 终态写入全部为条件更新。
+  - [x] 全部读写有 Repository 方法，无裸 SQL 出现在 Service / Handler。
+  - [x] 终态写入全部为条件更新。
   **测试要求**：由 P2-014 与 P2-026 的用例覆盖。
   **完成产物**：Repository 层。
 
@@ -267,10 +267,10 @@
   5. `probe_health` 在未安装时返回 `runningRunCount = 0`（`lib-web/examples/api_probe_server.rs` 必须仍可独立启动）。
   **技术要求**：Handler 的签名与 path 不变；`lib-web` 不写业务规则；`service-core` 不反向依赖 `lib-web`。
   **验收标准**：
-  - [ ] 服务可从零启动并创建 / 写入 / 读取会话数据，数据落在 `<AGENT_HOME>/data/agent.db`。
-  - [ ] 进程内不再有 `Mutex<HashMap>` 会话存储与 `service-core::holder`。
-  - [ ] `cargo run -p lib-web --example api_probe_server` 可启动，`probe/health` 返回 200。
-  - [ ] P1.1 的 `runtime.*` / `session.*` / `web.*` 用例全部通过（Mock 行为仍在）。
+  - [x] 服务可从零启动并创建 / 写入 / 读取会话数据，数据落在 `<AGENT_HOME>/data/agent.db`。
+  - [x] 进程内不再有 `Mutex<HashMap>` 会话存储与 `service-core::holder`。
+  - [x] `cargo run -p lib-web --example api_probe_server` 可启动，`probe/health` 返回 200。
+  - [x] P1.1 的 `runtime.*` / `session.*` / `web.*` 用例全部通过（Mock 行为仍在）。
   **测试要求**：`make test ARGS="runtime"`、`make test ARGS="session"`、`make test ARGS="web"` 全绿。
   **完成产物**：持久化存储接入、注入链路成形。
 
@@ -286,9 +286,9 @@
   4. `persist.occupancy_reset`：重启后 `occupancy/get` 返回 404 `会话未被占用`，重新注册 + 重新占用后同一会话可继续发消息。
   **技术要求**：用例只通过生成的 SDK；重启复用同一端口；失败信息含实际状态与条数。
   **验收标准**：
-  - [ ] `make test ARGS="persist"` 全部通过，报告写入 `target/tests/<运行 ID>/persist.md`。
-  - [ ] 消息顺序稳定（`seq` 与内容一一对应）。
-  - [ ] 迁移重复执行无错误日志。
+  - [x] `make test ARGS="persist"` 全部通过，报告写入 `target/tests/<运行 ID>/persist.md`。
+  - [x] 消息顺序稳定（`seq` 与内容一一对应）。
+  - [x] 迁移重复执行无错误日志。
   **完成产物**：`persist.*` 用例。
 
 ---

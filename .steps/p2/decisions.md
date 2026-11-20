@@ -245,8 +245,8 @@
 
 - **问题**：Server 崩溃或重启后，数据库里的 `RUNNING` / `QUEUED` 记录怎么办？
 - **决策**：服务启动阶段（`migrate` 之后、开始监听之前）执行一次自愈：
-  - `RUNNING → FAILED`，`error` = 「服务重启，执行已中断」，写 `finished_at_ms`。
-  - `QUEUED → CANCELLED`，`error` = 「服务重启，未开始的执行已取消」，写 `finished_at_ms`。
+  - `RUNNING → FAILED`，`error` = 「服务重启，执行中的 Run 已终止」，写 `finished_at_ms`。
+  - `QUEUED → CANCELLED`，`error` = 「服务重启，排队中的 Run 已取消」，写 `finished_at_ms`。
 - **理由**：执行任务随进程消失，不可能续跑（D-P2-024）；让残留状态进入用户可理解的终态比留在 `RUNNING` 更安全（否则会话列表永远显示「进行中」，`runningRunCount` 失真）。`RUNNING` 用 `FAILED` 而非 `CANCELLED`，因为用户并没有主动取消。
 - **P1.1 补充**：占用与客户端注册**不恢复**（D-P1.1-007），因此自愈只处理数据库里的 Run 状态，不动占用表与事件文件；客户端重新注册并重新占用后即可继续对话。
 - **状态**：`DECIDED`。

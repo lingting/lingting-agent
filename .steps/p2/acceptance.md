@@ -1,6 +1,6 @@
 # P2 验收清单
 
-**状态：已重新生成（2026-11-20），未开工。** 每条都要能实际验证；**任一条不通过，P2 不视为完成**。
+**状态：P2 进行中（2026-11-20）：Batch C（P2-010 ~ P2-014）已按本清单的相关条目（A-8、S-1 ~ S-4、S-8、V-1 / V-3 / V-4 / V-5、G-6）验收通过，其余条目随未开工批次待验证。** 每条都要能实际验证；**任一条不通过，P2 不视为完成**。
 
 验证方式只有四类：
 
@@ -140,7 +140,7 @@
 | 编号 | 条目 | 验证方式 |
 |---|---|---|
 | V-1 | 重启后历史完整 | 用例 `persist.session` |
-| V-2 | `RUNNING` 残留自愈 | 用例 `persist.running_heal`（`FAILED` + 「服务重启，执行已中断」） |
+| V-2 | `RUNNING` 残留自愈 | 用例 `persist.running_heal`（`FAILED` + 「服务重启，执行中的 Run 已终止」） |
 | V-3 | `QUEUED` 残留自愈 | 用例 `persist.queued_heal`（`CANCELLED` + `finishedAtMs`） |
 | V-4 | 数据库不损坏 | 用例 `persist.migration` + 重启后可继续写入（`persist.session`） |
 | V-5 | 占用不恢复 | 用例 `persist.occupancy_reset`（重启后 404，重新占用可继续） |
