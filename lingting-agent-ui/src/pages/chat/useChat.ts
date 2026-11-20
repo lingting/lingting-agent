@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import type { RunEvent } from "@lingting/agent-api";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { agentApi, errorMessageOf, isAborted, subscribeRunEventStream } from "@/api";
+import { type LinkEvent, agentApi, ChatLink, errorMessageOf } from "@/api";
 
 import {
   type ChatMessage,
@@ -15,7 +16,12 @@ const INTERRUPTED_NOTE = "（连接中断，内容可能不完整）";
 /** 用户主动停止生成时的说明。 */
 const STOPPED_NOTE = "（已停止生成）";
 
-/** 对话状态机：会话创建、发送消息、消费事件流、停止生成。 */
+/**
+ * 对话状态机：注册连接、占用会话、发送消息、消费下行流、停止生成。
+ *
+ * 事件只有一个来源：`api/client/stream` 的下行流（D-P1.1-004）。Run 由「会话被占用 + 消息创建」
+ * 触发执行，因此发送前必须先占用会话。
+ */
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -27,11 +33,26 @@ export function useChat() {
   /** 进行中的 Run ID；为空表示空闲。 */
   const runIdRef = useRef<string | null>(null);
 
-  /** 进行中的事件流：停止生成时直接中断。 */
-  const abortRef = useRef<AbortController | null>(null);
+  /** 进行中回复的助手占位消息 key。 */
+  const assistantKeyRef = useRef<string | null>(null);
+
+  /** 消息创建还没返回时先到达的下行事件：按序缓冲，不做半条拼接（D-011 第 4 条）。 */
+  const pendingRef = useRef<RunEvent[]>([]);
 
   /** 本次生成是否被用户主动停止：用来把「停止」与「断线」区分开。 */
   const stoppedRef = useRef(false);
+
+  /** 是否有进行中的回复（供事件回调读，避免闭包拿到旧值）。 */
+  const streamingRef = useRef(false);
+
+  /** 当前连接。 */
+  const linkRef = useRef<ChatLink | null>(null);
+
+  /** 注册中的那次连接：发送前等它完成。 */
+  const connectRef = useRef<Promise<string> | null>(null);
+
+  /** 最新的事件回调：连接对象在挂载时创建一次，回调随渲染更新。 */
+  const listenerRef = useRef<(event: LinkEvent) => void>(() => {});
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -44,112 +65,169 @@ export function useChat() {
     );
   }, []);
 
-  /** 消费事件流：增量直接追加到助手占位消息。 */
-  const consume = useCallback(
-    async (runId: string, key: string) => {
-      const abort = new AbortController();
-      abortRef.current = abort;
+  /** 追加增量文本。 */
+  const pushDelta = useCallback((key: string, delta: string) => {
+    setMessages((previous) =>
+      previous.map((message) =>
+        message.key === key ? { ...message, content: message.content + delta } : message,
+      ),
+    );
+  }, []);
 
-      let completed = false;
-      let failure: string | null = null;
+  /** 本轮结束：清掉进行中的标记。 */
+  const clearRun = useCallback(() => {
+    runIdRef.current = null;
+    assistantKeyRef.current = null;
+    streamingRef.current = false;
+    pendingRef.current = [];
+    setStreaming(false);
+  }, []);
 
-      for await (const event of subscribeRunEventStream(agentApi, { runId }, abort.signal)) {
-        switch (event.event) {
-          case "message_delta": {
-            const delta = event.delta ?? "";
-            if (!delta) break;
-            setMessages((previous) =>
-              previous.map((message) =>
-                message.key === key ? { ...message, content: message.content + delta } : message,
-              ),
-            );
-            break;
-          }
-          case "run_completed":
-            completed = true;
-            break;
-          case "run_failed":
-            failure = event.error ?? "Run 执行失败";
-            break;
-          case "server_shutdown":
-            failure = event.error ?? "服务正在关闭，回复已中断";
-            break;
-          case "run_started":
-          case "heartbeat":
-            break;
+  /** 把一条 Run 事件应用到助手占位消息。 */
+  const applyRunEvent = useCallback(
+    (event: RunEvent) => {
+      const key = assistantKeyRef.current;
+      if (!key) return;
+      switch (event.event) {
+        case "message_delta": {
+          const delta = event.delta ?? "";
+          if (delta) pushDelta(key, delta);
+          break;
         }
-        // 结束类事件到达后立即收尾：服务端随后会关闭连接，不必等它断开。
-        if (completed || failure !== null) break;
+        case "run_completed":
+          finishMessage(key, "done");
+          clearRun();
+          break;
+        case "run_failed":
+          finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+          setError(event.error ?? "Run 执行失败");
+          clearRun();
+          break;
+        case "run_cancelled":
+          finishMessage(key, "interrupted", stoppedRef.current ? STOPPED_NOTE : INTERRUPTED_NOTE);
+          if (!stoppedRef.current) setError(event.error ?? "Run 已取消");
+          clearRun();
+          break;
+        case "server_shutdown":
+          finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+          setError(event.error ?? "服务正在关闭，回复已中断");
+          clearRun();
+          break;
+        case "run_started":
+        case "heartbeat":
+          break;
+      }
+    },
+    [clearRun, finishMessage, pushDelta],
+  );
+
+  /** 下行事件入口：只处理本轮 Run，连接关闭时收尾并提示。 */
+  const onLinkEvent = useCallback(
+    (linkEvent: LinkEvent) => {
+      if (linkEvent.type === "closed") {
+        const key = assistantKeyRef.current;
+        if (key) finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+        clearRun();
+        setError(`连接中断：${linkEvent.reason}`);
+        return;
       }
 
-      if (completed) {
-        finishMessage(key, "done");
+      const event = linkEvent.event;
+      // 消息创建还没返回：本轮事件先缓冲，拿到 Run ID 后按序放出。
+      if (runIdRef.current === null) {
+        if (streamingRef.current) pendingRef.current.push(event);
         return;
       }
-      if (stoppedRef.current) {
-        finishMessage(key, "interrupted", STOPPED_NOTE);
-        return;
-      }
-      finishMessage(key, "interrupted", INTERRUPTED_NOTE);
-      setError(failure ?? "事件流意外结束，回复可能不完整");
+      if (event.runId !== runIdRef.current) return;
+      applyRunEvent(event);
     },
-    [finishMessage],
+    [applyRunEvent, clearRun, finishMessage],
   );
+
+  useEffect(() => {
+    listenerRef.current = onLinkEvent;
+  }, [onLinkEvent]);
+
+  // 连接生命周期与页面一致：挂载即注册并建立下行流，卸载时交还占用、反注册、停心跳。
+  useEffect(() => {
+    const link = new ChatLink(agentApi, (event) => listenerRef.current(event));
+    linkRef.current = link;
+    const connecting = link.connect();
+    connectRef.current = connecting;
+    // 发送时还会再等一次这个 promise，这里只兜住未处理的失败。
+    connecting.catch((failure: unknown) => setError(errorMessageOf(failure)));
+    return () => {
+      linkRef.current = null;
+      connectRef.current = null;
+      void link.release();
+    };
+  }, []);
 
   const send = useCallback(
     async (content: string) => {
       const text = content.trim();
-      if (!text || runIdRef.current) return;
-      stoppedRef.current = false;
+      if (!text || streamingRef.current) return;
+      const link = linkRef.current;
+      const connecting = connectRef.current;
+      if (!link || !connecting) {
+        setError("连接尚未建立，请刷新页面重试");
+        return;
+      }
 
+      stoppedRef.current = false;
+      streamingRef.current = true;
+      pendingRef.current = [];
       setError(null);
       setStreaming(true);
 
       const assistantKey = nextLocalKey("assistant");
       try {
+        // 等待注册完成：没有 clientId 就无法建立占用。
+        await connecting;
         const sessionId = sessionIdRef.current ?? (await createSession(text));
         sessionIdRef.current = sessionId;
+        // 先占用会话：未被占用的会话里 Run 停在 QUEUED，不会执行（D-P1.1-004）。
+        await link.occupy(sessionId);
 
         const sent = await agentApi.messageCreate({ content: text, sessionId });
         runIdRef.current = sent.run.id;
+        assistantKeyRef.current = assistantKey;
         setMessages((previous) => [
           ...previous,
           fromServerMessage(sent.message),
           { key: assistantKey, role: "ASSISTANT", content: "", status: "streaming" },
         ]);
 
-        await consume(sent.run.id, assistantKey);
-      } catch (failure) {
-        if (isAborted(failure)) {
-          finishMessage(assistantKey, "interrupted", STOPPED_NOTE);
-        } else {
-          setError(errorMessageOf(failure));
-          finishMessage(assistantKey, "interrupted", INTERRUPTED_NOTE);
+        // 缓冲里已攒下本轮开头的几条事件：按到达顺序放出。
+        for (const event of pendingRef.current.splice(0)) {
+          if (event.runId === sent.run.id) applyRunEvent(event);
         }
-      } finally {
-        runIdRef.current = null;
-        abortRef.current = null;
-        setStreaming(false);
+      } catch (failure) {
+        setError(errorMessageOf(failure));
+        clearRun();
       }
     },
-    [consume, finishMessage],
+    [applyRunEvent, clearRun],
   );
 
   /**
-   * 停止生成：先让服务端把 Run 落成取消（服务端会在下一段增量前停推并结束事件流），
-   * 再断开本地事件流，避免「先断流 → 服务端已自行取消 → 取消请求返回 400」的竞态。
+   * 停止生成：先让服务端把 Run 落成取消，再本地收尾。
+   *
+   * 取消后服务端不再为该 Run 产出事件，这条下行流不会有终态事件，因此不等事件到来。
    */
   const cancel = useCallback(async () => {
     const runId = runIdRef.current;
     stoppedRef.current = true;
+    const key = assistantKeyRef.current;
     try {
       if (runId) await agentApi.runCancel({ runId });
     } catch (failure) {
       setError(errorMessageOf(failure));
     } finally {
-      abortRef.current?.abort();
+      if (key) finishMessage(key, "interrupted", STOPPED_NOTE);
+      clearRun();
     }
-  }, []);
+  }, [clearRun, finishMessage]);
 
   return { cancel, clearError, error, messages, send, streaming };
 }

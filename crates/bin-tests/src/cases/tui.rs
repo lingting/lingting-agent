@@ -34,6 +34,8 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 /// 轮询间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// 心跳周期是 15 秒：反注册后要等下一拍心跳才会发现，这里留出 25 秒。
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// TUI 领域用例；排序由上层统一处理。
 pub(crate) fn cases() -> Vec<Case> {

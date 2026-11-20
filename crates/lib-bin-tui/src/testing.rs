@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 pub use crate::state::{App, Connection, Focus, Phase};
+pub use crate::worker::LinkSnapshot;
 pub use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use ratatui::layout::Position;
 
@@ -56,6 +57,11 @@ impl Harness {
             app,
             worker: Some(worker),
         })
+    }
+
+    /// 连接快照：用例据此拿到 TUI 当前注册的 `clientId` 与心跳次数。
+    pub fn snapshot(&self) -> LinkSnapshot {
+        self.worker.as_ref().map(Worker::snapshot).unwrap_or_default()
     }
 
     /// 只读状态：断言直接读界面字段。

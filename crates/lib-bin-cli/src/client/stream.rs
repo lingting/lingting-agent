@@ -1,11 +1,12 @@
-//! SSE 消费：把 `framework-http` 的流式响应切成一条一条的 `RunEvent`。
+//! SSE 消费：把 `framework-http` 的流式响应切成一条一条的 `ClientEvent`。
 //!
-//! 帧格式由服务端 `lib-web-core` 的 `sse::frame` 决定：`id:` / `event:` / 一行或多行 `data:`，
-//! 以空行结束。事件类型与字段全在 `data` 的 JSON 里（生成的 `RunEvent`），因此 `event:` 行
-//! 只做传输语义、不参与解析，`id:` 与 `retry:` 同样忽略。
+//! 帧格式由服务端 `lib-web-core` 的 `sse::json_frame` 决定：`id:` / `event:` / 一行或多行 `data:`，
+//! 以空行结束。事件类型与字段全在 `data` 的 JSON 里（生成的 `ClientEvent`），因此 `event:` 行
+//! 只做传输语义、不参与解析，`id:` 与 `retry:` 同样忽略；`: keepalive` 注释帧没有 `data:` 行，
+//! 整帧被丢弃（它不是一条业务事件，D-P1.1-001）。
 
 use crate::client::ClientError;
-use crate::sdk::RunEvent;
+use crate::sdk::ClientEvent;
 use framework_http::HttpStreamResponse;
 
 /// 帧结束标记：单个空行。
@@ -13,7 +14,7 @@ const FRAME_END: &[u8] = b"\n\n";
 /// 帧结束标记（CRLF 版本）。
 const FRAME_END_CRLF: &[u8] = b"\r\n\r\n";
 
-/// Run 事件流：逐条产出已经反序列化的事件。
+/// 客户端下行事件流：逐条产出已经反序列化的事件。
 pub struct EventStream {
     /// 流式响应，逐块提供响应体。
     response: HttpStreamResponse,
@@ -37,7 +38,7 @@ impl EventStream {
     }
 
     /// 取下一个事件；事件流正常结束时返回 `Ok(None)`。
-    pub async fn recv(&mut self) -> Result<Option<RunEvent>, ClientError> {
+    pub async fn recv(&mut self) -> Result<Option<ClientEvent>, ClientError> {
         loop {
             if let Some(frame) = self.take_frame() {
                 return frame.map(Some);
@@ -62,11 +63,18 @@ impl EventStream {
     }
 
     /// 从缓冲区切出一个完整帧；不足一帧时返回 `None`。
-    fn take_frame(&mut self) -> Option<Result<RunEvent, ClientError>> {
-        let (end, next) = find_frame_end(&self.buffer)?;
-        let frame = self.buffer[..end].to_vec();
-        self.buffer.drain(..next);
-        Some(parse_frame(&frame))
+    fn take_frame(&mut self) -> Option<Result<ClientEvent, ClientError>> {
+        loop {
+            let (end, next) = find_frame_end(&self.buffer)?;
+            let frame = self.buffer[..end].to_vec();
+            self.buffer.drain(..next);
+            match parse_frame(&frame) {
+                Ok(Some(event)) => return Some(Ok(event)),
+                // 注释帧（`: keepalive`）不是业务事件，继续切下一帧。
+                Ok(None) => continue,
+                Err(error) => return Some(Err(error)),
+            }
+        }
     }
 }
 
@@ -83,8 +91,8 @@ fn find_frame_end(buffer: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-/// 解析一帧：拼接 `data:` 行后按 `RunEvent` 反序列化。
-fn parse_frame(frame: &[u8]) -> Result<RunEvent, ClientError> {
+/// 解析一帧：拼接 `data:` 行后按 `ClientEvent` 反序列化；没有 `data:` 的注释帧返回 `None`。
+fn parse_frame(frame: &[u8]) -> Result<Option<ClientEvent>, ClientError> {
     let text = std::str::from_utf8(frame).map_err(|error| ClientError::Decode {
         detail: format!("事件帧不是有效的 UTF-8：{error}"),
     })?;
@@ -102,12 +110,11 @@ fn parse_frame(frame: &[u8]) -> Result<RunEvent, ClientError> {
     }
 
     if data.is_empty() {
-        return Err(ClientError::Decode {
-            detail: "事件帧没有 data 行".to_string(),
-        });
+        return Ok(None);
     }
 
-    serde_json::from_str(&data).map_err(|error| ClientError::Decode {
-        detail: format!("事件数据不是有效的 RunEvent：{error}"),
-    })
+    let event = serde_json::from_str(&data).map_err(|error| ClientError::Decode {
+        detail: format!("事件数据不是有效的 ClientEvent：{error}"),
+    })?;
+    Ok(Some(event))
 }

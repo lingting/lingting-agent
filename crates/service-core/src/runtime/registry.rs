@@ -121,6 +121,18 @@ impl RuntimeState {
         read(&self.inner).sessions.get(session_id).map(RuntimeSession::producer)
     }
 
+    /// 唤醒某会话的 Run 执行队列，返回该会话当前是否被占用。
+    ///
+    /// 没有被占用的会话没有执行队列：新建的 Run 停在 `QUEUED`，由调用方记录原因（D-P1.1-004）。
+    pub fn notify_run(&self, session_id: &str) -> bool {
+        let inner = read(&self.inner);
+        let Some(session) = inner.sessions.get(session_id) else {
+            return false;
+        };
+        session.notify_run();
+        true
+    }
+
     /// 某个客户端下行通道的写者句柄：写者用它转发事件并回报写失败。
     pub(crate) fn downlink(&self, client_id: &str) -> Downlink {
         Downlink {

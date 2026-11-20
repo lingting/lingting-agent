@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 完成：RT-014~RT-017）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 完成：RT-014~RT-017；Batch F 完成：RT-018~RT-020）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -218,34 +218,34 @@
 
 > 依赖：Batch C + Batch E。三个任务强序（客户端必须与服务端同批交付）。
 
-- [ ] **RT-018 移除 `api/run/stream` 与服务端 Run 触发改造**
+- [x] **RT-018 移除 `api/run/stream` 与服务端 Run 触发改造**
 
   **目标**：按 RT-004 清单删除 `run_stream` 端点、`lib-web/src/session/stream.rs`、`RunStreamParams`、`Client::subscribe_run`；新增“会话被占用时推进 `QUEUED` Run”的触发逻辑。
   **涉及文件 / Crate**：`crates/lib-web/src/session/api.rs`、`crates/service-core/src/session/{service,stream,run_trigger}.rs`、`crates/lib-bin-cli/src/{client,run}.rs`、`crates/types-core/src/session/request.rs`。
   **技术要求**：Run 事件生产方（P1 的 Mock / P2 的真实执行）改为写入运行时会话，不再直接写 SSE 响应。
   **验收标准**：
-  - [ ] `api/run/stream` 404；SDK 生成物里无该 path。
-  - [ ] 占用中的会话：消息创建后 Run 进入 `RUNNING`，事件按序落盘并转发到 `api/client/stream`。
-  - [ ] 未被占用的会话：Run 停在 `QUEUED`，日志记录原因。
+  - [x] `api/run/stream` 404；SDK 生成物里无该 path。
+  - [x] 占用中的会话：消息创建后 Run 进入 `RUNNING`，事件按序落盘并转发到 `api/client/stream`。
+  - [x] 未被占用的会话：Run 停在 `QUEUED`，日志记录原因。
   **测试要求**：`bin-tests` 覆盖两条分支与旧端点 404。
 
-- [ ] **RT-019 TUI 接入**
+- [x] **RT-019 TUI 接入**
 
   **目标**：`lib-bin-tui` 改为“注册 → 建流 → 占用 → 发消息 → 消费下行流 → 退出前 delete”。
   **涉及文件 / Crate**：`crates/lib-bin-tui/`。
   **技术要求**：沿用 P1 的手动重连（D-011 第 3 条）；识别到“客户端未注册”（400 + 固定 message）时整体重连，不做增量拼接；重连后按服务端消息整体重载。
   **验收标准**：
-  - [ ] 服务端重启后 `Ctrl+R` 恢复；空闲时心跳持续。
-  - [ ] 退出路径先 `client/delete` 再关闭工作线程。
+  - [x] 服务端重启后 `Ctrl+R` 恢复；空闲时心跳持续。
+  - [x] 退出路径先 `client/delete` 再关闭工作线程。
   **测试要求**：`bin-tests` 的 `tui.*` 用例覆盖心跳与未注册后的重连迁移。
 
-- [ ] **RT-020 WebUI 接入**
+- [x] **RT-020 WebUI 接入**
 
   **目标**：`lingting-agent-ui/src/api/` 增加注册/心跳/下行流/占用，`useChat` 迁移到客户端级事件；移除 `run/stream` 消费代码。
   **涉及文件 / Crate**：`lingting-agent-ui/src/api/`、`lingting-agent-ui/src/pages/chat/`。
   **技术要求**：心跳定时器随页面卸载清理；不做本地半条消息拼接（D-011 第 4 条口径）。
   **验收标准**：
-  - [ ] 刷新页面后旧 `clientId` 靠 TTL 与流断标记回收，新注册不残留旧记录。
+  - [x] 刷新页面后旧 `clientId` 靠 TTL 与流断标记回收，新注册不残留旧记录。
   **测试要求**：无（前端测试按 P1 口径不引入）。
 
 ---

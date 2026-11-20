@@ -5,6 +5,7 @@ use super::{STREAM_TIMEOUT, draft, offline, open, wait_run_cancelled};
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;
 use anyhow::{bail, ensure};
+use lib_bin_cli::sdk::MessageRole;
 use lib_bin_tui::testing::{Focus, KeyCode, KeyModifiers, Phase};
 
 pub(super) fn cases() -> Vec<Case> {
@@ -124,15 +125,19 @@ fn esc_cancel(context: &TestContext) -> CaseFuture<'_> {
         );
         ensure!(harness.app().notice.is_some(), "Esc 后应给出提示");
 
-        // 事件流收尾后回到可输入状态，被中断的回复带上中断标记。
+        // 事件流收尾后回到可输入状态：有内容时标注中断，内容为空则整条丢弃，不留半条消息。
         ensure!(
             harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle && app.run_id.is_none()),
             "中断未在 {} 秒内收尾",
             STREAM_TIMEOUT.as_secs()
         );
         ensure!(
-            harness.app().messages.last().is_some_and(|message| message.interrupted),
-            "被中断的回复应带中断标记"
+            harness
+                .app()
+                .messages
+                .iter()
+                .all(|message| !matches!(message.role, MessageRole::Assistant) || message.interrupted),
+            "被中断的回复应带中断标记，内容为空时整条丢弃"
         );
         ensure!(!harness.app().should_quit(), "Esc 中断不应退出");
         harness.type_text("中断后继续");

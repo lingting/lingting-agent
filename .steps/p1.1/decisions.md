@@ -1,6 +1,6 @@
 # P1.1 决策记录
 
-**状态：已开工（RT-001~RT-004 已完成）。** 本文件记录 P1.1 的阶段级决策。编号 `D-P1.1-xxx`；被否决的方案保留记录，不删除。
+**状态：已开工（RT-001~RT-020 已完成，剩 Batch G 的文档回填与端到端验收）。** 本文件记录 P1.1 的阶段级决策。编号 `D-P1.1-xxx`；被否决的方案保留记录，不删除。
 
 任务分解见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，协议与流程见 [README.md](README.md)。
 
@@ -394,6 +394,24 @@ max_bytes = 536870912
   2. 关闭导致的会话终止一律落 `server_shutdown`（`stop_reason`），与 `session/stream` 既有的 `server_shutdown` 事件语义一致；已标记但原因不同的客户端在关闭时被 `mark_shutdown` 覆盖，避免出现「服务关闭却落 `run_cancelled`」。
   3. 轮转保护判据只有占用表快照，不探测文件状态；删除失败只记日志。
 - **状态**：`DECIDED`。
+
+---
+## D-P1.1-011 服务端主动关流与取消收尾
+
+- **问题**：`client_closed` 帧发出后怎么真正结束 SSE 响应体？`api/run/cancel` 取消后客户端在等什么？
+- **背景**：Batch F 落地时发现两处与 D-P1.1-001 / RT-003 的文字描述不一致的实现约束。
+- **可选方案**：
+  1. 靠丢弃下行通道的发送端来结束响应体。
+  2. 由 `lib-web` 的帧合成层在发出 `client_closed` 帧后结束响应体。
+- **决策**：方案 2，并明确「取消不产出终态事件」的收尾口径。
+- **决策理由**：
+  1. 下行流的 watcher（`Registry::open_stream` 里的 `sender.closed()` 等待）持有一份发送端，反注册只丢弃注册表里那一份，发送端永远不会全部 drop，响应体会一直挂住到框架关闭超时。因此把 `client_closed` 作为服务端主动关流的最后一帧，`lib-web` 发完即结束（`crates/lib-web/src/runtime/stream.rs`）。客户端先收到 `client_closed`（带关闭原因）再读到 EOF。
+  2. `api/run/cancel` 属客户端主动取消，不属于 RT-003 的三个固定取消原因（占用释放 / 连接断开 / 服务关闭），因此不新增终态文本：取消后不再为该 Run 产出事件，客户端（TUI / WebUI / CLI）在取消响应后**本地收尾**；事件文件的终态由会话停止时的写者补 `run_cancelled` 兜底。
+- **配套约束**：
+  1. `RunEventKind::RunCancelled` 的 `error` 文本仍只取三个固定文案，不因显式取消扩张。
+  2. RT-018 的触发点落地为「执行队列随运行时会话起停」：`RunExecutor` 由 `RuntimeSession::start` 启动、`stop` 时先中止再取消 Run；`message/create` 通过 `service_core::runtime::notify_run` 唤醒队列，未被占用的会话只记 `info` 日志（Run 停在 `QUEUED`）。
+  3. 客户端不再有任何 Run 级流：TUI 的 `client/stream` 消费在 `SessionEvent` 之外还要处理 `inquiry`（就地 `INQUIRY_ACK`）与 `client_closed`（收尾提示）。
+- **状态**：`DECIDED`（RT-018 ~ RT-020 落地）。
 
 ---
 

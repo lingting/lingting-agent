@@ -1,13 +1,19 @@
-//! 会话与 Run 用例：创建会话、发送消息、消费 SSE 事件流并核对最终状态。
+//! 会话与 Run 用例：创建会话、占用、发送消息、消费下行流并核对最终状态。
+//!
+//! Run 触发点已改为「会话被占用 + 消息创建」（D-P1.1-004），因此这里统一走
+//! `client/create` → `client/stream` → `occupancy/create` → `message/create` 的客户端编排。
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;
-use anyhow::{bail, ensure};
+use anyhow::{Context, bail, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
-    ApiClient, MessageListParams, MessageRole, MessageSendPO, RunEventKind, RunGetParams, RunStatus, RunStreamParams,
+    ApiClient, ClientCreatePO, ClientDeletePO, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole,
+    MessageSendPO, OccupancyCreatePO, OccupancyDeletePO, OccupancyVO, RunEvent, RunEventKind, RunGetParams, RunStatus,
     SessionCreatePO,
 };
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 /// 会话领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -17,6 +23,12 @@ pub(crate) fn cases() -> Vec<Case> {
             kind: CaseKind::Shared,
             prep: &[],
             run: message,
+        },
+        Case {
+            name: "session.trigger",
+            kind: CaseKind::Shared,
+            prep: &[],
+            run: trigger,
         },
         Case {
             name: "session.error",
@@ -56,6 +68,15 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
             .map_err(ClientError::from_call)?;
         ensure!(!session.id.is_empty(), "会话 ID 为空");
 
+        // 注册 → 建流 → 占用：占用成功后新建的 Run 才会被执行。
+        let client_id = register(context).await?;
+        let occupied = occupy(context, &client_id, &session.id).await?;
+        let mut stream = client
+            .subscribe_client(ClientStreamParams {
+                client_id: client_id.clone(),
+            })
+            .await?;
+
         let sent = client
             .message_create(MessageSendPO {
                 session_id: session.id.clone(),
@@ -63,29 +84,20 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
             })
             .await
             .map_err(ClientError::from_call)?;
-        ensure!(sent.message.content == content, "用户消息未保存");
-        ensure!(sent.run.status == RunStatus::Queued, "Run 初始状态应为 Queued");
+        ensure!(
+            sent.run.status == RunStatus::Queued,
+            "消息创建返回的 Run 初始状态应为 Queued"
+        );
 
-        let queued = client
-            .run_get(RunGetParams {
-                run_id: sent.run.id.clone(),
-            })
-            .await
-            .map_err(ClientError::from_call)?;
-        ensure!(queued.status == RunStatus::Queued, "未订阅前 Run 应保持 Queued");
-
-        let mut stream = client
-            .subscribe_run(RunStreamParams {
-                run_id: sent.run.id.clone(),
-            })
-            .await?;
         let mut reply = String::new();
         let mut last_seq = -1;
         let mut event_count = 0;
         let mut completed = false;
 
         while let Some(event) = stream.recv().await? {
-            ensure!(event.run_id == sent.run.id, "事件 Run ID 不一致");
+            let Some(event) = run_event_of(&event, &sent.run.id) else {
+                continue;
+            };
             ensure!(event.session_id == session.id, "事件会话 ID 不一致");
             ensure!(event.seq > last_seq, "事件序号未递增：{}", event.seq);
             last_seq = event.seq;
@@ -109,7 +121,7 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
             }
         }
 
-        ensure!(completed, "事件流未收到 run_completed");
+        ensure!(completed, "下行流未收到 run_completed");
         ensure!(reply.contains(&content), "回复未回显用户消息：{reply}");
 
         let finished = client
@@ -136,6 +148,20 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
         ensure!(messages[1].role == MessageRole::Assistant, "第二条消息应为助手消息");
         ensure!(!messages[1].content.is_empty(), "助手消息内容为空");
 
+        // 事件文件是事实源：本次占用一份文件，seq 连续，并以终态事件收尾。
+        let journal = journal_path(context, &session.id, &occupied.runtime_session_id);
+        let written = read_journal(&journal)?;
+        ensure!(
+            written.iter().map(|event| event.seq).collect::<Vec<_>>() == (0..written.len() as i64).collect::<Vec<_>>(),
+            "事件文件内 seq 应从 0 连续递增"
+        );
+        ensure!(
+            written.last().map(|event| event.event == RunEventKind::RunCompleted) == Some(true),
+            "事件文件应以 run_completed 收尾"
+        );
+
+        release(context, &client_id).await?;
+
         Ok(vec![
             format!("会话：id={}，title={}", session.id, session.title),
             format!("用户消息：id={}，内容={}", sent.message.id, content),
@@ -145,10 +171,75 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
                 sent.run.status,
                 finished.output_tokens.unwrap_or_default()
             ),
-            format!("事件流：{event_count} 条事件，最后序号 {last_seq}"),
+            format!("下行流：{event_count} 条事件，最后序号 {last_seq}"),
             format!("助手回复：{} 字符", reply.chars().count()),
+            format!("事件文件：{} 条事件，以 run_completed 收尾", written.len()),
             format!("Run 终态：{:?}", finished.status),
             format!("消息列表：{} 条（用户 + 助手）", messages.len()),
+        ])
+    })
+}
+
+/// Run 触发点：未被占用的会话里 Run 停在 `QUEUED`；建立占用后存量 Run 立即执行（D-P1.1-004）。
+fn trigger(context: &TestContext) -> CaseFuture<'_> {
+    Box::pin(async move {
+        let client = context.client();
+        let content = format!("触发点用例 {}", context.token());
+        let session = client
+            .session_create(SessionCreatePO {
+                title: Some(format!("触发点 {}", context.token())),
+                model: None,
+            })
+            .await
+            .map_err(ClientError::from_call)?;
+        let client_id = register(context).await?;
+
+        // 一、会话未被占用：Run 停在 QUEUED，不自执行，也不产出事件文件。
+        let sent = client
+            .message_create(MessageSendPO {
+                session_id: session.id.clone(),
+                content: content.clone(),
+            })
+            .await
+            .map_err(ClientError::from_call)?;
+        let session_events = context.home().join("data").join("events").join(&session.id);
+        // 没有被占用的会话没有执行者：给它一点时间，确认 Run 不会自己跑起来。
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let queued = client
+            .run_get(RunGetParams {
+                run_id: sent.run.id.clone(),
+            })
+            .await
+            .map_err(ClientError::from_call)?;
+        ensure!(
+            queued.status == RunStatus::Queued,
+            "未被占用的会话里 Run 应停在 Queued，实际 {:?}",
+            queued.status
+        );
+        ensure!(
+            !session_events.exists(),
+            "未被占用的会话不应产生事件文件：{}",
+            session_events.display()
+        );
+
+        // 二、建立占用：存量 QUEUED Run 立即被执行到终态。
+        let occupied = occupy(context, &client_id, &session.id).await?;
+        ensure!(
+            wait_run_done(client, &sent.run.id).await?,
+            "占用建立后 Run 应在超时内执行完成"
+        );
+        let journal = read_journal(&journal_path(context, &session.id, &occupied.runtime_session_id))?;
+        ensure!(
+            journal.last().map(|event| event.event == RunEventKind::RunCompleted) == Some(true),
+            "执行完成后事件文件应以 run_completed 收尾"
+        );
+
+        release(context, &client_id).await?;
+
+        Ok(vec![
+            format!("会话：{}", session.id),
+            "未占用：Run 停在 QUEUED，未产出事件文件".to_string(),
+            format!("占用后：Run 执行完成，事件 {} 条", journal.len()),
         ])
     })
 }
@@ -307,7 +398,7 @@ fn isolation(context: &TestContext) -> CaseFuture<'_> {
     })
 }
 
-/// 终止事件：事件流以 `server_shutdown` 收尾而不是挂死，Run 落成已取消（R-3 的失败分支）。
+/// 终止事件：下行流以 `server_shutdown` 收尾而不是挂死，Run 落成已取消（R-3 的失败分支）。
 #[cfg(debug_assertions)]
 fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
@@ -320,6 +411,14 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
             })
             .await
             .map_err(ClientError::from_call)?;
+        let client_id = register(context).await?;
+        let occupied = occupy(context, &client_id, &session.id).await?;
+
+        let mut stream = client
+            .subscribe_client(ClientStreamParams {
+                client_id: client_id.clone(),
+            })
+            .await?;
         let sent = client
             .message_create(MessageSendPO {
                 session_id: session.id.clone(),
@@ -328,49 +427,74 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
             .await
             .map_err(ClientError::from_call)?;
 
-        let mut stream = client
-            .subscribe_run(RunStreamParams {
-                run_id: sent.run.id.clone(),
-            })
-            .await?;
-        let first = stream.recv().await?;
-        let Some(first) = first else {
-            bail!("事件流在 run_started 之前就结束了");
-        };
-        ensure!(
-            first.event == RunEventKind::RunStarted,
-            "首个事件应为 run_started，实际 {:?}",
-            first.event
-        );
-
-        // 收到至少一段增量后再触发关闭，确保终止事件中断的是进行中的流。
+        // 收到 run_started 与至少一段增量后再触发关闭，确保终止事件中断的是进行中的流。
+        let mut last_seq = -1;
         let mut deltas = 0;
-        while deltas == 0 {
+        let mut started = false;
+        while deltas == 0 || !started {
             let Some(event) = stream.recv().await? else {
-                bail!("事件流在增量之前就结束了");
+                bail!("下行流在增量之前就结束了");
             };
-            if event.event == RunEventKind::MessageDelta {
-                deltas += 1;
+            let Some(event) = run_event_of(&event, &sent.run.id) else {
+                continue;
+            };
+            ensure!(event.seq > last_seq, "事件序号未递增：{}", event.seq);
+            last_seq = event.seq;
+            match event.event {
+                RunEventKind::RunStarted => started = true,
+                RunEventKind::MessageDelta => deltas += 1,
+                _ => {}
             }
         }
         client.probe_shutdown().await.map_err(ClientError::from_call)?;
 
-        // 继续消费：最后一条事件必须是 server_shutdown，然后流正常结束。
-        let mut last_seq = first.seq;
-        let terminal = loop {
+        // 继续消费：服务端主动关流时先发一帧 client_closed（原因是服务关闭），然后结束响应体。
+        let mut close_reason = None;
+        loop {
             let Some(event) = stream.recv().await? else {
-                bail!("事件流未发出 server_shutdown 就结束了");
+                break;
             };
-            ensure!(event.seq > last_seq, "事件序号未递增：{}", event.seq);
-            last_seq = event.seq;
-            ensure!(
-                event.event != RunEventKind::RunCompleted,
-                "关闭中的流不应再收到 run_completed"
-            );
-            if event.event == RunEventKind::ServerShutdown {
-                break event;
+            match event.event {
+                ClientEventKind::SessionEvent => {
+                    if let Some(run_event) = run_event_of(&event, &sent.run.id) {
+                        ensure!(run_event.seq > last_seq, "事件序号未递增：{}", run_event.seq);
+                        last_seq = run_event.seq;
+                        ensure!(
+                            run_event.event != RunEventKind::RunCompleted,
+                            "关闭中的流不应再收到 run_completed"
+                        );
+                    }
+                }
+                ClientEventKind::ClientClosed => {
+                    close_reason = event.close_reason;
+                    break;
+                }
+                ClientEventKind::Inquiry => {}
             }
-        };
+        }
+        ensure!(
+            close_reason == Some(lib_bin_cli::sdk::ClientCloseReason::ServerShutdown),
+            "关闭时应下发 client_closed(ServerShutdown)，实际 {close_reason:?}"
+        );
+        ensure!(stream.recv().await?.is_none(), "client_closed 之后下行流应立即结束");
+
+        // 事件文件是事实源：Run 落成已取消，文件以 server_shutdown 收尾（RT-003）。
+        let path = journal_path(context, &session.id, &occupied.runtime_session_id);
+        ensure!(
+            crate::support::wait_until(|| std::fs::read_to_string(&path)
+                .ok()
+                .is_some_and(|text| text.contains("\"server_shutdown\"")))
+            .await,
+            "事件文件应以 server_shutdown 收尾：{}",
+            path.display()
+        );
+        let written = read_journal(&path)?;
+        let terminal = written.last().context("事件文件应有终态事件")?;
+        ensure!(
+            terminal.event == RunEventKind::ServerShutdown,
+            "最后一条事件应为 server_shutdown，实际 {:?}",
+            terminal.event
+        );
         ensure!(
             terminal.status == Some(RunStatus::Cancelled),
             "server_shutdown 应带已取消状态，实际 {:?}",
@@ -380,17 +504,107 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
             terminal.error.as_deref().is_some_and(|error| !error.is_empty()),
             "server_shutdown 应带可读原因"
         );
-        ensure!(stream.recv().await?.is_none(), "server_shutdown 之后事件流应立即结束");
 
         Ok(vec![
-            format!("关闭前已收到 {deltas} 段增量，终止事件序号 {last_seq}"),
+            format!("关闭前已收到 {deltas} 段增量，最后序号 {last_seq}"),
+            format!("下行流以 client_closed({close_reason:?}) 收尾后立即结束"),
             format!(
-                "终止事件：server_shutdown，状态 {:?}，原因 {}",
+                "事件文件以 server_shutdown 收尾，状态 {:?}，原因 {}",
                 terminal.status,
-                terminal.error.unwrap_or_default()
+                terminal.error.clone().unwrap_or_default()
             ),
-            // 关闭期间不再查询 Run：服务端已进入 503 拒绝窗口，Run 的终态以终止事件里的 status 为准。
-            "终止事件后事件流立即结束，不再挂死".to_string(),
+            // 关闭期间不再查询 Run：服务端已进入 503 拒绝窗口，Run 的终态以事件文件的终态事件为准。
         ])
     })
+}
+
+/// 注册一个客户端，返回 `clientId`。
+async fn register(context: &TestContext) -> anyhow::Result<String> {
+    let registered = context
+        .client()
+        .client_create(ClientCreatePO {})
+        .await
+        .map_err(ClientError::from_call)?;
+    ensure!(!registered.client_id.is_empty(), "注册返回的 clientId 为空");
+    Ok(registered.client_id)
+}
+
+/// 建立占用：成功即启动该会话的运行时会话并打开事件文件。
+async fn occupy(context: &TestContext, client_id: &str, session_id: &str) -> anyhow::Result<OccupancyVO> {
+    Ok(context
+        .client()
+        .occupancy_create(OccupancyCreatePO {
+            client_id: client_id.to_string(),
+            session_id: session_id.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)?)
+}
+
+/// 收尾：先交还占用、再反注册，避免影响同一服务端的其他用例。
+async fn release(context: &TestContext, client_id: &str) -> anyhow::Result<()> {
+    context
+        .client()
+        .occupancy_delete(OccupancyDeletePO {
+            client_id: client_id.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)?;
+    context
+        .client()
+        .client_delete(ClientDeletePO {
+            client_id: client_id.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)?;
+    Ok(())
+}
+
+/// 从下行事件里取出属于指定 Run 的那条 `RunEvent`；其他事件（问询、别的 Run）返回空。
+fn run_event_of(event: &lib_bin_cli::sdk::ClientEvent, run_id: &str) -> Option<RunEvent> {
+    if event.event != ClientEventKind::SessionEvent {
+        return None;
+    }
+    let run_event = event.session_event.clone()?;
+    (run_event.run_id == run_id).then_some(run_event)
+}
+
+/// 轮询直到 Run 抵终态，返回是否正常完成。
+async fn wait_run_done(client: &lib_bin_cli::client::Client, run_id: &str) -> anyhow::Result<bool> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let run = client
+            .run_get(RunGetParams {
+                run_id: run_id.to_string(),
+            })
+            .await
+            .map_err(ClientError::from_call)?;
+        match run.status {
+            RunStatus::Completed => return Ok(true),
+            RunStatus::Cancelled | RunStatus::Failed => return Ok(false),
+            RunStatus::Queued | RunStatus::Running => {}
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// 本次占用的事件文件路径：`<应用根目录>/data/events/<sessionId>/<runtimeSessionId>.jsonl`。
+fn journal_path(context: &TestContext, session_id: &str, runtime_session_id: &str) -> std::path::PathBuf {
+    context
+        .home()
+        .join("data")
+        .join("events")
+        .join(session_id)
+        .join(format!("{runtime_session_id}.jsonl"))
+}
+
+/// 逐行读事件文件。
+fn read_journal(path: &Path) -> anyhow::Result<Vec<RunEvent>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("读取事件文件失败：{}", path.display()))?;
+    text.lines()
+        .map(|line| serde_json::from_str::<RunEvent>(line).context("事件文件里有一行不是有效的 RunEvent"))
+        .collect()
 }

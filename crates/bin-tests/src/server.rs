@@ -68,6 +68,11 @@ impl Server {
         Ok(server)
     }
 
+    /// 服务端的应用根目录：配置、数据与日志都落在它下面。
+    pub fn log_dir(&self) -> &std::path::Path {
+        &self.log_dir
+    }
+
     /// 服务基地址。
     pub fn base_url(&self) -> &str {
         &self.base_url

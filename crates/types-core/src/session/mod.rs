@@ -9,4 +9,4 @@ mod request;
 
 pub use dto::{Message, MessageRole, MessageSendVO, Run, RunStatus, SessionSummary};
 pub use event::{RunEvent, RunEventKind};
-pub use request::{MessageListParams, MessageSendPO, RunCancelPO, RunGetParams, RunStreamParams, SessionCreatePO};
+pub use request::{MessageListParams, MessageSendPO, RunCancelPO, RunGetParams, SessionCreatePO};

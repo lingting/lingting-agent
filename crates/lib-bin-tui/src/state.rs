@@ -265,6 +265,10 @@ impl App {
                 let cancelled = self.phase == Phase::Cancelling;
                 self.phase = Phase::Idle;
                 self.run_id = None;
+                // 取消可能落在第一段增量之前：没有内容的助手占位整条丢弃，不留半条消息（D-011）。
+                if cancelled {
+                    self.drop_empty_assistant();
+                }
                 self.mark_interrupted();
                 self.notice = Some(if cancelled {
                     "已中断当前回复".to_string()
@@ -506,6 +510,16 @@ impl App {
         };
         if let Some(session) = self.sessions.iter_mut().find(|session| session.id == current) {
             session.message_count = session.message_count.saturating_add(1);
+        }
+    }
+    /// 丢掉末尾空的助手占位：没有内容就没有半条消息可保留。
+    fn drop_empty_assistant(&mut self) {
+        if self
+            .messages
+            .last()
+            .is_some_and(|message| message.role == MessageRole::Assistant && message.content.is_empty())
+        {
+            self.messages.pop();
         }
     }
 

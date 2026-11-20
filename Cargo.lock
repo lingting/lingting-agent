@@ -1741,6 +1741,7 @@ dependencies = [
  "ratatui",
  "ratatui-textarea",
  "tokio",
+ "tracing",
  "unicode-width",
 ]
 

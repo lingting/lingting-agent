@@ -14,9 +14,12 @@ use std::sync::{Arc, Mutex};
 use lib_core::time::now_millis;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{debug, warn};
 use types_core::runtime::OccupancyVO;
 use types_core::session::{RunEvent, RunEventKind, RunStatus};
+
+use crate::holder;
+use crate::session::run_trigger::RunExecutor;
 
 use super::RuntimeState;
 use super::journal::Journal;
@@ -45,7 +48,7 @@ pub enum SessionStop {
     ServerShutdown,
 }
 
-/// 运行时会话句柄：生产方写入端 + 写者任务。
+/// 运行时会话句柄：生产方写入端 + 写者任务 + Run 执行队列。
 pub struct RuntimeSession {
     /// 业务会话 ID。
     session_id: String,
@@ -59,8 +62,9 @@ pub struct RuntimeSession {
     control: mpsc::Sender<SessionStop>,
     /// 写者任务。
     task: JoinHandle<()>,
+    /// Run 执行队列：会话被占用期间串行执行该会话的 `QUEUED` Run（RT-018）。
+    executor: RunExecutor,
 }
-
 impl RuntimeSession {
     /// 启动运行时会话：打开事件文件并起写者任务。
     ///
@@ -71,6 +75,8 @@ impl RuntimeSession {
         let (producer, events) = mpsc::channel(EVENT_CAPACITY);
         let (control, controls) = mpsc::channel(CONTROL_CAPACITY);
         let task = tokio::spawn(writer(Arc::new(Mutex::new(journal)), events, controls, downlink));
+        // 执行队列随运行时会话启动：占用一建立就跑存量 QUEUED Run（D-P1.1-004）。
+        let executor = RunExecutor::spawn(occupancy.session_id.clone(), producer.clone());
         Ok(Self {
             session_id: occupancy.session_id.clone(),
             runtime_session_id: occupancy.runtime_session_id.clone(),
@@ -78,6 +84,7 @@ impl RuntimeSession {
             producer,
             control,
             task,
+            executor,
         })
     }
 
@@ -101,16 +108,29 @@ impl RuntimeSession {
         self.producer.clone()
     }
 
-    /// 停止会话：追加终态事件、flush 并关闭文件，等写者退出。
+    /// 有新 Run 排队：唤醒该会话的执行队列（未被占用时没有执行队列）。
+    pub(crate) fn notify_run(&self) {
+        self.executor.notify();
+    }
+
+    /// 停止会话：先停 Run 执行队列并取消未结束的 Run，再追加终态事件、flush 并关闭文件。
     ///
     /// 写者已经自行退出（生产方先收尾）时返回成功：文件已 flush，没有需要补写的终态事件。
     pub async fn stop(self, reason: SessionStop) -> io::Result<()> {
         let Self {
+            session_id,
             producer,
             control,
             task,
+            executor,
             ..
         } = self;
+        // 顺序不可交换（D-P1.1-002）：先停执行队列，再取消 Run，最后才让写者补终态事件。
+        executor.stop().await;
+        let cancelled = holder::session().cancel_session_runs(&session_id);
+        if cancelled > 0 {
+            debug!(session_id, cancelled, "停止运行时会话，已取消未结束的 Run");
+        }
         // 先丢弃生产方写入端：写者把队列里剩下的事件写完再收尾，顺序不会乱。
         drop(producer);
         if control.send(reason).await.is_err() {

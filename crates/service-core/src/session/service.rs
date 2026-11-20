@@ -2,19 +2,19 @@
 //!
 //! Mock 的行为边界：
 //!
-//! - 发送消息只写入用户消息与 `queued` 的 Run，不产出助手回复；
-//!   回复内容与状态推进由 `subscribe_run` 启动的 Mock 事件流负责（P2 由 Agent Runtime 负责）。
+//! - 发送消息只写入用户消息与 `queued` 的 Run，不产出助手回复；回复内容与状态推进由
+//!   运行时会话的执行队列负责（`run_trigger`，P2 由 Agent Runtime 负责）。
+//! - 会话被占用时新 Run 立刻排进执行队列；未被占用时停在 `QUEUED` 并记日志（D-P1.1-004）。
 //! - 取消只允许 `queued` / `running` 的 Run。
 
 use std::sync::Arc;
 
+use crate::session::SessionError;
 use crate::session::store::Store;
-use crate::session::stream;
-use crate::session::{RunEventStream, SessionError};
 use lib_core::{id, time};
 use types_core::session::{
     Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStatus,
-    RunStreamParams, SessionCreatePO, SessionSummary,
+    SessionCreatePO, SessionSummary,
 };
 
 /// 未指定标题时的默认会话标题。
@@ -120,6 +120,10 @@ impl SessionService {
             created_at_ms: now_millis,
         };
         self.store.insert_exchange(message.clone(), run.clone(), now_millis);
+        // 会话被占用时把新 Run 排进执行队列；未占用时停在 QUEUED，并记录原因（D-P1.1-004）。
+        if !crate::runtime::notify_run(&run.session_id) {
+            tracing::info!(session_id = %run.session_id, "会话未被占用，Run 保持 QUEUED（需先建立占用）");
+        }
         Ok(MessageSendVO { message, run })
     }
 
@@ -148,35 +152,14 @@ impl SessionService {
         self.require_run(&params.run_id)
     }
 
-    /// 订阅 Run 的事件流：把 `QUEUED` 的 Run 推进到 `RUNNING`，并启动 Mock 生产任务。
-    ///
-    /// 同一个 Run 只允许订阅一次：只有 `QUEUED` 可以订阅，其余状态返回参数错误（D-026）。
-    pub fn subscribe_run(&self, params: RunStreamParams) -> Result<RunEventStream, SessionError> {
-        let now_millis = time::now_millis();
-        let run = self.store.start_run(&params.run_id, now_millis).ok_or_else(|| {
-            // 推进失败时再读一次，区分「Run 不存在」与「状态不满足」。
-            match self.store.run(&params.run_id) {
-                Some(run) => SessionError::Invalid(format!("Run 当前状态为 {}，不可订阅事件流", run.status)),
-                None => SessionError::NotFound(format!("Run 不存在：{}", params.run_id)),
-            }
-        })?;
-        let prompt = self
-            .store
-            .messages(&run.session_id)
-            .and_then(|messages| {
-                messages.into_iter().find(|message| {
-                    message.run_id.as_deref() == Some(run.id.as_str()) && matches!(message.role, MessageRole::User)
-                })
-            })
-            .map(|message| message.content)
-            .ok_or_else(|| SessionError::Internal(format!("Run {} 找不到对应的用户消息", run.id)))?;
-        let assistant_message_id = next_id()?;
-        Ok(stream::spawn(
-            Arc::clone(&self.store),
-            run,
-            prompt,
-            assistant_message_id,
-        ))
+    /// 会话存储：Run 执行队列（`run_trigger`）与运行时会话共用同一份存储。
+    pub(crate) fn store(&self) -> Arc<Store> {
+        Arc::clone(&self.store)
+    }
+
+    /// 取消指定会话的全部未结束 Run，返回被取消的数量（释放占用时由运行时会话调用）。
+    pub(crate) fn cancel_session_runs(&self, session_id: &str) -> usize {
+        self.store.cancel_session_runs(session_id, time::now_millis())
     }
 
     /// 取会话；不存在时返回未找到错误。

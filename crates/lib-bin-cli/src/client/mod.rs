@@ -1,12 +1,15 @@
-//! 客户端：把生成的 SDK 接口接到 `framework-http` 上，并提供 Run 事件流订阅。
+//! 客户端：把生成的 SDK 接口接到 `framework-http` 上，并提供下行事件流订阅。
 //!
 //! 分工：
 //!
 //! - [`Client`] 实现生成 SDK 的 `ApiClient`，`send` 负责拼地址、加请求头、判定状态码；
-//! - [`Client::subscribe_run`] 走流式读取：生成的 `RUN_STREAM` 在元数据里是 `Blob`，
-//!   `run_stream` 只能整体返回响应体，无法边收边显示；
+//! - [`Client::subscribe_client`] 走流式读取：生成的 `CLIENT_STREAM` 在元数据里是 `Blob`，
+//!   `client_stream` 只能整体返回响应体，无法边收边处理；
 //! - 请求地址全部来自生成的 `ApiDefinition.path`，客户端不出现任何 path 字面量；
 //! - HTTP 收发只经 `framework-http`，本 crate 不直接使用 reqwest 发请求。
+//!
+//! Run 事件不再有独立端点（D-P1.1-004）：`api/client/stream` 是唯一的服务端推送通道，
+//! `session_event` 帧里带整条 `RunEvent`。
 
 mod error;
 mod query;
@@ -15,7 +18,7 @@ mod stream;
 pub use error::ClientError;
 pub use stream::EventStream;
 
-use crate::sdk::{ApiClient, ApiDefinition, ApiError, R, RUN_STREAM, RunStreamParams};
+use crate::sdk::{ApiClient, ApiDefinition, ApiError, CLIENT_STREAM, ClientStreamParams, R};
 use framework_http::{HttpClient, HttpMethod, HttpRequest, HttpStreamResponse};
 use serde_json::Value;
 use std::time::Duration;
@@ -53,12 +56,14 @@ impl Client {
         &self.base_url
     }
 
-    /// 订阅 Run 的事件流：只有 `QUEUED` 的 Run 可以订阅（D-026）。
-    pub async fn subscribe_run(&self, params: RunStreamParams) -> Result<EventStream, ClientError> {
+    /// 建立客户端的下行事件流：`api/client/stream`，全系统唯一的服务端推送通道。
+    ///
+    /// 未注册的 `clientId` 会得到一个 400 + 固定 message 的错误响应，调用方据此重新注册。
+    pub async fn subscribe_client(&self, params: ClientStreamParams) -> Result<EventStream, ClientError> {
         let query = serde_json::to_vec(&params).map_err(|error| ClientError::Decode {
             detail: format!("查询参数序列化失败：{error}"),
         })?;
-        let url = self.url(RUN_STREAM.path, Some(&query))?;
+        let url = self.url(CLIENT_STREAM.path, Some(&query))?;
         let request = HttpRequest::new(url.clone()).with_accept("text/event-stream");
         let response = self
             .stream_http

@@ -78,6 +78,13 @@ pub fn state() -> Option<&'static RuntimeState> {
     STATE.get()
 }
 
+/// 有新 Run 排队：会话被占用时唤醒该会话的执行队列，返回是否真的有人在等。
+///
+/// 未被占用的会话里 Run 停在 `QUEUED`，不排队也不执行（D-P1.1-004）。
+pub fn notify_run(session_id: &str) -> bool {
+    state().is_some_and(|state| state.notify_run(session_id))
+}
+
 /// 关闭流程入口：把「停全部客户端与运行时会话」交给断连处理链，返回处理的客户端数量。
 ///
 /// 未注入运行时状态时（只跑用例的进程）直接返回 0：没有东西需要收尾。

@@ -1,61 +1,56 @@
-//! `web.stream`：事件流端点的失败形态 —— 客户端拿到的必须是可读的 API 错误，而不是空流。
+//! `web.stream`：旧事件流端点已移除，新的下行流端点失败时仍是可读的 API 错误。
+//!
+//! `api/run/stream` 属破坏性契约变更（D-P1.1-004）：它不再注册，框架按未知路由返回 404；
+//! 服务端推送只剩 `api/client/stream`，建立之前的失败（未注册的 `clientId`）返回
+//! 400 + 固定 message，而不是一条空流（D-P1.1-001）。
 
 use crate::case::CaseFuture;
 use crate::context::TestContext;
 use anyhow::ensure;
 use framework_http::{HttpMethod, HttpRequest};
-use lib_bin_cli::client::ClientError;
-use lib_bin_cli::sdk::{ApiClient, MessageSendPO, RUN_STREAM, RunCancelPO, SessionCreatePO};
+use lib_bin_cli::sdk::CLIENT_STREAM;
 
-/// 订阅一个已取消的 Run：服务端必须拒绝并给出可读错误体（D-026）。
+/// 旧的 `api/run/stream` 必须 404；`api/client/stream` 未注册时给 400 + 固定 message。
 pub(super) fn stream(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let client = context.client();
-        let session = client
-            .session_create(SessionCreatePO {
-                title: Some(format!("事件流用例 {}", context.token())),
-                model: None,
-            })
-            .await
-            .map_err(ClientError::from_call)?;
-        let sent = client
-            .message_create(MessageSendPO {
-                session_id: session.id.clone(),
-                content: format!("事件流用例 {}", context.token()),
-            })
-            .await
-            .map_err(ClientError::from_call)?;
-        let cancelled = client
-            .run_cancel(RunCancelPO {
-                run_id: sent.run.id.clone(),
-            })
-            .await
-            .map_err(ClientError::from_call)?;
+        // 旧端点：不认识这个路径，返回与「本就不存在的接口」一致的 404。
+        let removed = super::send(
+            HttpMethod::Get,
+            HttpRequest::new(super::url(context, "api/run/stream")).with_accept("text/event-stream"),
+        )
+        .await?;
+        ensure!(
+            removed.status == 404,
+            "已移除的 api/run/stream 应返回 404，实际 {}",
+            removed.status
+        );
 
-        let url = format!("{}?runId={}", super::url(context, RUN_STREAM.path), cancelled.id);
+        // 新下行流：未注册的 clientId 拿到的必须是可读错误体，而不是空事件流。
+        let client_id = format!("missing-{}", context.token());
+        let url = format!("{}?clientId={}", super::url(context, CLIENT_STREAM.path), client_id);
         let response = super::send(HttpMethod::Get, HttpRequest::new(url).with_accept("text/event-stream")).await?;
 
         ensure!(
             response.status == 400,
-            "订阅已取消的 Run 应返回 400，实际 {}",
+            "未注册的 clientId 建立下行流应返回 400，实际 {}",
             response.status
         );
         ensure!(
             response.mime_type().as_deref() == Some("application/json"),
-            "订阅失败应返回 API 错误体而不是事件流，实际 {:?}",
+            "建立失败的响应应是 API 错误体而不是事件流，实际 {:?}",
             response.content_type()
         );
         let error = super::api_error(&response)?;
-        ensure!(error.code == 400, "订阅失败的错误码应为 400，实际 {}", error.code);
+        ensure!(error.code == 400, "错误码应为 400，实际 {}", error.code);
         ensure!(
-            error.message.contains("不可订阅"),
-            "订阅失败的错误消息不可读：{}",
+            error.message == "客户端未注册，请重新连接",
+            "固定 message 不符：{}",
             error.message
         );
 
         Ok(vec![
-            format!("Run {} 已取消", cancelled.id),
-            format!("订阅失败：{} {}", error.code, error.message),
+            "旧端点 api/run/stream 返回 404".to_string(),
+            format!("新下行流未注册：{} {}", error.code, error.message),
         ])
     })
 }

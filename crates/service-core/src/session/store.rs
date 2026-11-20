@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
-use types_core::session::{Message, Run, RunStatus, SessionSummary};
+use types_core::session::{Message, MessageRole, Run, RunStatus, SessionSummary};
 
 /// 会话内存存储。
 #[derive(Default)]
@@ -98,16 +98,61 @@ impl Store {
         Some(run.clone())
     }
 
-    /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；状态不满足时返回 `None`，保证同一 Run 只有一个生产方。
-    pub(crate) fn start_run(&self, run_id: &str, now_millis: i64) -> Option<Run> {
+    /// 取该会话最早的 `QUEUED` Run 并推进到 `RUNNING`。
+    ///
+    /// 选取与推进在同一把锁内完成，因此同一 Run 只会被一个执行者取走（D-P1.1-004）。
+    /// 会话里没有 `QUEUED` 的 Run 时返回 `None`。
+    pub(crate) fn start_next_run(&self, session_id: &str, now_millis: i64) -> Option<Run> {
         let mut inner = self.lock();
-        let run = inner.runs.get_mut(run_id)?;
-        if !matches!(run.status, RunStatus::Queued) {
-            return None;
-        }
+        let next = inner
+            .runs
+            .values()
+            .filter(|run| run.session_id == session_id && matches!(run.status, RunStatus::Queued))
+            .min_by_key(|run| (run.created_at_ms, run.id.clone()))?
+            .id
+            .clone();
+        let run = inner.runs.get_mut(&next)?;
         run.status = RunStatus::Running;
         run.updated_at_ms = now_millis;
         Some(run.clone())
+    }
+
+    /// 取消该会话全部未结束的 Run 并写 `finished_at_ms`，返回被取消的数量。
+    ///
+    /// 会话一旦不被占用就没有执行者，留着的 `QUEUED` / `RUNNING` 也没有机会被推进（D-P1.1-002）。
+    pub(crate) fn cancel_session_runs(&self, session_id: &str, now_millis: i64) -> usize {
+        let mut inner = self.lock();
+        let mut cancelled = 0;
+        for run in inner.runs.values_mut().filter(|run| run.session_id == session_id) {
+            if matches!(run.status, RunStatus::Queued | RunStatus::Running) {
+                run.status = RunStatus::Cancelled;
+                run.updated_at_ms = now_millis;
+                run.finished_at_ms = Some(now_millis);
+                cancelled += 1;
+            }
+        }
+        cancelled
+    }
+
+    /// 取消指定 Run（执行前校验失败时使用）。
+    pub(crate) fn cancel_run(&self, run_id: &str, now_millis: i64) {
+        if let Some(run) = self.lock().runs.get_mut(run_id)
+            && matches!(run.status, RunStatus::Queued | RunStatus::Running)
+        {
+            run.status = RunStatus::Cancelled;
+            run.updated_at_ms = now_millis;
+            run.finished_at_ms = Some(now_millis);
+        }
+    }
+
+    /// 取 Run 对应的用户消息正文：执行 Run 需要它作为 prompt。
+    pub(crate) fn user_prompt(&self, run_id: &str, session_id: &str) -> Option<String> {
+        self.lock()
+            .messages
+            .get(session_id)?
+            .iter()
+            .find(|message| message.run_id.as_deref() == Some(run_id) && matches!(message.role, MessageRole::User))
+            .map(|message| message.content.clone())
     }
 
     /// 完成 Run：写入助手消息、更新会话统计并把 Run 落成 `COMPLETED`（同一次加锁内完成）。

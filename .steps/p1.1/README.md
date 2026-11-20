@@ -1,6 +1,6 @@
 # P1.1 客户端连接与会话运行时
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 待开工）。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A~F 完成：RT-001~RT-020；Batch G 待开工）。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 **设计依据**：`.plan/运行时设计.md`。本阶段把该设计的语义（注册客户端、心跳、断连处理、会话占用、原始事件文件）落成服务端运行时内核，并因此**移除 `api/run/stream`**。
 

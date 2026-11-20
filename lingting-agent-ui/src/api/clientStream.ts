@@ -1,4 +1,4 @@
-import { ApiDefinitions, type RunEvent, type RunStreamParams } from "@lingting/agent-api";
+import { ApiDefinitions, type ClientEvent, type ClientStreamParams } from "@lingting/agent-api";
 
 import type { AgentApiClient } from "./client";
 import { ApiRequestError } from "./errors";
@@ -7,21 +7,21 @@ import { ApiRequestError } from "./errors";
 const FRAME_END = /\r?\n\r?\n/;
 
 /**
- * 订阅 Run 的事件流。
+ * 订阅客户端下行事件流（`api/client/stream`，D-P1.1-001）。
  *
- * 不用原生 `EventSource`：它无法在订阅前拿到 4xx 错误体，还会在断开后自动重连（重复订阅同一 Run
- * 会被服务端拒绝），也无法中断。因此走 fetch 的流式响应自行解析帧（D-007）；path 取自生成的
- * `ApiDefinitions.runStream.path`，代码中不出现 path 字面量。
+ * 不用原生 `EventSource`：它拿不到建立失败的 4xx 错误体，断线会自动重连，也无法中断；
+ * 因此走 fetch 的流式响应自行切帧。path 取自生成的 `ApiDefinitions.clientStream.path`，
+ * 代码中不出现 path 字面量。
  *
- * 事件格式见 docs/api/session.md「SSE 事件流」：`id:` / `event:` / `data:` 三行加空行，
- * 事件类型与字段全在 `data` 的 JSON 里，`id:` 与 `event:` 行不参与解析。
+ * 帧格式：`id:` / `event:` / `data:` 三行加空行，事件类型与字段全在 `data` 的 JSON 里；
+ * 没有 `data:` 的帧是保活注释（`: keepalive`），直接丢弃。
  */
-export async function* subscribeRunEventStream(
+export async function* subscribeClientEventStream(
   client: AgentApiClient,
-  params: RunStreamParams,
+  params: ClientStreamParams,
   signal?: AbortSignal,
-): AsyncGenerator<RunEvent> {
-  const response = await client.openStream(ApiDefinitions.runStream.path, params, signal);
+): AsyncGenerator<ClientEvent> {
+  const response = await client.openStream(ApiDefinitions.clientStream.path, params, signal);
   const body = response.body;
   if (!body) throw new ApiRequestError("decode", "事件流没有响应体");
 
@@ -30,7 +30,7 @@ export async function* subscribeRunEventStream(
   let buffer = "";
 
   try {
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read();
       if (done) return;
       buffer += decoder.decode(value, { stream: true });
@@ -48,8 +48,8 @@ export async function* subscribeRunEventStream(
   }
 }
 
-/** 解析一帧：拼接 `data:` 行后反序列化成生成的事件类型。 */
-function parseFrame(frame: string): RunEvent | null {
+/** 解析一帧：拼接 `data:` 行后反序列化成生成的事件类型；注释帧返回 `null`。 */
+function parseFrame(frame: string): ClientEvent | null {
   const data = frame
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
@@ -58,7 +58,7 @@ function parseFrame(frame: string): RunEvent | null {
   if (!data) return null;
 
   try {
-    return JSON.parse(data) as RunEvent;
+    return JSON.parse(data) as ClientEvent;
   } catch {
     throw new ApiRequestError("decode", "事件数据不是有效的 JSON");
   }

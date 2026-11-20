@@ -90,8 +90,12 @@ pub async fn execute(config: Config) -> Result<Summary> {
     prepare::ensure(&config.cases).await?;
     let shared = start_shared(&config.cases, &run_dir).await?;
     let shared_base_url = shared.as_ref().map(|server| server.base_url().to_string());
-    let shared_context = match shared_base_url.as_deref() {
-        Some(base_url) => Some(Arc::new(TestContext::new("shared", base_url.to_string())?)),
+    let shared_context = match shared.as_ref() {
+        Some(server) => Some(Arc::new(TestContext::new(
+            "shared",
+            server.base_url().to_string(),
+            server.log_dir().to_path_buf(),
+        )?)),
         None => None,
     };
 
@@ -175,7 +179,7 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
     };
     let base_url = format!("http://127.0.0.1:{port}");
 
-    let server = match Server::start(port, log_dir).await {
+    let server = match Server::start(port, log_dir.clone()).await {
         Ok(server) => server,
         Err(error) => {
             return CaseRun::failure(
@@ -184,7 +188,7 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
             );
         }
     };
-    let context = match TestContext::new(case.name, base_url.clone()) {
+    let context = match TestContext::new(case.name, base_url.clone(), log_dir.clone()) {
         Ok(context) => context,
         Err(error) => {
             let _ = server.stop().await;
