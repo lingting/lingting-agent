@@ -54,7 +54,7 @@
 | S-1 | 数据库位置正确 | `<AGENT_HOME>/data/agent.db` 存在；事件文件仍在 `<AGENT_HOME>/data/events/`（两者同级） |
 | S-2 | 迁移可重复执行 | 用例 `persist.migration` |
 | S-3 | 重启后数据完整 | 用例 `persist.session` |
-| S-4 | 约束真实生效 | `0001_init.sql` 含主键 / 外键 / `CHECK` / `UNIQUE(session_id, seq)`；启动日志无约束错误 |
+| S-4 | 约束真实生效 | `0001_init.sql` 含主键 / 外键 / `UNIQUE(session_id, seq)`；**不加 `CHECK`**（D-P2-030：枚举列存 serde wire 值，P3 追加取值不需要迁移，`role` / `status` 的合法性由类型系统保证）；启动日志无约束错误 |
 | S-5 | 消息顺序稳定 | 用例 `persist.session` 与 `chat.multiturn` 断言 `seq` 升序且与内容一一对应 |
 | S-6 | 事务一致性 | 成功 Run 必有 1 条助手消息；失败 / 取消 Run 必无助手消息（`run.failed_*`、`run.cancel` 断言） |
 | S-7 | 并发写入不撞锁 | 用例 `run.concurrency` 运行期日志无 `database is locked` / `SQLITE_BUSY` |

@@ -1,6 +1,6 @@
 //! 会话占用接口：`create` / `delete` / `get`（D-P1.1-002、RT-014）。
 //!
-//! 语义边界全部在 `service_core::runtime`：Handler 只做解包、调用与错误映射；
+//! 语义边界全部在 `manager_agent::runtime`：Handler 只做解包、调用与错误映射；
 //! 冲突表达（400 + 固定 message）与「会话不存在 / 会话未被占用」（404）由 `runtime_error` 统一产出。
 
 use crate::runtime::{runtime_error, state};

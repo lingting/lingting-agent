@@ -1,17 +1,11 @@
-//! 会话业务：Session / Message / Run 的业务入口、内存 Mock 存储与 Run 事件生产方。
+//! 会话业务：Session / Message / Run 的业务入口与数据访问。
 //!
-//! Run 由「会话被占用」触发执行（D-P1.1-004）：`run_trigger` 串行推进 `QUEUED` Run，
-//! `stream` 把 Mock 事件写进运行时会话；`api/run/stream` 已移除，事件推送只剩 `api/client/stream`。
-//!
-//! P2 的替换点：`store.rs` 换成 Repository（SQLite），`service.rs` 换成真实 Run 状态机，
-//! `stream.rs` 换成 Agent Runtime 的 token 流；本模块的公开方法与返回类型保持现状，
-//! `lib-web` 的 Handler 不需要改。
+//! Run 的执行（谁推进 `QUEUED → RUNNING`、谁产出事件）属于进程内运行时，
+//! 由装配层 `manager-agent` 的 `runner` 承担（D-P2-035）；本模块只提供业务入口与
+//! 执行方需要的读写方法。
 
 mod error;
-pub(crate) mod run_trigger;
 mod service;
-mod store;
-mod stream;
 
 pub use error::SessionError;
-pub use service::SessionService;
+pub use service::{REASON_CANCELLED, SessionService};

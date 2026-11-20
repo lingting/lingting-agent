@@ -93,7 +93,7 @@ pub fn install(shutdown: AxumShutdown) {
         tokio::spawn(async move {
             // 一、定时任务读同一个关闭标记后自行停手（心跳扫描与事件文件轮转都会直接返回）。
             // 二、停全部客户端与运行时会话：复用断连处理链，终态事件与 flush 在排空窗口之前完成。
-            let clients = service_core::runtime::shutdown().await;
+            let clients = manager_agent::shutdown().await;
             info!(clients, "关闭流程已停止客户端与运行时会话");
             info!(
                 reject_window_ms = REJECT_WINDOW.as_millis(),

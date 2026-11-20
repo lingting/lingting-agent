@@ -1,0 +1,20 @@
+[package]
+name = "lib-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "SQLite 基础设施：连接、迁移、事务与错误"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# 迁移账本时间戳与日志。
+lib-core = { workspace = true }
+# SQLite 驱动与连接池（D-P2-002 / D-P2-003：不启用 `macros`）。
+sqlx = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

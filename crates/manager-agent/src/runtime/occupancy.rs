@@ -11,7 +11,6 @@ use tracing::warn;
 use types_core::runtime::{OccupancyCreatePO, OccupancyVO};
 
 use super::{RuntimeError, RuntimeState, SessionStop};
-use crate::holder;
 
 impl RuntimeState {
     /// 建立占用：成功即启动运行时会话并打开事件文件。
@@ -21,7 +20,12 @@ impl RuntimeState {
         if self.client(&params.client_id).is_none() {
             return Err(RuntimeError::ClientNotRegistered);
         }
-        if !holder::session().has_session(&params.session_id) {
+        let exists = self
+            .session()
+            .has_session(&params.session_id)
+            .await
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        if !exists {
             return Err(RuntimeError::SessionNotFound(params.session_id));
         }
 

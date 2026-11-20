@@ -5,22 +5,24 @@
 //! 由写者先落盘再转发（RT-015）。
 //!
 //! 串行保证：同一会话同一时刻最多一个 `RUNNING` Run，队列实现是一条 `mpsc` 串行任务；
-//! `QUEUED → RUNNING` 的推进在同一把存储锁内完成，不并发推进多个 Run。
+//! `QUEUED → RUNNING` 的推进是数据库里的条件更新（`WHERE status='QUEUED'`），不并发推进多个 Run。
 
 use std::sync::Arc;
 
 use agent_core::session::{Run, RunEvent};
-use lib_core::{id, time};
+use lib_core::id;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::holder;
-use crate::session::store::Store;
-use crate::session::stream;
+use service_core::session::SessionService;
+
+use crate::runner::mock;
 
 /// 唤醒通道容量：一次唤醒足以让执行任务重扫队列，多余的通知可以丢掉。
 const WAKE_CAPACITY: usize = 1;
+/// 取消原因：Run 找不到对应的用户消息（数据不完整，不发起执行）。
+const REASON_PROMPT_MISSING: &str = "找不到对应的用户消息";
 
 /// 会话执行队列句柄：由运行时会话持有，会话停止即结束。
 pub(crate) struct RunExecutor {
@@ -35,9 +37,9 @@ impl RunExecutor {
     ///
     /// 启动后立即尝试执行存量 `QUEUED` Run（`QUEUED` 按 `created_at_ms` 升序），
     /// 因此 `occupancy/create` 之后不需要额外的唤醒。
-    pub(crate) fn spawn(session_id: String, producer: mpsc::Sender<RunEvent>) -> Self {
+    pub(crate) fn spawn(session_id: String, producer: mpsc::Sender<RunEvent>, service: Arc<SessionService>) -> Self {
         let (wake, wakeups) = mpsc::channel(WAKE_CAPACITY);
-        let task = tokio::spawn(drain(session_id, producer, wakeups));
+        let task = tokio::spawn(drain(session_id, producer, wakeups, service));
         Self { wake, task }
     }
 
@@ -56,11 +58,23 @@ impl RunExecutor {
 }
 
 /// 执行队列主循环：有 `QUEUED` Run 就逐个跑，空了就等下一次唤醒。
-async fn drain(session_id: String, producer: mpsc::Sender<RunEvent>, mut wakeups: mpsc::Receiver<()>) {
-    let store = holder::session().store();
+async fn drain(
+    session_id: String,
+    producer: mpsc::Sender<RunEvent>,
+    mut wakeups: mpsc::Receiver<()>,
+    service: Arc<SessionService>,
+) {
     loop {
-        while let Some(run) = store.start_next_run(&session_id, time::now_millis()) {
-            run_one(&store, run, &producer).await;
+        loop {
+            let run = match service.start_next_run(&session_id).await {
+                Ok(Some(run)) => run,
+                Ok(None) => break,
+                Err(error) => {
+                    warn!(session_id, %error, "取出待执行 Run 失败，等待下一次唤醒");
+                    break;
+                }
+            };
+            run_one(&service, run, &producer).await;
             // 生产方关闭说明运行时会话已经在收尾，再跑下一个也没有意义。
             if producer.is_closed() {
                 return;
@@ -74,19 +88,34 @@ async fn drain(session_id: String, producer: mpsc::Sender<RunEvent>, mut wakeups
 }
 
 /// 执行一个已推进到 `RUNNING` 的 Run；执行前的校验失败就把它落成已取消。
-async fn run_one(store: &Arc<Store>, run: Run, producer: &mpsc::Sender<RunEvent>) {
-    let Some(prompt) = store.user_prompt(&run.id, &run.session_id) else {
-        warn!(run_id = %run.id, session_id = %run.session_id, "Run 找不到对应的用户消息，已取消");
-        store.cancel_run(&run.id, time::now_millis());
-        return;
+async fn run_one(service: &SessionService, run: Run, producer: &mpsc::Sender<RunEvent>) {
+    let prompt = match service.user_prompt(&run.session_id, &run.id).await {
+        Ok(Some(prompt)) => prompt,
+        Ok(None) => {
+            warn!(run_id = %run.id, session_id = %run.session_id, "Run 找不到对应的用户消息，已取消");
+            cancel(service, &run.id, REASON_PROMPT_MISSING).await;
+            return;
+        }
+        Err(error) => {
+            warn!(run_id = %run.id, %error, "读取用户消息失败，已取消该 Run");
+            cancel(service, &run.id, REASON_PROMPT_MISSING).await;
+            return;
+        }
     };
     let assistant_message_id = match id::next_id() {
         Ok(id) => id,
         Err(error) => {
             warn!(run_id = %run.id, %error, "生成助手消息 ID 失败，已取消该 Run");
-            store.cancel_run(&run.id, time::now_millis());
+            cancel(service, &run.id, REASON_PROMPT_MISSING).await;
             return;
         }
     };
-    stream::produce(store, run, prompt, assistant_message_id, producer).await;
+    mock::produce(service, run, prompt, assistant_message_id, producer).await;
+}
+
+/// 执行前校验失败：把 Run 落成 `CANCELLED`，失败只记日志（Run 已终态时更新 0 行属正常）。
+async fn cancel(service: &SessionService, run_id: &str, reason: &str) {
+    if let Err(error) = service.cancel_run_quietly(run_id, reason).await {
+        warn!(run_id, %error, "取消 Run 失败");
+    }
 }

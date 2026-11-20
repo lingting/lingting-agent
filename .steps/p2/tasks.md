@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成，结论见 `decisions.md`；Batch C 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）完成，结论见 `decisions.md`；Batch D 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -204,15 +204,16 @@
 
 > 依赖：Batch B。010 → 011 → 012 → 013 → 014 强序。
 
-- [ ] **P2-010 新建 `lib-db`（连接、迁移、事务、错误）**
+- [x] **P2-010 新建 `lib-db`（连接、迁移、事务、错误）**
 
   **目标**：SQLite 基础设施独立成 Crate，`service-core` 只见 Repository 接口。
   **前置依赖**：P2-002、P2-008。
-  **涉及文件 / Crate**：新增 `crates/lib-db/`（`src/{lib,config,error,migrate,pool}.rs`）；workspace `Cargo.toml`。
+  **涉及文件 / Crate**：新增 `crates/lib-db/`（`src/{lib,config,error,migrate,pool,transaction}.rs`）；workspace `Cargo.toml`。
   **实施步骤**：
   1. `Database::open(path, Config)`：`SqlitePoolOptions`（`max_connections=5`）、`PRAGMA journal_mode=WAL` / `busy_timeout=5000` / `foreign_keys=ON`。
   2. `migrate()` 执行内嵌迁移（`sqlx::migrate!` 或等价的手写迁移表）。
   3. 统一错误 `DbError`（打开 / 迁移 / 查询 / 事务），对外只暴露语义。
+  4. 事务句柄 `Transaction`：`Database::begin` 开启、`commit` / `rollback` 收尾，未提交即 `Drop` 回滚（D-P2-034）。
   **技术要求**：`lib-db` 不依赖 `types-core` / `service-core` / `agent-*`；不写业务 SQL。
   **验收标准**：
   - [ ] `cargo tree -p lib-db` 只有 `lib-core` + `sqlx` + `tokio`。
@@ -220,7 +221,7 @@
   **测试要求**：不新增单元测试；由 `persist.*` 用例覆盖。
   **完成产物**：`lib-db`。
 
-- [ ] **P2-011 Schema 与迁移脚本**
+- [x] **P2-011 Schema 与迁移脚本**
 
   **目标**：把 D-P2-002 的草案落成可重复执行的迁移。
   **前置依赖**：P2-010。
@@ -236,7 +237,7 @@
   **测试要求**：`persist.migration`（P2-014）。
   **完成产物**：迁移脚本。
 
-- [ ] **P2-012 Session / Message / Run Repository**
+- [x] **P2-012 Session / Message / Run Repository**
 
   **目标**：`service-core` 的 `repository` 层落地，承载全部 SQL 与行映射。
   **前置依赖**：P2-011、P2-006。
@@ -253,16 +254,16 @@
   **测试要求**：由 P2-014 与 P2-026 的用例覆盖。
   **完成产物**：Repository 层。
 
-- [ ] **P2-013 用 Repository 替换内存 Store、删除 `holder`、改为显式注入**
+- [x] **P2-013 用 Repository 替换内存 Store、删除 `holder`、改为显式注入**
 
-  **目标**：`service-core` 变成「Service + Repository」，进程级单例改为启动期显式注入；`RuntimeState` 持有 `SessionService`。
+  **目标**：`service-core` 变成「Service + Repository」，进程级单例改为启动期显式注入；进程内运行时随会话业务一起落到装配层 `manager-agent`（D-P2-035），`RuntimeState` 在装配层内持有 `SessionService`。
   **前置依赖**：P2-012。
-  **涉及文件 / Crate**：`crates/service-core/src/session/{mod,service,error}.rs`（删除 `store.rs`）；删除 `crates/service-core/src/holder/`；`crates/service-core/src/runtime/{mod,registry,session}.rs`；新增 `crates/lib-web/src/holder.rs`；`crates/lib-web/src/{session/api.rs,runtime/*.rs,probe/api.rs}`；`crates/lib-bin-web/src/{lib,server}.rs` 与 `Cargo.toml`。
+  **涉及文件 / Crate**：`crates/service-core/src/session/{mod,service,error}.rs`（删除 `store.rs`）、删除 `crates/service-core/src/holder/` 与整个 `crates/service-core/src/runtime/`（迁入 `manager-agent/src/runtime/`）；`crates/manager-agent/src/{assemble,holder,runner,session}.rs`；`crates/lib-web/src/{session/api.rs,runtime/*.rs,probe/api.rs}`；`crates/lib-bin-web/src/{lib,server,shutdown}.rs` 与 `Cargo.toml`。
   **实施步骤**：
   1. `SessionService::new(Arc<Repository>)`；方法签名与 `SessionError` 语义不变。
-  2. 删除 `service-core::holder`；`service-core` 内对 `SessionService` 的访问改为「构造时注入」——`RuntimeState` 增加 `session: Arc<SessionService>`（`RuntimeState::new(session)`），执行队列与占用校验用它。
-  3. `lib-web` 新增显式 holder：`OnceLock<AppState { session: Arc<SessionService>, runtime: RuntimeState }>` + `install(...)` + 访问器；Handler 改用它。
-  4. `lib-bin-web::serve` 装配：`directorys()` → `Database::open(<data>/agent.db)` → `migrate()` → `heal_orphans()` → `Repository` → `SessionService` → `RuntimeState` → `runtime::install` → 服务；任一步失败给可读错误 + 退出码 1。
+  2. 删除 `service-core::holder` 与 `service-core::runtime`（整体迁到 `manager-agent::runtime`）；`RuntimeState` 增加 `session: Arc<SessionService>`（`RuntimeState::new(session)`），占用校验、执行队列与 Run 取消都用它。
+  3. `manager-agent` 新增显式 holder：`OnceLock<AgentHolder { session: Arc<SessionService>, runtime: RuntimeState }>` + `install(...)` + 访问器；Handler 改用它。
+  4. `lib-bin-web::serve` 装配：调 `manager_agent::assemble`（`directorys()` → `Database::open(<data>/agent.db)` → 迁移 → 自愈 → `Repository` → `SessionService` → `RuntimeState`）→ `install` → 服务；任一步失败给可读错误 + 退出码 1。
   5. `probe_health` 在未安装时返回 `runningRunCount = 0`（`lib-web/examples/api_probe_server.rs` 必须仍可独立启动）。
   **技术要求**：Handler 的签名与 path 不变；`lib-web` 不写业务规则；`service-core` 不反向依赖 `lib-web`。
   **验收标准**：
@@ -273,7 +274,7 @@
   **测试要求**：`make test ARGS="runtime"`、`make test ARGS="session"`、`make test ARGS="web"` 全绿。
   **完成产物**：持久化存储接入、注入链路成形。
 
-- [ ] **P2-014 持久化、重启恢复与状态自愈用例**
+- [x] **P2-014 持久化、重启恢复与状态自愈用例**
 
   **目标**：用端到端用例证明「重启不丢数据、迁移可重复、残留状态被自愈、占用不恢复」。
   **前置依赖**：P2-013。

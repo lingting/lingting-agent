@@ -12,10 +12,13 @@ publish = false
 [dependencies]
 lib-core = { workspace = true }
 lib-web-core = { workspace = true }
-service-core = { workspace = true }
 types-core = { workspace = true }
 # Handler 的会话 / 消息 / Run DTO 来源（P2-006 起）。
 agent-core = { workspace = true }
+# 会话业务入口、运行时状态与装配结果（P2-013 起不再直接依赖 service-core）。
+manager-agent = { workspace = true }
+# 探活接口在存储异常时降级为 0 并留日志（`probe/api.rs`），不静默吞错。
+tracing = { workspace = true }
 
 anyhow = { workspace = true }
 serde = { workspace = true }

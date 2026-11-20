@@ -54,6 +54,12 @@
 | D-P2-028 | Run 触发点继承 P1.1；执行端口由 `agent-runtime` 实现并注入 | DECIDED |
 | D-P2-029 | 终态事件归属与「事件文件 / 数据库」事实源分工 | DECIDED |
 | D-P2-030 | SQLite 表结构草案与迁移执行方式（不用 `sqlx::migrate!`） | DECIDED |
+| D-P2-031 | 契约类型迁入 `agent-core` 的依赖边与生成物顺序 | DECIDED |
+| D-P2-032 | 装配层独立成 `manager-agent`，进程级 holder 从 `service-core` 迁入 | DECIDED |
+| D-P2-033 | `sqlx` 的 `raw_sql` 与借用连接不能进 `Send` future（迁移逐条执行） | DECIDED |
+| D-P2-034 | 事务边界集中在 `lib-db`（`begin` + `Transaction` 句柄），Repository 用 `with_xxx` | DECIDED |
+| D-P2-035 | 进程内运行时从 `service-core` 迁到 `manager-agent`（holder 改名 `AgentHolder`） | DECIDED |
+| D-P2-036 | 内部异常不得被吞掉：`api/session/list` 改回 `Result`，禁止「降级为空」 | DECIDED |
 
 ---
 
@@ -352,7 +358,8 @@
   4. `service-core::runtime::install` 的形态保留（P1.1 已定的注入点），P2 不改。
 - **P1.1 修订（2026-11-20）**：原决策里「`RunEventStream` 迁入 `agent-runtime`」一条作废（该类型已不存在）；`holder` 的归属从「迁入 `lib-web`」细化为「`lib-web` 持 `SessionService`、`service-core` 内由 `RuntimeState` 持有」。
 - **理由**：holder 是 Web 层的进程级访问点（对应 `docs/workspace.md` 4.4「仅在确实需要跨调用共享状态时引入」）；`service-core` 内部的执行队列需要 `SessionService`，用构造注入比全局单例更明确。
-- **状态**：`DECIDED`。
+- **P2-013 修订（已落地）**：第 2 / 4 条**已被 D-P2-032 / D-P2-035 取代**——holder 不在 `lib-web`，而是独立 Crate `manager-agent`（类型改名 `AgentHolder`）；整个进程内运行时也随 holder 一起从 `service-core` 迁入该层，因此 `service_core::runtime::install` 这一注入点不再存在。
+- **状态**：`DECIDED`（第 2 / 4 条由 D-P2-032 / D-P2-035 取代）。
 - **承接任务**：P2-013、P2-023。
 
 ---
@@ -645,6 +652,81 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 
 ---
 
+
+## D-P2-032 装配层独立成 `manager-agent`，进程级 holder 从 `service-core` 迁入
+
+- **问题**：P2-013 要删掉 `service-core::holder`，但「发消息后唤醒该会话执行队列」这条链路需要同时看到 `SessionService`（写库）与运行时会话（占用信息）；D-P2-019 原写「holder 迁入 `lib-web`」，把装配与协调放进 Web 层并不合适。
+- **背景（已核实）**：P1.1 的 `RuntimeState::acquire` / `RuntimeSession::stop` / 执行队列都要读会话数据；`SessionService::send_message` 结束时要唤醒运行时会话。两者互相引用，`service-core` 内部无法用「谁持有谁」解决，靠静态单例是规避而非设计。
+- **决策**：
+  1. 新增 `crates/manager-agent`：装配层与跨 Service 协调，持有 `AppState { session: Arc<SessionService>, runtime: RuntimeState }`，
+     提供 `assemble` / `assemble_with`（应用目录 → 数据库 → Repository → Service → 运行时状态，含迁移与启动自愈）、
+     `install` / `state` / `runtime` / `shutdown`，以及会话业务入口（`send_message` 在写入后唤醒执行队列）。
+  2. `service-core` 删除 `holder`，也删除进程级 `install` / `state`：`RuntimeState` **不持有** `SessionService`，
+     需要会话数据的动作（`acquire`、`start_session`、执行队列）由调用方**显式传入** `Arc<SessionService>`。
+     断连处理链与定时任务需要的运行时状态由 `handler::install(&'static RuntimeState)` 一次性登记（装配层提供 `'static` 引用）。
+  3. `lib-web` / `lib-bin-web` 改为依赖 `manager-agent`；`lib-bin-web::serve` 只调 `assemble` + `install`，装配细节不再落在 Binary 侧。
+- **理由**：协调发生在「Service + 运行时状态」之间，属装配层职责；`manager-agent` 不依赖 Web，`service-core` 不反向依赖它，
+  依赖方向仍为「上层依赖下层」，并让 P2 的 `agent-runtime` 将来接入同一个装配入口（而非第三套单例）。
+- **状态**：`DECIDED`（用户确认的落地方向）。
+- **承接任务**：P2-013、P2-014、P2-030（`docs/workspace.md` 已同步）。
+
+---
+
+## D-P2-033 `sqlx` 的 `raw_sql` 与借用连接不能出现在需要 `Send` 的 future 里
+
+- **问题**：`lib-db` 用 `sqlx::raw_sql(script).execute(&mut *transaction)` 执行迁移脚本，`service-core` 的 Repository 也用 `&mut *transaction` 作为 `Executor`。编译期在「用例 future 必须 `Send`」时爆出 `implementation of Executor/Send is not general enough`。
+- **背景（已核实，rustc 1.98 + sqlx 0.8.6）**：
+  - `sqlx::raw_sql` 返回的 `RawSql` 在 `&mut SqliteConnection` 上要求 `for<'a> &'a mut SqliteConnection: Executor<'a>`，而 sqlx 的实现是 `impl<'c> Executor<'c> for &'c mut SqliteConnection`（引用与 `Executor` 生命周期相同），高阶推导失败 ⇒ 整个迁移 future 不实现 `Send`。
+  - 对照实测：`sqlx::query(..).execute(&mut *transaction)` 通过；`sqlx::raw_sql(..).execute(&mut *transaction)` 失败。`&Pool` 的实现是 `impl<'p, DB> Executor<'p> for &'_ Pool<DB>`（生命周期独立），因此池上的语句不受影响。
+- **决策**：
+  1. 迁移脚本不再用 `raw_sql`：`lib-db` 把脚本按「行尾 `;`」拆成单条语句逐条执行（脚本内约定不出现分号、注释只用 `--`），仍在一个事务里，失败整体回滚。
+  2. Repository 的事务内语句收在「自己开事务的方法」里，跨方法复用的写入 helper 以 `&mut Transaction<'static, Sqlite>` 为参数（不在 helper 之间传 `&mut Connection`）。
+  3. 任何新增数据库代码都必须通过 `Send` 检查：只要被异步服务（axum handler、`tokio::spawn`）调用，不满足就会在编译期暴露。
+- **理由**：这是 rustc 对 sqlx 同年限 `Executor` 实现的已知限制，绕开它的成本低于放弃迁移事务或放弃 `Send`。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-010、P2-012。
+
+---
+
+## D-P2-034 事务边界集中在 `lib-db`：`Database::begin` + `Transaction` 句柄，Repository 用 `with_xxx` 包装
+
+- **问题**：Repository 里每处写入都要 `begin` / `commit` / `rollback`，很容易写漏回滚；参考实现（`lingting-ai-gateway`、`relayx-anubis`）的做法是闭包式的 `with` / `with_transaction`。
+- **背景（已核实）**：
+  - 闭包式签名 `F: AsyncFnOnce(&mut Tx) -> Result<T>` 在本仓库会导致 `tokio::spawn` 处编译失败（`implementation of Send is not general enough`）：该 bound 让外层 future 的 `Send` 检查变成高阶检查，`&str` / 引用型 await 一律推导失败。实测：把 `Repository::with_next_run` 改回闭包式后，执行队列 `tokio::spawn` 直接编译不过。
+  - 参考实现的闭包式写法在它们的调用路径上没有这个要求，因此不能照搬。
+- **决策**：
+  1. `lib-db` 提供事务**句柄**：`Database::begin() -> Transaction`，`Transaction::{connection, commit, rollback}`；未提交即 `Drop`，由 `sqlx` 回滚。
+  2. **事务边界只允许在 `lib-db` 产生**：业务代码不得直接 `pool.begin()`；Repository 中需要多语句原子性的方法一律命名 `with_xxx`（`with_run_exchange` / `with_next_run` / `with_run_completion` / `with_orphan_healing`），内部经 `Repository::begin` 取事务并显式 `commit`。
+  3. 事务内的子步骤统一用 `*_in(&mut Transaction, ..)` 私有 helper，helper 自己绝不开事务；任何 `?` 提前返回都由 `Drop` 兜底回滚。
+- **理由**：把 begin / commit / rollback 收敛到一处（`lib-db`）是目标；闭包形式在当前编译器上不可用（D-P2-033 同类限制），句柄形式同样满足「业务侧不出现裸事务」。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-010、P2-012。
+
+---
+
+## D-P2-035 进程内运行时从 `service-core` 迁到 `manager-agent`
+
+- **问题**：会话业务与「进程内运行时」（注册表 / 占用 / 事件文件 / 执行队列）互相引用；运行时留在 `service-core` 会让业务 Crate 反向感知 Agent 与事件通路。
+- **决策**：
+  1. `service-core::runtime` 整个模块（`client` / `handler` / `journal` / `occupancy` / `registry` / `session` / `timer`）迁入 `manager-agent::runtime`；Run 执行队列与 Mock 生产方迁入 `manager-agent::runner`。
+  2. `service-core` 只保留 `session`（Service + Repository）与 `repository`，不再依赖 `types-core` / `tokio` / `framework-bus` / `framework-timer` / `serde_json`。
+  3. `RuntimeState` 在装配层内**持有** `Arc<SessionService>`（`RuntimeState::new(session)`），`acquire` 等动作不再由调用方传服务；holder 由 `AppState` 改名为 `AgentHolder`。
+  4. `lib-web` 只依赖 `manager-agent`（不再直接依赖 `service-core`）；`lib-bin-web` 只调 `manager-agent::{assemble, install, shutdown}`。
+- **理由**：`agent + runtime + service` 的交互全部落在一个装配层，符合「Service Crate 不反向依赖 Manager、也不感知 Agent」的分层；`service-core` 因此可以独立测试与演进。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-013、P2-014、P2-030（`docs/workspace.md` 已同步）。
+
+---
+
+## D-P2-036 内部异常不得被吞掉（以 `api/session/list` 为例）
+
+- **问题**：`api/session/list` 原先直接返回 `Vec<SessionSummary>`，为了不改签名，读库失败时降级为空列表并只记日志。
+- **决策**：
+  1. `api/session/list` 改为返回 `Result<Vec<SessionSummary>>`，读库失败按 500 返回。**SDK 签名不变**：生成器对所有接口统一输出 `Result<_, ApiCallError>`，因此这次调整只让客户端从「反序列化失败」变成收到结构化错误。
+  2. 自此**禁止**「吞异常 + 降级」的写法：探活接口是唯一例外（`probe/health` 必须永远可答），且降级时必须留 `warn` 日志并说明原因。
+- **理由**：空列表与数据库故障在客户端无法区分，会把故障伪装成「没有会话」，属于隐藏错误。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-013、P2-027（客户端展示错误）。
 ## OPEN 待确认项
 
 | ID | 问题 | 现状 | 承接任务 |
@@ -654,6 +736,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 | O-3 | `sqlx` 走 0.8（现状声明）还是升到 0.9 | **结案**：定格 0.8.6（0.9 的 feature 改名与展开见 D-P2-002） | P2-002、P2-010 |
 | O-4 | `context_window` / `max_output_tokens` 的默认值（8192 / 1024）是否覆盖常见本地模型 | **结案**：8192 / 1024 只作缺省兜底；模型必须出现在 `[[provider.models]]`（D-P2-015 拒绝未知模型），因此实际预算由配置显式给出 | P2-002、P2-021 |
 | O-5 | 排队中（Run 停在 `QUEUED`）在 TUI / WebUI 上如何提示最合适 | 未定；P2 只做「等待执行…」最小提示 | P2-027、P2-028 |
+| O-6 | TUI 取消类用例在全量并发运行下偶发「回复在 20 秒内未进入流式输出」：已复现 2 次（`tui.esc_cancel` 1 次、`tui.ctrl_d_cancel` 1 次），单独重跑与其余全量运行均通过 | **待定位**：两个用例失败症状相同（等首个 `message_delta` 超时），说明与具体按键无关。两个怀疑方向：① 共享服务端（54 个用例并发打同一 Mock 服务端 + SQLite 写入）下首个增量延迟过大；② Run 停在 `QUEUED`（`notify_run` 与执行队列的唤醒竞态，或占用 / 会话不一致导致没被唤醒）。修复前先补两处观测：`run/get` 的 `status` 与「消息创建 → 首个增量」的服务端耗时 | 待排期（P2 之后单独修复，需补观测后再动手） |
 
 ---
 

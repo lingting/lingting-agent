@@ -11,6 +11,8 @@ members = [
     "crates/types-core",
     "crates/service-core",
     "crates/agent-core",
+    "crates/lib-db",
+    "crates/manager-agent",
     "crates/bin-tests",
 ]
 
@@ -36,6 +38,8 @@ lib-bin-web = { path = "crates/lib-bin-web" }
 types-core = { path = "crates/types-core" }
 service-core = { path = "crates/service-core" }
 agent-core = { path = "crates/agent-core" }
+lib-db = { path = "crates/lib-db" }
+manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
 
 framework-bus = { path = "../lingting-rust-framework/framework-bus" }
@@ -107,7 +111,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
-sqlx = { version = "0.8", default-features = false, features = ["any", "json", "macros", "runtime-tokio-rustls", "sqlite"] }
+# SQLite 单文件，无网络数据库：不启用 TLS、`any`、`json` 与 `macros`（D-P2-003）。
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "sqlite"] }
 proc-macro2 = { version = "1.0" }
 quote = { version = "1.0" }
 syn = { version = "2.0", features = ["full"] }

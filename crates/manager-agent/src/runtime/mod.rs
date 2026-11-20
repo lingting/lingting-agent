@@ -1,11 +1,15 @@
 //! 运行时内核：客户端注册表、会话占用、断连标记与心跳扫描（P1.1）。
 //!
-//! 本模块是 `service-core` 里唯一持有“连接期状态”的地方，纯内存、无 Web 依赖：
-//! 传输（SSE 帧、响应头、状态码）由 `lib-web` 投影，事件落盘与转发在后续任务接入；
-//! 判定与投递由 [`timer`] 的定时任务按周期驱动。
+//! 进程内运行时：客户端注册表、会话占用、事件文件与断连处理链（P1.1）。
 //!
-//! 注入方式：`lib-bin-web` 启动时构造 [`RuntimeState`] 并调用 [`install`]，与 P2 的
-//! Repository 注入同形；`holder` 的单例替换留到 P2，本阶段只新增这条并行路径。
+//! 本模块持有“连接期状态”（纯内存、无 Web 依赖）：传输（SSE 帧、响应头、状态码）由
+//! `lib-web` 投影；事件落盘与转发的写者在 [`session`]；心跳与轮转由 [`timer`] 驱动。
+//!
+//! 归属（D-P2-035）：运行时与「会话业务」同属装配层 `manager-agent`，因为两者互相引用
+//! （占用校验要读会话、会话停止要取消 Run）。`service-core` 只提供业务与数据访问。
+//!
+//! 注入方式：装配层在启动时构造 [`RuntimeState`] 并调用 [`handler::install`]，
+//! 定时任务通过同一处登记的 `'static` 引用取注册表。
 
 mod client;
 pub mod handler;
@@ -22,7 +26,6 @@ pub use session::{RuntimeSession, SessionStop};
 pub use timer::{ROTATION_INTERVAL_MS, SCAN_INTERVAL_MS, scan};
 
 use std::fmt;
-use std::sync::OnceLock;
 
 /// 运行时业务的语义化错误。
 ///
@@ -59,38 +62,18 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-/// 进程内运行时状态，只允许注入一次。
-static STATE: OnceLock<RuntimeState> = OnceLock::new();
-
-/// 注入运行时状态并安装断连处理链；已经注入过时返回 `false`，不覆盖原实例。
+/// 装配层注入的运行时状态指针：本模块的定时任务要靠它取注册表。
 ///
-/// 必须在 Tokio 运行时内调用：处理链的监听任务由运行时承载。
-pub fn install(state: RuntimeState) -> bool {
-    let installed = STATE.set(state).is_ok();
-    if installed && !handler::install() {
-        tracing::warn!("断连处理链未安装，断连标记将不会被处理");
-    }
-    installed
+/// 值的所有权在装配层（`manager-agent` 的 holder），这里只保存一个 `'static` 引用；
+/// 进程内只设置一次，重复注入返回 `false`。
+static INSTALLED: std::sync::OnceLock<&'static RuntimeState> = std::sync::OnceLock::new();
+
+/// 记录装配层注入的运行时状态；已注入过时返回 `false`。
+pub(crate) fn bind(state: &'static RuntimeState) -> bool {
+    INSTALLED.set(state).is_ok()
 }
 
-/// 取已注入的运行时状态；未注入时为空（当前由 `lib-bin-web` 保证注入）。
-pub fn state() -> Option<&'static RuntimeState> {
-    STATE.get()
-}
-
-/// 有新 Run 排队：会话被占用时唤醒该会话的执行队列，返回是否真的有人在等。
-///
-/// 未被占用的会话里 Run 停在 `QUEUED`，不排队也不执行（D-P1.1-004）。
-pub fn notify_run(session_id: &str) -> bool {
-    state().is_some_and(|state| state.notify_run(session_id))
-}
-
-/// 关闭流程入口：把「停全部客户端与运行时会话」交给断连处理链，返回处理的客户端数量。
-///
-/// 未注入运行时状态时（只跑用例的进程）直接返回 0：没有东西需要收尾。
-pub async fn shutdown() -> usize {
-    match state() {
-        Some(state) => handler::shutdown(state).await,
-        None => 0,
-    }
+/// 取已注入的运行时状态；未注入时为空（定时任务据此跳过）。
+pub(crate) fn bound() -> Option<&'static RuntimeState> {
+    INSTALLED.get().copied()
 }

@@ -43,6 +43,15 @@ impl TestContext {
         &self.home
     }
 
+    /// 服务端监听端口：从基地址解析，自管用例重启时复用同一端口。
+    pub fn port(&self) -> Result<u16> {
+        self.base_url
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse::<u16>().ok())
+            .with_context(|| format!("无法从基地址解析端口：{}", self.base_url))
+    }
+
     /// 用例内唯一标记：用例名 + 当前毫秒，用于隔离消息内容等业务数据。
     pub fn token(&self) -> String {
         format!("{}-{}", self.name, time::now_millis())

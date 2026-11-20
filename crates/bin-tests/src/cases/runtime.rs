@@ -17,15 +17,17 @@ use lib_bin_cli::sdk::{
     ApiClient, ApiError, CLIENT_STREAM, CLIENT_UPDATE, ClientCloseReason, ClientCreatePO, ClientEvent, ClientEventKind,
     ClientUpdateKind, ClientUpdatePO, OccupancyVO, RunEvent, RunEventKind, RunStatus,
 };
-use serde_json::{Value, json};
-use service_core::runtime::{
+use manager_agent::runtime::{
     CLIENT_TTL_MS, ClientRecord, ClientState, INQUIRY_AFTER_MS, INQUIRY_WINDOW_MS, RuntimeState, SCAN_INTERVAL_MS, scan,
 };
+use serde_json::{Value, json};
 use tokio::time::sleep;
 use types_core::runtime::ClientCloseReason as ContractClientCloseReason;
 use types_core::runtime::ClientEventKind as ContractClientEventKind;
 use types_core::runtime::ClientUpdateKind as ContractClientUpdateKind;
 use types_core::runtime::OccupancyVO as ContractOccupancyVO;
+
+use crate::support::session_service;
 
 /// 运行时领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -216,7 +218,7 @@ fn contract(_context: &TestContext) -> CaseFuture<'_> {
 /// 直接构造 `RuntimeState` 而不是用进程级注入：注入只能发生一次，进程内的共享用例不该互相影响。
 fn registry(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(session_service().await?);
         let client_id = "client-1";
         ensure!(state.client(client_id).is_none(), "初始注册表应为空");
 
@@ -346,7 +348,7 @@ fn client_endpoints(context: &TestContext) -> CaseFuture<'_> {
 /// 标记是进程内状态，只能直接对 `RuntimeState` 断言；注入的是服务端进程里那一个实例，测试用独立实例。
 fn stream_mark(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(session_service().await?);
         let client_id = "client-stream";
         state.register(ClientRecord::connected(client_id));
 
@@ -439,7 +441,7 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
         );
 
         // 注册表侧：只有 ping 前进 `lastSeen`，心跳路径不产生标记（业务事件由事件文件承担）。
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(session_service().await?);
         let client_id = "client-heartbeat";
         state.register(ClientRecord::connected(client_id));
         let registered = state.client(client_id).expect("记录仍在").last_seen_ms;
@@ -484,7 +486,7 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
 /// 时间轴由调用方给：`inquire` / `inquiry_due` 都接受 `now_ms`，因此不必真实等待 30s。
 fn inquiry(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(session_service().await?);
         let client_id = "client-inquiry";
         state.register(ClientRecord::connected(client_id));
         let mut events = state.open_stream(client_id).expect("已注册的客户端应能建立下行流");
@@ -566,7 +568,7 @@ fn scan_once(_context: &TestContext) -> CaseFuture<'_> {
             "问询必须在心跳超时之前走完，否则永远不会投递"
         );
 
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(session_service().await?);
 
         // 心跳超时：TTL 边界内不标记，超出一毫秒的第一次扫描即标记，且只标记一次。
         let idle = "client-scan-idle";

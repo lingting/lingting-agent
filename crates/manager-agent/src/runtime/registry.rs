@@ -17,9 +17,12 @@ use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
 use super::journal::{self, JournalConfig};
 use super::session::RuntimeSession;
+use service_core::session::SessionService;
 
-/// 进程内运行时状态：由 `lib-bin-web` 启动时构造并注入。
+/// 进程内运行时状态：由装配层在启动时构造并持有。
 pub struct RuntimeState {
+    /// 会话业务服务：占用校验、执行队列与停止时的 Run 取消都经它访问存储。
+    session: Arc<SessionService>,
     /// 用 `Arc` 包裹，让下行流的 watcher 能脱离 `&self` 存活（`tokio::spawn` 要求 `'static`）。
     inner: Arc<RwLock<Registry>>,
     /// 事件文件根目录：显式注入（用例的临时目录）或首次使用时按应用目录推导并缓存。
@@ -50,26 +53,31 @@ struct Registry {
 }
 
 impl RuntimeState {
-    /// 创建空的运行时状态；事件文件落在应用数据目录下的默认位置。
-    pub fn new() -> Self {
+    /// 创建运行时状态；事件文件默认落在应用数据目录下，需要隔离时用 [`Self::with_events_root`]。
+    pub fn new(session: Arc<SessionService>) -> Self {
         Self {
+            session,
             inner: Arc::new(RwLock::new(Registry::default())),
             events_root: OnceLock::new(),
             journal: JournalConfig::default(),
         }
     }
 
-    /// 用指定的事件文件根目录创建（用例注入临时目录，避免写到真实应用目录）。
-    pub fn with_events_root(root: impl Into<PathBuf>) -> Self {
-        let state = Self::new();
-        state.events_root.set(root.into()).ok();
-        state
+    /// 换用指定的事件文件根目录（用例注入临时目录，避免写到真实应用目录）。
+    pub fn with_events_root(self, root: impl Into<PathBuf>) -> Self {
+        self.events_root.set(root.into()).ok();
+        self
     }
 
-    /// 换用指定的事件文件轮转配置（`lib-bin-web` 启动时按 `config.toml` 注入）。
+    /// 换用指定的事件文件轮转配置（装配层按 `config.toml` 注入）。
     pub fn with_journal_config(mut self, config: JournalConfig) -> Self {
         self.journal = config;
         self
+    }
+
+    /// 会话业务服务：占用校验、执行队列与 Run 取消都经它访问存储。
+    pub(crate) fn session(&self) -> &Arc<SessionService> {
+        &self.session
     }
 
     /// 事件文件轮转配置：轮转任务与用例读它。
@@ -433,13 +441,6 @@ impl Downlink {
         }
     }
 }
-
-impl Default for RuntimeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// 取读锁；锁中毒时沿用内部数据，避免单次 panic 让注册表永久失效。
 fn read(inner: &RwLock<Registry>) -> RwLockReadGuard<'_, Registry> {
     inner.read().unwrap_or_else(|error| error.into_inner())

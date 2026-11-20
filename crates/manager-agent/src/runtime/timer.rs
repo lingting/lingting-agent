@@ -65,7 +65,7 @@ fn scan_client(state: &RuntimeState, record: &ClientRecord, now_ms: i64) {
 /// 定时任务入口：每 [`SCAN_INTERVAL_MS`] 扫一次；运行时状态未注入时直接跳过。
 #[timer(interval = 5000)]
 async fn client_scan() -> TimerResult {
-    let Some(state) = super::state() else {
+    let Some(state) = super::bound() else {
         return TimerResult::success();
     };
     scan(state, now_millis(), !lifecycle::is_shutdown());
@@ -78,7 +78,7 @@ async fn client_scan() -> TimerResult {
 /// 关闭流程置位后直接返回：客户端与运行时会话已交给断连处理链收尾。
 #[timer(interval = 60000)]
 async fn event_rotation() -> TimerResult {
-    let Some(state) = super::state() else {
+    let Some(state) = super::bound() else {
         return TimerResult::success();
     };
     if lifecycle::is_shutdown() {

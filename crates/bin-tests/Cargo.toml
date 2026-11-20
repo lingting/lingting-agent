@@ -17,6 +17,8 @@ service-core = { workspace = true }
 types-core = { workspace = true }
 # 契约类型快照校验（`runtime.contract` 等用例）的来源（P2-006 起）。
 agent-core = { workspace = true }
+# 进程内用例的装配入口（P2-013 起 holder 归 manager-agent）。
+manager-agent = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

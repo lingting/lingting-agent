@@ -10,14 +10,13 @@ use std::time::Duration;
 use agent_core::session::SessionCreatePO;
 use anyhow::{Context, Result, ensure};
 use lib_core::time;
-use service_core::holder;
-use service_core::runtime::journal::{self, JournalConfig};
-use service_core::runtime::{ClientRecord, RuntimeState};
+use manager_agent::runtime::journal::{self, JournalConfig};
+use manager_agent::runtime::{ClientRecord, RuntimeState};
 use types_core::runtime::OccupancyCreatePO;
 
-use crate::case::{Case, CaseFuture, CaseKind};
+use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::context::TestContext;
-use crate::support::temp_directory;
+use crate::support::{runtime_state, session_service, temp_directory};
 
 /// 造目录时每个事件文件的字节数。
 const FILE_BYTES: usize = 100;
@@ -165,50 +164,53 @@ fn both_limits(_context: &TestContext) -> CaseFuture<'_> {
 
 /// 保护规则：占用中的会话目录只计入统计、永不删除（保护判据只有占用表快照）。
 fn protect_occupied(_context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move {
-        let root = temp_directory("rotation-protect")?;
-        let state = RuntimeState::with_events_root(&root);
-        // 先建立占用：占用中的会话目录成为最旧的那个，必然排在删除候选队首。
-        let fixture = Fixture::new(&state, "rotation-protect").await?;
-        create_sessions(&root, 3)?;
+    Box::pin(async move { protect_occupied_body().await })
+}
 
-        let protected = state.occupied_sessions();
-        ensure!(
-            protected.contains(&fixture.session_id),
-            "占用中的会话应在保护集合里：{protected:?}"
-        );
-        let config = JournalConfig {
-            max_sessions: 1,
-            max_bytes: 0,
-        };
-        let summary = journal::rotate(&root, config, &protected).context("轮转失败")?;
-        ensure!(
-            summary.removed == names(&[0, 1, 2]),
-            "受保护目录应被跳过，实际删除 {:?}",
-            summary.removed
-        );
-        ensure!(
-            summary.sessions == 1,
-            "受保护目录应计入统计，实际剩 {} 个",
-            summary.sessions
-        );
-        ensure!(
-            journal::session_directory(&root, &fixture.session_id).is_dir(),
-            "占用中的会话目录不应被删除"
-        );
+/// 用例主体：独立成 async fn，避免整块 future 在 `dyn Future + Send` 上做高阶生命周期推导。
+async fn protect_occupied_body() -> Result<CaseOutcome> {
+    let root = temp_directory("rotation-protect")?;
+    let state = runtime_state(&root).await?;
+    // 先建立占用：占用中的会话目录成为最旧的那个，必然排在删除候选队首。
+    let fixture = Fixture::new(&state, "rotation-protect").await?;
+    create_sessions(&root, 3)?;
 
-        state.release_occupancy(&fixture.client_id).await?;
-        ensure!(
-            journal::session_directory(&root, &fixture.session_id).is_dir(),
-            "释放占用后目录仍然保留（文件保留，不删除）"
-        );
+    let protected = state.occupied_sessions();
+    ensure!(
+        protected.contains(&fixture.session_id),
+        "占用中的会话应在保护集合里：{protected:?}"
+    );
+    let config = JournalConfig {
+        max_sessions: 1,
+        max_bytes: 0,
+    };
+    let summary = journal::rotate(&root, config, &protected).context("轮转失败")?;
+    ensure!(
+        summary.removed == names(&[0, 1, 2]),
+        "受保护目录应被跳过，实际删除 {:?}",
+        summary.removed
+    );
+    ensure!(
+        summary.sessions == 1,
+        "受保护目录应计入统计，实际剩 {} 个",
+        summary.sessions
+    );
+    ensure!(
+        journal::session_directory(&root, &fixture.session_id).is_dir(),
+        "占用中的会话目录不应被删除"
+    );
 
-        std::fs::remove_dir_all(&root).ok();
-        Ok(vec![
-            "占用中的会话目录在删除候选队首也不被删除".to_string(),
-            "受保护目录计入会话数与字节数统计".to_string(),
-        ])
-    })
+    state.release_occupancy(&fixture.client_id).await?;
+    ensure!(
+        journal::session_directory(&root, &fixture.session_id).is_dir(),
+        "释放占用后目录仍然保留（文件保留，不删除）"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    Ok(vec![
+        "占用中的会话目录在删除候选队首也不被删除".to_string(),
+        "受保护目录计入会话数与字节数统计".to_string(),
+    ])
 }
 
 /// 配置口径：缺省取默认值，显式 `0` 表示该维度关闭，两者都为 `0` 时整个轮转不动作。
@@ -269,11 +271,13 @@ impl Fixture {
     /// 注册客户端、建会话并建立占用（事件文件随之创建）。
     async fn new(state: &RuntimeState, client_id: &str) -> Result<Self> {
         state.register(ClientRecord::connected(client_id));
-        let session = holder::session()
+        let service = session_service().await?;
+        let session = service
             .create_session(SessionCreatePO {
                 title: Some(format!("rotation-{}", time::now_millis())),
                 model: None,
             })
+            .await
             .context("创建会话失败")?;
         state
             .acquire(OccupancyCreatePO {

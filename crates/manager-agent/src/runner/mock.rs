@@ -14,7 +14,7 @@ use lib_core::time;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
-use crate::session::store::Store;
+use service_core::session::SessionService;
 
 /// 助手回复按字符切分时单段的字符数（按字符而非字节切，避免拆坏多字节字符）。
 const DELTA_CHARS: usize = 4;
@@ -39,7 +39,7 @@ pub(crate) enum Outcome {
 /// 产出 `run_started` → 若干 `message_delta` → `run_completed`；
 /// 中途被取消、会话停止或服务关闭时以对应结局提前收尾。
 pub(crate) async fn produce(
-    store: &Store,
+    service: &SessionService,
     run: Run,
     prompt: String,
     assistant_message_id: String,
@@ -65,10 +65,10 @@ pub(crate) async fn produce(
     for chunk in deltas(&mock_reply(&prompt)) {
         // 服务关闭时先收尾：Run 落成 CANCELLED 并推一条终止事件，避免文件缺终态。
         if lifecycle::is_shutdown() {
-            return shutdown(store, &run, &mut events).await;
+            return shutdown(service, &run, &mut events).await;
         }
         // 每段之前确认 Run 仍在执行：被取消时立即停止，不再产出事件。
-        if !matches!(current_status(store, &run), Some(RunStatus::Running)) {
+        if !matches!(current_status(service, &run).await, Some(RunStatus::Running)) {
             return Outcome::RunStopped;
         }
         if !events.wait(DELTA_INTERVAL).await {
@@ -84,7 +84,6 @@ pub(crate) async fn produce(
 
     // 先落库再发事件：客户端收到 `run_completed` 后查 `api/run/get` 即可看到终态。
     let output_tokens = char_count(&content);
-    let now_millis = time::now_millis();
     let message = Message {
         id: assistant_message_id.clone(),
         session_id: run.session_id.clone(),
@@ -94,9 +93,20 @@ pub(crate) async fn produce(
         model: Some(run.model.clone()),
         input_tokens: Some(input_tokens),
         output_tokens: Some(output_tokens),
-        created_at_ms: now_millis,
+        created_at_ms: time::now_millis(),
     };
-    store.complete_run(&run.id, message, input_tokens, output_tokens, now_millis);
+    // 条件更新：Run 已被取消时不写助手消息（S-6），也不再补 `run_completed`。
+    match service
+        .complete_run(&run.id, &message, input_tokens, output_tokens)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return Outcome::RunStopped,
+        Err(error) => {
+            tracing::warn!(run_id = %run.id, %error, "写入助手消息失败，Run 停留在执行中状态");
+            return Outcome::RunStopped;
+        }
+    }
 
     let mut completed = events.event(RunEventKind::RunCompleted);
     completed.status = Some(RunStatus::Completed);
@@ -111,8 +121,8 @@ pub(crate) async fn produce(
 /// 服务关闭收尾：把 Run 落成 `CANCELLED`，并补一条 `server_shutdown` 终止事件。
 ///
 /// 事件只有一次机会：进程即将退出，发送失败也不再重试。
-async fn shutdown(store: &Store, run: &Run, events: &mut Producer<'_>) -> Outcome {
-    mark_cancelled(store, &run.id);
+async fn shutdown(service: &SessionService, run: &Run, events: &mut Producer<'_>) -> Outcome {
+    mark_cancelled(service, &run.id).await;
     let mut ended = events.event(RunEventKind::ServerShutdown);
     ended.status = Some(RunStatus::Cancelled);
     ended.error = Some(SHUTDOWN_REASON.to_string());
@@ -161,14 +171,22 @@ impl Producer<'_> {
     }
 }
 
-/// 取 Run 的当前状态；Run 消失时返回 `None`。
-fn current_status(store: &Store, run: &Run) -> Option<RunStatus> {
-    store.run(&run.id).map(|run| run.status)
+/// 取 Run 的当前状态；Run 不存在或查询失败时返回 `None`（按「已不在执行」处理）。
+async fn current_status(service: &SessionService, run: &Run) -> Option<RunStatus> {
+    match service.run_status(&run.id).await {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::warn!(run_id = %run.id, %error, "读取 Run 状态失败");
+            None
+        }
+    }
 }
 
 /// 服务关闭：把仍在执行的 Run 落成 `CANCELLED`，避免留下永远 `RUNNING` 的记录。
-fn mark_cancelled(store: &Store, run_id: &str) {
-    store.cancel_run(run_id, time::now_millis());
+async fn mark_cancelled(service: &SessionService, run_id: &str) {
+    if let Err(error) = service.cancel_run_quietly(run_id, SHUTDOWN_REASON).await {
+        tracing::warn!(run_id, %error, "关闭时取消 Run 失败");
+    }
 }
 
 /// Mock 回复：回显用户输入，并标注本段由 P1 的 Mock 产生。

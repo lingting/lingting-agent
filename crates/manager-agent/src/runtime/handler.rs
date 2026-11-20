@@ -27,7 +27,9 @@ static CHAIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// 订阅断连通知并启动监听任务，返回本次是否真正完成安装。
 ///
 /// 必须在 Tokio 运行时内调用：监听任务与每次清理都由运行时承载。
-pub fn install() -> bool {
+pub fn install(state: &'static RuntimeState) -> bool {
+    // 定时任务的心跳扫描与事件轮转要从同一处取注册表：先记账，再装监听任务。
+    let _ = super::bind(state);
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         warn!("断连处理链需要 Tokio 运行时，跳过安装");
         return false;
@@ -37,7 +39,7 @@ pub fn install() -> bool {
         return false;
     }
     let watcher = bus.watch::<ClientDisconnected>();
-    runtime.spawn(listen(watcher));
+    runtime.spawn(listen(watcher, state));
     true
 }
 
@@ -57,11 +59,8 @@ pub async fn process(state: &RuntimeState) -> usize {
 }
 
 /// 监听断连通知：每次唤醒都完整执行一遍处理链，链内取走全部标记。
-async fn listen(mut watcher: Watcher) {
+async fn listen(mut watcher: Watcher, state: &'static RuntimeState) {
     while watcher.changed().await.is_ok() {
-        let Some(state) = super::state() else {
-            continue;
-        };
         process(state).await;
     }
 }

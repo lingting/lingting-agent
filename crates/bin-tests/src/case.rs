@@ -43,6 +43,10 @@ pub enum CaseKind {
     Shared,
     /// 自起独立服务端，用于有副作用或需要干净状态的用例。
     Isolated,
+    /// 用例自己启停服务端（同一 `AGENT_HOME` 与端口重启的持久化 / 自愈用例）。
+    ///
+    /// 入口只准备上下文（基地址与 `AGENT_HOME`），不启动服务端：启停时机由用例决定。
+    SelfServed,
 }
 
 impl CaseKind {
@@ -51,6 +55,7 @@ impl CaseKind {
         match self {
             Self::Shared => "shared",
             Self::Isolated => "isolated",
+            Self::SelfServed => "self",
         }
     }
 }

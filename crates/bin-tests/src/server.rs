@@ -35,7 +35,11 @@ impl Server {
     /// `log_dir` 同时作为子进程的 `AGENT_HOME`，配置、数据与应用日志都落在该目录内。
     pub async fn start(port: u16, log_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&log_dir).with_context(|| format!("创建测试目录失败：{}", log_dir.display()))?;
-        let output = std::fs::File::create(log_dir.join(LOG_FILE))
+        // 追加写：同一 `AGENT_HOME` 重启时保留上一次运行的日志，便于排查启动失败。
+        let output = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join(LOG_FILE))
             .with_context(|| format!("创建服务端日志失败：{}", log_dir.display()))?;
         let errors = output.try_clone().context("复制服务端日志句柄失败")?;
         let binary = server_binary()?;
@@ -83,6 +87,15 @@ impl Server {
         let _ = self.child.start_kill();
         self.child.wait().await.context("回收服务端子进程失败")?;
         Ok(())
+    }
+
+    /// 同一应用目录与端口上的重启：先停进程，再按同一个 `AGENT_HOME` 启动。
+    ///
+    /// 持久化用例据此验证「重启后数据仍在、残留 Run 被自愈、占用不恢复」（P2-014）。
+    pub async fn restart(self, port: u16) -> Result<Self> {
+        let home = self.log_dir.clone();
+        self.stop().await?;
+        Self::start(port, home).await
     }
 
     /// 轮询探活接口，直到服务端可访问或超时。

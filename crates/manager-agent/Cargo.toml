@@ -1,0 +1,33 @@
+[package]
+name = "manager-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Agent 装配、进程内运行时与跨 Service 编排"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+lib-db = { workspace = true }
+service-core = { workspace = true }
+# 事件与 Run / Message / Session 契约类型（`RunEvent`、`Run`）。
+agent-core = { workspace = true }
+# 客户端连接与会话占用契约（`ClientEvent`、`OccupancyVO` 等）。
+types-core = { workspace = true }
+
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# 事件文件是一行一条 `RunEvent` 的 JSON（`runtime/journal.rs`）。
+serde_json = { workspace = true }
+# 断连通知：纯通知总线，处理链订阅后串行执行（`runtime/handler.rs`）。
+framework-bus = { workspace = true }
+# 运行时定时任务：`#[timer]` 注册与心跳扫描（`runtime/timer.rs`）。
+framework-timer = { workspace = true }
+framework-proc-timer = { workspace = true }
+
+[lints]
+workspace = true

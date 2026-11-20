@@ -4,7 +4,7 @@ use crate::{cors, shutdown, webui};
 use anyhow::{Context, Result, anyhow};
 use framework_web::{WebRoute, use_web};
 use framework_web_axum::{WebRouteWrapper, axum_builder};
-use service_core::runtime::JournalConfig;
+use manager_agent::runtime::JournalConfig;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{Instrument, info, info_span};
@@ -31,11 +31,15 @@ pub fn serve(host: &str, port: u16, events: JournalConfig) -> Result<()> {
 async fn run(host: &str, port: u16, events: JournalConfig) -> Result<()> {
     // 记录启动时刻，供 health 接口返回启动时间与运行时长。
     lib_web::probe::mark_startup();
-    // 运行时状态（客户端注册表 / 占用表 / 标记集合）：本进程唯一实例，启动时注入一次。
-    // 与 P2 的 Repository 注入同形，`service_core::holder` 的单例替换留到 P2。
-    let state = service_core::runtime::RuntimeState::new().with_journal_config(events);
-    if !service_core::runtime::install(state) {
-        tracing::warn!("运行时状态已注入，跳过重复注入");
+    // 装配（P2-013）：应用目录 → 数据库（迁移 + 自愈）→ Repository → Service → 运行时状态，
+    // 任一步失败都带着可读错误返回，由调用方转成非 0 退出码。
+    let state = manager_agent::assemble(manager_agent::AssemblyOptions {
+        journal: events,
+        ..Default::default()
+    })
+    .await?;
+    if !manager_agent::install(state) {
+        tracing::warn!("装配结果已注入，跳过重复注入");
     }
     // 运行时定时任务（心跳扫描 / 问询投递 / 超时标记 / 事件文件轮转）：运行时唯一，关闭后由任务自己停手。
     framework_timer::start(None, framework_timer::TimerOption::default());

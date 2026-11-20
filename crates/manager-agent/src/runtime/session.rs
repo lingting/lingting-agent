@@ -18,8 +18,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 use types_core::runtime::OccupancyVO;
 
-use crate::holder;
-use crate::session::run_trigger::RunExecutor;
+use service_core::session::SessionService;
+
+use crate::runner::queue::RunExecutor;
 
 use super::RuntimeState;
 use super::journal::Journal;
@@ -62,6 +63,8 @@ pub struct RuntimeSession {
     control: mpsc::Sender<SessionStop>,
     /// 写者任务。
     task: JoinHandle<()>,
+    /// 会话业务服务：停止时取消未结束的 Run（含执行队列的中止）。
+    session: Arc<SessionService>,
     /// Run 执行队列：会话被占用期间串行执行该会话的 `QUEUED` Run（RT-018）。
     executor: RunExecutor,
 }
@@ -69,14 +72,19 @@ impl RuntimeSession {
     /// 启动运行时会话：打开事件文件并起写者任务。
     ///
     /// 文件打开失败时直接返回错误，由调用方（占用服务）撤回占用登记，不留半建状态。
-    pub(crate) fn start(occupancy: &OccupancyVO, root: &Path, downlink: Downlink) -> io::Result<Self> {
+    pub(crate) fn start(
+        occupancy: &OccupancyVO,
+        root: &Path,
+        downlink: Downlink,
+        session: Arc<SessionService>,
+    ) -> io::Result<Self> {
         let journal = Journal::open(root, &occupancy.session_id, &occupancy.runtime_session_id)?;
         let path = journal.path().to_path_buf();
         let (producer, events) = mpsc::channel(EVENT_CAPACITY);
         let (control, controls) = mpsc::channel(CONTROL_CAPACITY);
         let task = tokio::spawn(writer(Arc::new(Mutex::new(journal)), events, controls, downlink));
         // 执行队列随运行时会话启动：占用一建立就跑存量 QUEUED Run（D-P1.1-004）。
-        let executor = RunExecutor::spawn(occupancy.session_id.clone(), producer.clone());
+        let executor = RunExecutor::spawn(occupancy.session_id.clone(), producer.clone(), Arc::clone(&session));
         Ok(Self {
             session_id: occupancy.session_id.clone(),
             runtime_session_id: occupancy.runtime_session_id.clone(),
@@ -84,6 +92,7 @@ impl RuntimeSession {
             producer,
             control,
             task,
+            session,
             executor,
         })
     }
@@ -122,12 +131,22 @@ impl RuntimeSession {
             producer,
             control,
             task,
+            session,
             executor,
             ..
         } = self;
         // 顺序不可交换（D-P1.1-002）：先停执行队列，再取消 Run，最后才让写者补终态事件。
         executor.stop().await;
-        let cancelled = holder::session().cancel_session_runs(&session_id);
+        let cancelled = match session
+            .cancel_session_runs(&session_id, REASON_OCCUPANCY_RELEASED)
+            .await
+        {
+            Ok(cancelled) => cancelled,
+            Err(error) => {
+                warn!(session_id, %error, "停止运行时会话时取消未结束的 Run 失败");
+                0
+            }
+        };
         if cancelled > 0 {
             debug!(session_id, cancelled, "停止运行时会话，已取消未结束的 Run");
         }
@@ -284,14 +303,15 @@ impl RuntimeState {
     /// 启动并登记一条运行时会话；已有同会话的会话时先停止它（不应发生，防御性处理）。
     pub(crate) async fn start_session(&self, occupancy: &OccupancyVO) -> Result<(), io::Error> {
         let downlink = self.downlink(&occupancy.client_id);
-        let session = RuntimeSession::start(occupancy, self.events_root()?, downlink)?;
+        let runtime_session =
+            RuntimeSession::start(occupancy, self.events_root()?, downlink, Arc::clone(self.session()))?;
         if let Some(previous) = self.take_session(&occupancy.session_id) {
             warn!(session_id = %occupancy.session_id, "同一会话存在未停止的运行时会话，先停止旧会话");
             if let Err(error) = previous.stop(SessionStop::OccupancyReleased).await {
                 warn!(%error, "停止旧运行时会话失败");
             }
         }
-        self.insert_session(session);
+        self.insert_session(runtime_session);
         // 每个运行时会话建立后触发一次轮转：统计与删除在定时任务的独立任务里做，不阻塞事件写入。
         super::timer::wake_rotation();
         Ok(())

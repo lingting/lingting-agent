@@ -1,6 +1,6 @@
 # P2：基础 Agent Runtime
 
-**状态：进行中（2026-11-20 开工）：Batch A（P2-001 ~ P2-005）已定稿，Batch B 待开工。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
+**状态：进行中（2026-11-20 开工）：Batch A（P2-001 ~ P2-005）已定稿，Batch B（P2-006 ~ P2-009）已完成，Batch C（P2-010 ~ P2-014）已完成。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
 
 > 依据：P1 验收结论（[`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）、P1.1 验收结论（[`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)）与仓库实际代码。凡与既有文档不一致之处，以代码为准并记入 `decisions.md`。
 > 任务见 [`tasks.md`](tasks.md)，判据见 [`acceptance.md`](acceptance.md)，决策见 [`decisions.md`](decisions.md)。
@@ -86,15 +86,16 @@ CLI / TUI / WebUI
 | `agent-route` | Provider / Model 解析与 LLM 调用适配：`LlmProvider` 抽象 + Rig Adapter；Rig 类型不得泄漏。 |
 | `agent-runtime` | Agent Loop、Run 执行、事件生产、取消、超时、错误处理；**实现 `service-core` 的执行端口**。 |
 | `lib-db` | SQLite 基础设施：连接池、迁移、事务、错误；不含业务 SQL。 |
+| `manager-agent` | Agent 装配、进程内运行时与跨 Service 编排：启动装配、进程级 holder（`AgentHolder`）、注册表 / 占用 / 事件文件 / 断连链 / 定时任务、Run 执行队列与事件生产、发送消息后唤醒执行队列、关闭入口（P2-013 起新增，P2-035 起接管运行时）。 |
 
 ### 扩展
 
 | Crate | 变更 |
 |---|---|
 | `types-core` | 移出 `session` 模块（保留 `runtime`）；新增 Provider / Model / Agent 配置类型（内部类型，不加 `auto_*` 宏）。 |
-| `service-core` | `session` 改为 Service + Repository（SQLite）；**定义执行端口**并允许注入实现；删除内存 `store`、Mock 生产方与 `holder`；`runtime` 增加执行端口与 `SessionService` 持有。 |
-| `lib-web` | `session` / `runtime` Handler 与帧合成不变；新增进程级显式 holder（`OnceLock`，由启动方注入）。 |
-| `lib-bin-web` | 启动装配：配置 → `lib-db` → Repository → Service → Runtime → 注册执行端口 → 注入 → 服务；关闭钩子联动 Runtime（P1.1 已接）。 |
+| `service-core` | `session` 改为 Service + Repository（SQLite）；删除内存 `store`、Mock 生产方与 `holder`；**进程内 `runtime` 整体迁出到 `manager-agent`**（P2-035），本 Crate 只留业务与数据访问。 |
+| `lib-web` | `session` / `runtime` Handler 与帧合成不变；Handler 改调 `manager-agent`（会话入口与运行时状态），不再直接依赖 `service-core`。 |
+| `lib-bin-web` | 启动装配：调 `manager-agent::assemble` → `install` → 起服务；关闭钩子联动 Runtime（P1.1 已接）。装配细节（数据库、Repository、Service、运行时状态）下沉到 `manager-agent`。 |
 | `lib-bin-cli` / `lib-bin-tui` / `lingting-agent-ui` | 只增加失败 / 取消 / 排队态展示，不改 Transport。 |
 | `bin-tests` | 内置 OpenAI 兼容 Mock Server；新增 `llm.*` / `chat.*` / `run.*` / `persist.*` 用例领域。 |
 
@@ -105,7 +106,8 @@ CLI / TUI / WebUI
 | `service-core -> agent-core` | 契约类型迁入 `agent-core` 后，Repository 与 Service 必须引用该类型。**仅允许这一类型层**，仍禁止依赖 `agent-runtime` / `agent-route` / `agent-context*`。 |
 | `agent-runtime -> service-core` | Run / Message 的持久化规则属于 `service-core`，Runtime 通过其 Service 读写；同时在该方向实现 `service-core` 定义的执行端口。方向仍为「上层依赖下层」。 |
 | `lib-web -> agent-core`、`lib-web -> agent-runtime` | Handler 的 DTO 来自 `agent-core`；运行时会话的事件来源经 `service-core` 的端口注入，`lib-web` 只在启动装配期接触 `agent-runtime` 的类型（若为空则不必依赖，落地时以 `cargo tree` 为准）。 |
-| `lib-bin-web -> service-core` / `agent-runtime` / `lib-db` | 启动装配（对应 P1 D-025「改为启动时构造并注入」）；仍然不承载业务逻辑、不直接调用 Runtime 的业务方法。 |
+| `manager-agent -> service-core` / `lib-db` | 启动装配与进程级 holder（P2-013 起）；`service-core` 不反向依赖它，运行时状态与会话服务的互相引用在此层解决。 |
+| `lib-web -> manager-agent`、`lib-bin-web -> manager-agent` | Handler 的会话业务入口与装配结果；启动方只调装配入口，装配细节（数据库 / Repository / Service / 运行时状态）留在 `manager-agent`。 |
 
 **不再需要的迁移**：P1.1 已删除 `RunEventStream` 与 `lib-web/src/session/stream.rs`，因此不存在「事件流类型迁入 `agent-runtime`」这件事；事件生产方就是传给执行端口的 `mpsc::Sender<RunEvent>`（见 D-P2-028）。
 
@@ -175,7 +177,7 @@ context_safety_tokens = 256
 |---|---|---|---|
 | A | 架构与技术决策 | P2-001 ~ P2-005（已完成） | 决策定稿、契约清单、`workspace.md` 变更清单 |
 | B | Agent 领域模型与类型迁移 | P2-006 ~ P2-009 | `agent-core` 建立、契约类型迁移完成、SDK 语义零差异 |
-| C | SQLite 与 Repository | P2-010 ~ P2-014 | 内存存储换成 SQLite，重启可恢复、残留自愈 |
+| C | SQLite 与 Repository | P2-010 ~ P2-014（已完成） | 内存存储换成 SQLite，重启可恢复、残留自愈 |
 | D | Provider 与 Rig Adapter | P2-015 ~ P2-018 | 可真实调用 OpenAI 兼容服务，Mock LLM Server 就绪 |
 | E | Context 管理 | P2-019 ~ P2-021 | Context 可组装、可裁剪、可替换估算 |
 | F | Agent Runtime 接入 | P2-022 ~ P2-026 | 真实执行接到 P1.1 的执行端口，Mock 生产方下线 |

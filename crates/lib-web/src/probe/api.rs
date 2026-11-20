@@ -7,7 +7,7 @@ use crate::probe::dto::{ProbeEchoPO, ProbeEchoVO, ProbeHealthVO, ProbeQueryPO, P
 use crate::probe::{PROTOCOL_VERSION, SERVICE_VERSION, startup};
 use anyhow::Result;
 use framework_web::{AuthRule, Json, Query, WebError, WebResponse, WebResponseOf, web_api_get, web_api_post};
-use service_core::holder;
+use manager_agent::running_run_count;
 
 /// 探针响应的自定义头，用于区分手工构造的响应。
 const PROBE_HEADER: &str = "x-probe-kind";
@@ -96,7 +96,11 @@ pub async fn probe_health() -> ProbeHealthVO {
         protocol_version: PROTOCOL_VERSION.to_string(),
         started_at_ms: startup.started_at_ms(),
         uptime_ms: startup.uptime_ms(),
-        running_run_count: holder::session().running_run_count(),
+        // 探活接口不允许失败：统计不到就按 0 报，但存储错误必须留日志（不静默）。
+        running_run_count: running_run_count().await.unwrap_or_else(|error| {
+            tracing::warn!(%error, "统计未结束 Run 数量失败，按 0 报告");
+            0
+        }),
     }
 }
 

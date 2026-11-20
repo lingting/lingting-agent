@@ -157,6 +157,7 @@ async fn run_case(case: Case, shared: Option<Arc<TestContext>>, run_dir: PathBuf
             None => CaseRun::failure("-".to_string(), anyhow!("共享服务端未启动")),
         },
         CaseKind::Isolated => run_isolated(case, &run_dir).await,
+        CaseKind::SelfServed => run_self_served(case, &run_dir).await,
     };
 
     CaseReport {
@@ -206,6 +207,29 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
     CaseRun::from_result(base_url, result)
 }
 
+/// 自管用例：只准备上下文（基地址与 `AGENT_HOME`），服务端由用例自己启停。
+///
+/// 用于「同一数据目录重启」这类需要把握启动时机的用例（P2-014）：入口若先启动一次，
+/// 用例就没法在首次启动前后断言迁移与自愈的行为。
+async fn run_self_served(case: Case, run_dir: &Path) -> CaseRun {
+    let log_dir = run_dir.join(case.name);
+    if let Err(error) = std::fs::create_dir_all(&log_dir) {
+        return CaseRun::failure(
+            "-".to_string(),
+            anyhow!("创建用例目录失败（{}）：{error}", log_dir.display()),
+        );
+    }
+    let port = match server::free_port() {
+        Ok(port) => port,
+        Err(error) => return CaseRun::failure("-".to_string(), error),
+    };
+    let base_url = format!("http://127.0.0.1:{port}");
+    let context = match TestContext::new(case.name, base_url.clone(), log_dir) {
+        Ok(context) => context,
+        Err(error) => return CaseRun::failure(base_url, error),
+    };
+    CaseRun::from_result(base_url.clone(), run_with_timeout(&case, &context).await)
+}
 /// 带超时与 panic 兜底执行用例；panic 不让整个测试进程退出。
 async fn run_with_timeout(case: &Case, context: &TestContext) -> Result<Vec<String>> {
     let run = AssertUnwindSafe((case.run)(context)).catch_unwind();
@@ -244,7 +268,7 @@ fn create_run_dir(run_id: &str) -> Result<PathBuf> {
 fn case_dir(run_dir: &Path, case: Case) -> PathBuf {
     match case.kind {
         CaseKind::Shared => run_dir.join(SHARED_DIR),
-        CaseKind::Isolated => run_dir.join(case.name),
+        CaseKind::Isolated | CaseKind::SelfServed => run_dir.join(case.name),
     }
 }
 

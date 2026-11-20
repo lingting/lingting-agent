@@ -8,7 +8,7 @@ use anyhow::Result;
 use framework_web::{Json, Query, WebResponse, web_api_get, web_api_post};
 use lib_core::id;
 use lib_web_core::sse;
-use service_core::runtime::ClientRecord;
+use manager_agent::runtime::ClientRecord;
 use types_core::runtime::{
     ClientCreatePO, ClientCreateVO, ClientDeletePO, ClientStreamParams, ClientUpdatePO, ClientUpdateVO,
 };

@@ -4,24 +4,22 @@
 //! `runtime.disconnect` 用进程级注入的运行时状态（处理链只安装一次），其余用例各自建实例。
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use agent_core::session::{RunEvent, RunEventKind, SessionCreatePO as ContractSessionCreatePO};
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
     ApiClient, ApiError, CLIENT_DELETE, CLIENT_UPDATE, ClientCreatePO, ClientDeletePO, ClientUpdateKind,
     ClientUpdatePO, OCCUPANCY_CREATE, OCCUPANCY_DELETE, OccupancyCreatePO, OccupancyDeletePO, SessionCreatePO,
 };
 use lib_core::time;
-use service_core::holder;
-use service_core::runtime::{self, ClientRecord, RuntimeState, handler, journal};
+use manager_agent::runtime::{ClientRecord, RuntimeState, handler, journal};
 use tokio::sync::mpsc;
 use types_core::runtime::{ClientCloseReason, OccupancyCreatePO as ContractOccupancyCreatePO, OccupancyVO};
 
-use crate::case::{Case, CaseFuture, CaseKind};
+use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::context::TestContext;
-use crate::support::{temp_directory, wait_until};
+use crate::support::{assembly_events_root, installed, runtime_state, session_service, temp_directory, wait_until};
 
 /// 断连处理链用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -49,99 +47,102 @@ pub(crate) fn cases() -> Vec<Case> {
 
 /// 六条来源收敛到同一入口，清理顺序固定，事件文件以终态事件收尾（RT-011、RT-013）。
 fn disconnect(_context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move {
-        let state = global_state()?;
-        let root = global_root().get().context("事件文件根目录未初始化")?.clone();
+    Box::pin(async move { disconnect_body().await })
+}
 
-        // 每条来源各占一个客户端：原因不同，处理结果必须一致。
-        let sources = [
-            (ClientCloseReason::HeartbeatTimeout, "心跳超时"),
-            (ClientCloseReason::InquiryTimeout, "问询无应答"),
-            (ClientCloseReason::ClientClosed, "客户端主动断开"),
-            (ClientCloseReason::StreamClosed, "下行流断开"),
-            (ClientCloseReason::JournalError, "事件文件写失败"),
-        ];
-        let mut fixtures = Vec::new();
-        for (index, (reason, label)) in sources.iter().enumerate() {
-            let fixture = Fixture::new(state, &root, &format!("disconnect-{index}"), label).await?;
-            // 先产出一条事件：终态事件必须接在它后面，证明链是「先收尾、再关闭」。
-            let producer = fixture.producer(state)?;
-            producer.send(event(&fixture, RunEventKind::RunStarted)).await?;
-            drop(producer);
-            ensure!(
-                wait_until(|| read_events(&fixture.path()).len() == 1).await,
-                "{label}：起手事件应已落盘"
-            );
-            ensure!(state.mark(&fixture.client_id, *reason), "{label}：首次标记应写入");
-            fixtures.push((fixture, label));
-        }
+/// 用例主体：独立成 async fn，避免整块 future 在 `dyn Future + Send` 上做高阶生命周期推导。
+async fn disconnect_body() -> Result<CaseOutcome> {
+    let state = global_state().await?;
+    let root = assembly_events_root().await?.to_path_buf();
 
-        let cleaned = wait_until(|| {
-            fixtures
-                .iter()
-                .all(|(fixture, _)| state.client(&fixture.client_id).is_none())
-        })
-        .await;
-        ensure!(cleaned, "断连处理链未在超时内完成清理");
-
-        for (fixture, label) in &fixtures {
-            ensure!(
-                state.occupancy_of_client(&fixture.client_id).is_none(),
-                "{label}：占用记录应已撤回"
-            );
-            ensure!(
-                state.occupancy_of_session(&fixture.session_id).is_none(),
-                "{label}：会话侧索引应已清空"
-            );
-            let events = read_events(&fixture.path());
-            ensure!(events.len() == 2, "{label}：应有一条终态事件，实际 {} 条", events.len());
-            let terminal = &events[1];
-            ensure!(
-                terminal.event == RunEventKind::RunCancelled,
-                "{label}：终态事件应为 run_cancelled，实际 {:?}",
-                terminal.event
-            );
-            ensure!(
-                terminal.error.as_deref() == Some("客户端连接已断开"),
-                "{label}：取消原因应为固定文本，实际 {:?}",
-                terminal.error
-            );
-            ensure!(terminal.seq == 1, "{label}：终态事件的 seq 应接在最后一条之后");
-        }
-
-        // 单点失败：占用记录还在但运行时会话已不在，其余清理照做。
-        let ghost = "disconnect-ghost";
-        state.register(ClientRecord::connected(ghost));
-        state.occupy(OccupancyVO {
-            session_id: "disconnect-ghost-session".to_string(),
-            client_id: ghost.to_string(),
-            runtime_session_id: "disconnect-ghost-runtime".to_string(),
-            acquired_at_ms: time::now_millis(),
-        });
+    // 每条来源各占一个客户端：原因不同，处理结果必须一致。
+    let sources = [
+        (ClientCloseReason::HeartbeatTimeout, "心跳超时"),
+        (ClientCloseReason::InquiryTimeout, "问询无应答"),
+        (ClientCloseReason::ClientClosed, "客户端主动断开"),
+        (ClientCloseReason::StreamClosed, "下行流断开"),
+        (ClientCloseReason::JournalError, "事件文件写失败"),
+    ];
+    let mut fixtures = Vec::new();
+    for (index, (reason, label)) in sources.iter().enumerate() {
+        let fixture = Fixture::new(state, &root, &format!("disconnect-{index}"), label).await?;
+        // 先产出一条事件：终态事件必须接在它后面，证明链是「先收尾、再关闭」。
+        let producer = fixture.producer(state)?;
+        producer.send(event(&fixture, RunEventKind::RunStarted)).await?;
+        drop(producer);
         ensure!(
-            state.mark(ghost, ClientCloseReason::StreamClosed),
-            "补偿用例的标记应写入"
+            wait_until(|| read_events(&fixture.path()).len() == 1).await,
+            "{label}：起手事件应已落盘"
         );
-        ensure!(
-            wait_until(|| state.client(ghost).is_none()).await,
-            "单步失败不应中断其余清理"
-        );
-        ensure!(state.occupancy_of_client(ghost).is_none(), "单步失败后占用登记仍应撤回");
+        ensure!(state.mark(&fixture.client_id, *reason), "{label}：首次标记应写入");
+        fixtures.push((fixture, label));
+    }
 
-        Ok(vec![
-            format!("来源：{} 种原因各自清理，结果一致", sources.len()),
-            "反注册 → 停止运行时会话 → 追加终态事件 → 撤回占用登记".to_string(),
-            "终态事件：run_cancelled / 客户端连接已断开".to_string(),
-            "占用记录在而运行时会话不在时，其余清理照做".to_string(),
-        ])
+    let cleaned = wait_until(|| {
+        fixtures
+            .iter()
+            .all(|(fixture, _)| state.client(&fixture.client_id).is_none())
     })
+    .await;
+    ensure!(cleaned, "断连处理链未在超时内完成清理");
+
+    for (fixture, label) in &fixtures {
+        ensure!(
+            state.occupancy_of_client(&fixture.client_id).is_none(),
+            "{label}：占用记录应已撤回"
+        );
+        ensure!(
+            state.occupancy_of_session(&fixture.session_id).is_none(),
+            "{label}：会话侧索引应已清空"
+        );
+        let events = read_events(&fixture.path());
+        ensure!(events.len() == 2, "{label}：应有一条终态事件，实际 {} 条", events.len());
+        let terminal = &events[1];
+        ensure!(
+            terminal.event == RunEventKind::RunCancelled,
+            "{label}：终态事件应为 run_cancelled，实际 {:?}",
+            terminal.event
+        );
+        ensure!(
+            terminal.error.as_deref() == Some("客户端连接已断开"),
+            "{label}：取消原因应为固定文本，实际 {:?}",
+            terminal.error
+        );
+        ensure!(terminal.seq == 1, "{label}：终态事件的 seq 应接在最后一条之后");
+    }
+
+    // 单点失败：占用记录还在但运行时会话已不在，其余清理照做。
+    let ghost = "disconnect-ghost";
+    state.register(ClientRecord::connected(ghost));
+    state.occupy(OccupancyVO {
+        session_id: "disconnect-ghost-session".to_string(),
+        client_id: ghost.to_string(),
+        runtime_session_id: "disconnect-ghost-runtime".to_string(),
+        acquired_at_ms: time::now_millis(),
+    });
+    ensure!(
+        state.mark(ghost, ClientCloseReason::StreamClosed),
+        "补偿用例的标记应写入"
+    );
+    ensure!(
+        wait_until(|| state.client(ghost).is_none()).await,
+        "单步失败不应中断其余清理"
+    );
+    ensure!(state.occupancy_of_client(ghost).is_none(), "单步失败后占用登记仍应撤回");
+
+    Ok(vec![
+        format!("来源：{} 种原因各自清理，结果一致", sources.len()),
+        "反注册 → 停止运行时会话 → 追加终态事件 → 撤回占用登记".to_string(),
+        "终态事件：run_cancelled / 客户端连接已断开".to_string(),
+        "占用记录在而运行时会话不在时，其余清理照做".to_string(),
+    ])
 }
 
 /// 串行入口与幂等：并发进入只有一个处理链在跑，标记取走后不再处理（RT-011）。
 fn serial_entry(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let root = temp_directory("handler")?;
-        let state = RuntimeState::with_events_root(&root);
+        let state = runtime_state(&root).await?;
         for index in 0..2 {
             state.register(ClientRecord::connected(format!("handler-{index}")));
         }
@@ -305,29 +306,10 @@ fn unregister(context: &TestContext) -> CaseFuture<'_> {
 }
 
 /// 进程级运行时状态：处理链只安装一次，`runtime.disconnect` 用它验证真实装配。
-fn global_state() -> Result<&'static RuntimeState> {
-    static INSTALLED: OnceLock<Option<String>> = OnceLock::new();
-    let failure = INSTALLED.get_or_init(|| {
-        let root = match temp_directory("disconnect") {
-            Ok(root) => root,
-            Err(error) => return Some(format!("{error:#}")),
-        };
-        if !runtime::install(RuntimeState::with_events_root(&root)) {
-            return Some("运行时状态已被其他用例注入".to_string());
-        }
-        global_root().set(root).ok();
-        None
-    });
-    match failure {
-        Some(message) => Err(anyhow!("{message}")),
-        None => runtime::state().context("运行时状态未注入"),
-    }
-}
-
-/// 进程级运行时状态的事件文件根目录。
-fn global_root() -> &'static OnceLock<PathBuf> {
-    static ROOT: OnceLock<PathBuf> = OnceLock::new();
-    &ROOT
+///
+/// 与其它进程内用例共用同一份装配（`crate::support::installed`）：注入只能发生一次。
+async fn global_state() -> Result<&'static RuntimeState> {
+    Ok(installed().await?.runtime())
 }
 
 /// 一条「客户端 + 会话 + 占用」的固定搭配。
@@ -342,11 +324,13 @@ impl Fixture {
     /// 注册客户端、建会话并建立占用（事件文件随之创建）。
     async fn new(state: &RuntimeState, root: &Path, client_id: &str, title: &str) -> Result<Self> {
         state.register(ClientRecord::connected(client_id));
-        let session = holder::session()
+        let service = session_service().await?;
+        let session = service
             .create_session(ContractSessionCreatePO {
                 title: Some(format!("{title}-{}", time::now_millis())),
                 model: None,
             })
+            .await
             .context("创建会话失败")?;
         let occupancy = state
             .acquire(ContractOccupancyCreatePO {

@@ -8,14 +8,13 @@ use std::path::{Path, PathBuf};
 use agent_core::session::{RunEvent, RunEventKind, SessionCreatePO, SessionSummary};
 use anyhow::{Context, Result, ensure};
 use lib_core::time;
-use service_core::holder;
-use service_core::runtime::{RuntimeState, journal};
+use manager_agent::runtime::{RuntimeState, journal};
 use tokio::sync::mpsc;
 use types_core::runtime::{ClientCloseReason, OccupancyCreatePO, OccupancyVO};
 
-use crate::case::{Case, CaseFuture, CaseKind};
+use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::context::TestContext;
-use crate::support::{temp_directory, wait_until};
+use crate::support::{runtime_state, session_service, temp_directory, wait_until};
 
 /// 事件领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -29,114 +28,117 @@ pub(crate) fn cases() -> Vec<Case> {
 
 /// 写序与终态：seq 连续、顺序等于生产顺序、终止后以终态事件收尾（RT-015）。
 fn journal_order(_context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move {
-        let root = temp_directory("journal")?;
-        let state = RuntimeState::with_events_root(&root);
+    Box::pin(async move { journal_order_body().await })
+}
 
-        // 一、没有下行通道：事件仍然全部落盘（文件是唯一事实源）。
-        let quiet = Fixture::new(&state, "journal-quiet", "quiet").await?;
-        let producer = quiet.producer(&state)?;
-        for index in 0..3 {
-            producer
-                .send(event(
-                    &quiet,
-                    RunEventKind::MessageDelta,
-                    Some(format!("delta-{index}")),
-                ))
-                .await?;
-        }
-        drop(producer);
-        let path = quiet.path(&root);
-        ensure!(
-            wait_until(|| read_events(&path).len() == 3).await,
-            "没有下行通道时事件也应全部落盘"
-        );
-        let written = read_events(&path);
-        ensure!(
-            written.iter().map(|event| event.seq).collect::<Vec<_>>() == vec![0, 1, 2],
-            "文件内 seq 应从 0 连续递增：{:?}",
-            written.iter().map(|event| event.seq).collect::<Vec<_>>()
-        );
-        ensure!(
-            written
-                .iter()
-                .filter_map(|event| event.delta.clone())
-                .collect::<Vec<_>>()
-                == vec!["delta-0", "delta-1", "delta-2"],
-            "文件内顺序应等于生产顺序"
-        );
+/// 用例主体：独立成 async fn，避免整块 future 在 `dyn Future + Send` 上做高阶生命周期推导。
+async fn journal_order_body() -> Result<CaseOutcome> {
+    let root = temp_directory("journal")?;
+    let state = runtime_state(&root).await?;
 
-        // 释放占用：写者追加终态事件并 flush，文件不再增长。
-        state.release_occupancy(&quiet.client_id).await?;
-        let written = read_events(&path);
-        let terminal = written.last().context("释放后应有一条终态事件")?;
-        ensure!(
-            terminal.event == RunEventKind::RunCancelled,
-            "释放占用的终态事件应为 run_cancelled，实际 {:?}",
-            terminal.event
-        );
-        ensure!(
-            terminal.seq == 3,
-            "终态事件的 seq 应接在最后一条之后，实际 {}",
-            terminal.seq
-        );
-        ensure!(
-            terminal.error.as_deref() == Some("会话占用已释放"),
-            "取消原因应为固定文本，实际 {:?}",
-            terminal.error
-        );
+    // 一、没有下行通道：事件仍然全部落盘（文件是唯一事实源）。
+    let quiet = Fixture::new(&state, "journal-quiet", "quiet").await?;
+    let producer = quiet.producer(&state)?;
+    for index in 0..3 {
+        producer
+            .send(event(
+                &quiet,
+                RunEventKind::MessageDelta,
+                Some(format!("delta-{index}")),
+            ))
+            .await?;
+    }
+    drop(producer);
+    let path = quiet.path(&root);
+    ensure!(
+        wait_until(|| read_events(&path).len() == 3).await,
+        "没有下行通道时事件也应全部落盘"
+    );
+    let written = read_events(&path);
+    ensure!(
+        written.iter().map(|event| event.seq).collect::<Vec<_>>() == vec![0, 1, 2],
+        "文件内 seq 应从 0 连续递增：{:?}",
+        written.iter().map(|event| event.seq).collect::<Vec<_>>()
+    );
+    ensure!(
+        written
+            .iter()
+            .filter_map(|event| event.delta.clone())
+            .collect::<Vec<_>>()
+            == vec!["delta-0", "delta-1", "delta-2"],
+        "文件内顺序应等于生产顺序"
+    );
 
-        // 二、慢客户端：下行通道塞满不阻塞落盘，该客户端被判 StreamClosed。
-        let slow = Fixture::new(&state, "journal-slow", "slow").await?;
-        let receiver = state
-            .open_stream(&slow.client_id)
-            .expect("已注册的客户端应能建立下行流");
-        let producer = slow.producer(&state)?;
-        let total = 80;
-        for index in 0..total {
-            producer
-                .send(event(&slow, RunEventKind::MessageDelta, Some(format!("slow-{index}"))))
-                .await?;
-        }
-        drop(producer);
-        let path = slow.path(&root);
-        ensure!(
-            wait_until(|| read_events(&path).len() == total as usize).await,
-            "慢客户端不应阻塞落盘：{} 行 != {total}",
-            read_events(&path).len()
-        );
-        let marks = state.take_marks();
-        ensure!(
-            marks
-                .iter()
-                .any(|(client_id, reason)| client_id == &slow.client_id && *reason == ClientCloseReason::StreamClosed),
-            "队列塞满的客户端应被标记 StreamClosed：{marks:?}"
-        );
-        // 接收端仍然存活：标记只来自 `try_send` 失败，而不是对端断开。
-        drop(receiver);
-        state.release_occupancy(&slow.client_id).await?;
-        let written = read_events(&path);
-        ensure!(
-            written.len() == total as usize + 1,
-            "终态事件应只追加一条，实际 {} 行",
-            written.len()
-        );
-        ensure!(
-            written
-                .iter()
-                .enumerate()
-                .all(|(index, event)| event.seq == index as i64),
-            "全部事件的 seq 应与写入顺序一致"
-        );
+    // 释放占用：写者追加终态事件并 flush，文件不再增长。
+    state.release_occupancy(&quiet.client_id).await?;
+    let written = read_events(&path);
+    let terminal = written.last().context("释放后应有一条终态事件")?;
+    ensure!(
+        terminal.event == RunEventKind::RunCancelled,
+        "释放占用的终态事件应为 run_cancelled，实际 {:?}",
+        terminal.event
+    );
+    ensure!(
+        terminal.seq == 3,
+        "终态事件的 seq 应接在最后一条之后，实际 {}",
+        terminal.seq
+    );
+    ensure!(
+        terminal.error.as_deref() == Some("会话占用已释放"),
+        "取消原因应为固定文本，实际 {:?}",
+        terminal.error
+    );
 
-        std::fs::remove_dir_all(&root).ok();
-        Ok(vec![
-            format!("路径：<root>/<sessionId>/<runtimeSessionId>.jsonl（{root:?}）"),
-            "无下行通道时事件全部落盘，seq 从 0 连续".to_string(),
-            format!("慢客户端：{total} 条事件全部落盘，客户端被判 StreamClosed"),
-            "释放占用后追加一条 run_cancelled 终态事件并 flush".to_string(),
-        ])
-    })
+    // 二、慢客户端：下行通道塞满不阻塞落盘，该客户端被判 StreamClosed。
+    let slow = Fixture::new(&state, "journal-slow", "slow").await?;
+    let receiver = state
+        .open_stream(&slow.client_id)
+        .expect("已注册的客户端应能建立下行流");
+    let producer = slow.producer(&state)?;
+    let total = 80;
+    for index in 0..total {
+        producer
+            .send(event(&slow, RunEventKind::MessageDelta, Some(format!("slow-{index}"))))
+            .await?;
+    }
+    drop(producer);
+    let path = slow.path(&root);
+    ensure!(
+        wait_until(|| read_events(&path).len() == total as usize).await,
+        "慢客户端不应阻塞落盘：{} 行 != {total}",
+        read_events(&path).len()
+    );
+    let marks = state.take_marks();
+    ensure!(
+        marks
+            .iter()
+            .any(|(client_id, reason)| client_id == &slow.client_id && *reason == ClientCloseReason::StreamClosed),
+        "队列塞满的客户端应被标记 StreamClosed：{marks:?}"
+    );
+    // 接收端仍然存活：标记只来自 `try_send` 失败，而不是对端断开。
+    drop(receiver);
+    state.release_occupancy(&slow.client_id).await?;
+    let written = read_events(&path);
+    ensure!(
+        written.len() == total as usize + 1,
+        "终态事件应只追加一条，实际 {} 行",
+        written.len()
+    );
+    ensure!(
+        written
+            .iter()
+            .enumerate()
+            .all(|(index, event)| event.seq == index as i64),
+        "全部事件的 seq 应与写入顺序一致"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    Ok(vec![
+        format!("路径：<root>/<sessionId>/<runtimeSessionId>.jsonl（{root:?}）"),
+        "无下行通道时事件全部落盘，seq 从 0 连续".to_string(),
+        format!("慢客户端：{total} 条事件全部落盘，客户端被判 StreamClosed"),
+        "释放占用后追加一条 run_cancelled 终态事件并 flush".to_string(),
+    ])
 }
 
 /// 一条「客户端 + 会话 + 占用」的固定搭配。
@@ -150,12 +152,14 @@ struct Fixture {
 impl Fixture {
     /// 注册客户端、建会话并建立占用（事件文件随之创建）。
     async fn new(state: &RuntimeState, client_id: &str, title: &str) -> Result<Self> {
-        state.register(service_core::runtime::ClientRecord::connected(client_id));
-        let session = holder::session()
+        state.register(manager_agent::runtime::ClientRecord::connected(client_id));
+        let service = session_service().await?;
+        let session = service
             .create_session(SessionCreatePO {
                 title: Some(format!("{title}-{}", time::now_millis())),
                 model: None,
             })
+            .await
             .context("创建会话失败")?;
         let occupancy = state
             .acquire(OccupancyCreatePO {
