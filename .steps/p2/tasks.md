@@ -1,746 +1,579 @@
 # P2 任务清单
 
-> **⚠ 内容已过期**：本清单依赖的前提（Run 由 `api/run/stream` 订阅触发，D-P2-006）已被 P1.1 改变，
-> 等 P1.1 验收通过后按 P2 目标重新生成。见 [`README.md`](README.md) 顶部说明。
-
-**状态：已过期，待 P1.1 完成后重新生成。** 任务状态维护规则见 `.steps/README.md` 第六节。
-
-执行前必读：本目录 `README.md`（边界与限制）、`decisions.md`（已定决策与 OPEN 项）。凡任务依赖未决项的，先把决策补成 `DECIDED` 再动手。
+**状态：已重新生成（2026-11-20），未开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
+
+> 上一版方案（35 个任务）已作废，编号不复用：本版按 P1.1 的客户端连接与会话运行时模型重新编排。
 
 ---
 
 ## Batch A：架构与技术决策（P2-001 ~ P2-005）
 
-> 批次内 P2-001 / P2-002 / P2-003 可并行；P2-004 依赖 P2-001；P2-005 依赖全部。**本批次不写业务代码。**
+> 依赖：P1.1 验收通过。**本批次不写业务代码**，结论回填 `README.md` 与 `decisions.md`。
 
 - [ ] **P2-001 Rig 适配边界勘察**
 
-  **目标**：把 `rig-core` 0.46 的 Provider / Completion / Streaming 能力变成书面事实清单，钉死 `agent-route` 的使用面与禁用面。
-  **前置依赖**：P2 路线图确认。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-001）；不写代码。
+  **目标**：确认 `rig-core` 0.46 的调用面、流式面与错误面，钉死「Rig 只做 Provider 传输与协议编解码」的边界。
+  **涉及文件 / Crate**：`decisions.md`（D-P2-001、OPEN O-1 / O-2）；不写代码。
   **实施步骤**：
-  1. 读 `rig-core 0.46` 源码：`providers::openai::{OpenAI, OpenAIConfig, Route}`、`driver::Model::{call, stream}`、`streaming::{Item, StreamEvent, CompletionStream}`、`completion::{CompletionRequest, CompletionResponse, Usage, Message}`、`error::ProviderError`。
-  2. 记录构造方式：`OpenAIConfig::new(api_key).with_base_url(url).with_route(Route::Chat).client()` → `OpenAI`；`openai.chat(model)` → `Model<Chat>`；`model.stream(request)` → `CompletionStream`。
-  3. 记录请求映射字段：`CompletionRequest::new(prompt).preamble(system).messages(history).max_tokens(n)`、`Message::{system, user, assistant}`。
-  4. 记录流式读取与终态：`Item<StreamEvent>` 的文本增量、结束信号、`Streamed::finish()` 的 `CompletionResponse.usage`。
-  5. 记录错误分类：`InvalidAuthentication` / `ProviderResponse` / `Http` / `Stalled` / `Truncated` / `Json`。
-  6. **明确禁用面**：`rig` facade 的 `agent` 特性、`rig_agent::{Agent, AgentBuilder, AgentRun}`、任何 tool loop API。项目自己实现 Agent Loop（P2-025 只做单轮）。
-  7. 列出「已读源码确认」与「待实测」两类条目；待实测每条标注承接任务编号（P2-016 / P2-035）。
-  **技术要求**：只读勘察；依赖形态写死为 `rig-core = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }`（`reqwest` 不是 `rig-core` 默认特性）。
-  **测试要求**：无（本任务不写代码）。
+  1. 核实 `driver::Model::{call, stream}` 的签名、`Streamed<Completion>` 的消费方式与 `finish()` 的返回值。
+  2. 核实 OpenAI 兼容路径（`providers::openai::{OpenAIConfig, Route, OpenAI}`、`with_base_url` / `with_route`）。
+  3. 核实 `ProviderError` 的变体与可映射字段（认证失败 / 上游错误 / 网络 / 截断 / JSON）。
+  4. 实测「drop `LlmStream` 后底层连接是否立即关闭」（O-1），记录方法与本机结果。
   **验收标准**：
-  - [ ] 决策文档含 Rig 事实清单（构造 / 请求 / 流式 / 错误四段）。
-  - [ ] 禁用 API 清单明确，且说明「Agent Loop 由项目实现」的边界。
-  - [ ] 待实测项每条都有承接任务编号。
-  **完成产物**：D-P2-001 定稿。
+  - [ ] 三段调用面（构造 / 流式 / 错误）各有源码出处与最小示例。
+  - [ ] O-1 有实测结论或明确的「未实测 + 影响范围」标注。
+  **完成产物**：D-P2-001 定稿、O-1 结论。
+  **测试要求**：无。
 
 - [ ] **P2-002 SQLite 选型与 Schema 草案**
 
-  **目标**：定稿 SQLite 驱动、feature 组合、连接参数、schema 与迁移策略。
-  **前置依赖**：无（可与 P2-001 并行）。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-002 ~ D-P2-005）。
+  **目标**：定稿 `sqlx` 版本、feature 组合、表结构与索引，作为 P2-011 的唯一依据。
+  **涉及文件 / Crate**：`Cargo.toml` 的 `[workspace.dependencies]`（P2-010 落地时改）、`decisions.md`（D-P2-002、D-P2-003、D-P2-004、D-P2-005、O-3）。
   **实施步骤**：
-  1. 对比 `sqlx`（0.8 现状声明 vs 0.9 最新）与 `rusqlite`：Tokio 集成、异步读写、连接池、事务、迁移、三平台支持、编译期依赖、体积、开发复杂度。
-  2. 记录现状事实：`Cargo.toml` 的 `[workspace.dependencies]` 已声明 `sqlx 0.8`（`any/json/macros/runtime-tokio-rustls/sqlite`），但 `Cargo.lock` 无 `sqlx`，仓库无任何使用点——属「预留未落地」。
-  3. 定稿 feature 组合：`runtime-tokio-rustls` + `sqlite`（bundled amalgamation，需要 cc）+ `json` + `migrate`；**不启用 `macros`**（避免编译期需要 `DATABASE_URL` / `.sqlx` 离线数据），查询一律用运行时 `sqlx::query` / `query_as`。
-  4. 定稿连接策略：`SqlitePoolOptions` 的 `max_connections`、`PRAGMA journal_mode=WAL`、`busy_timeout`、`foreign_keys=ON`。
-  5. 定稿数据库文件位置：`lib_core::directorys()` 的 `data` 目录下 `agent.db`；测试用 `AGENT_HOME` 隔离（沿用 P1）。
-  6. 定稿 schema 草案（表 / 字段 / 类型 / 索引 / 约束 / 外键）：
-     - `sessions(id TEXT PK, title TEXT, model TEXT, created_at_ms INTEGER, updated_at_ms INTEGER)`
-     - `messages(id TEXT PK, session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT, seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, model TEXT, input_tokens INTEGER, output_tokens INTEGER, created_at_ms INTEGER, UNIQUE(session_id, seq))`
-     - `runs(id TEXT PK, session_id TEXT NOT NULL REFERENCES sessions(id), status TEXT NOT NULL, model TEXT NOT NULL, error TEXT, input_tokens INTEGER, output_tokens INTEGER, created_at_ms INTEGER, updated_at_ms INTEGER, finished_at_ms INTEGER)`
-     - 索引：`messages(session_id, seq)`、`runs(session_id, created_at_ms)`、`runs(status)`
-     - 会话消息数用 `COUNT(*)` 子查询，不冗余计数列（避免双写不一致）。
-  7. 定稿迁移：`crates/lib-db/migrations/` 下 `0001_init.sql` 起，命名 `<序号>_<snake_case>.sql`，用 `sqlx::migrate!` 内嵌执行，幂等。
-  **技术要求**：结论必须落到可执行参数，不写「视情况而定」。
-  **测试要求**：无（结论在 P2-010 / P2-014 验证）。
+  1. 复核 `sqlx` 版本（0.8 现状声明 vs 0.9 的 `rust-version`），定稿 feature：`runtime-tokio-rustls` / `sqlite` / `json` / `migrate`，去掉 `macros` 与 `any`。
+  2. 草案表结构：`sessions` / `messages`（`seq` + `UNIQUE(session_id, seq)`）/ `runs`，字段与 P1 契约类型一一对应（`*_at_ms` 用 INTEGER）。
+  3. 定稿终态条件更新语句形态（`WHERE id=? AND status IN ('QUEUED','RUNNING')`）。
+  4. 记录数据库位置、连接参数（`max_connections` / WAL / `busy_timeout` / `foreign_keys`）与测试隔离方式（`AGENT_HOME`）。
   **验收标准**：
-  - [ ] 选型结论 + `rusqlite` 的 `REJECTED` 理由齐备。
-  - [ ] feature 组合与不启用 `macros` 的理由写明。
-  - [ ] 完整 schema（含索引、约束、外键）与迁移命名规则写明。
-  - [ ] `sqlx` 版本结论明确（0.8 落地或升级到 0.9 并说明理由）。
-  **完成产物**：D-P2-002 ~ D-P2-005 定稿。
+  - [ ] 版本与 feature 组合唯一确定，无 `macros`。
+  - [ ] 表结构覆盖 Session / Message / Run 的全部契约字段，含唯一约束与外键。
+  - [ ] 终态更新语句与索引一并写明。
+  **完成产物**：D-P2-002 ~ D-P2-005 定稿、Schema 草案。
+  **测试要求**：无。
 
 - [ ] **P2-003 Context Budget 与 Token 估算策略**
 
-  **目标**：定稿 Token 预算来源、估算方式、裁剪算法与失败语义。
-  **前置依赖**：无（可与 P2-001 / P2-002 并行）。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-012、D-P2-013）。
+  **目标**：定稿 Token 预算来源、估算公式、裁剪顺序与超限失败行为。
+  **涉及文件 / Crate**：`decisions.md`（D-P2-012、D-P2-013、O-4）；不写代码。
   **实施步骤**：
-  1. 定稿预算来源：`provider.models[].context_window` 与 `max_output_tokens`（配置显式给出，P2 不引入模型目录）；缺省 `8192` / `1024`。
-  2. 定稿估算公式：`tokens ≈ ceil(ascii_chars / 4) + non_ascii_chars + 4`（每条消息固定开销 4）。
-  3. 定稿预算公式：`budget = context_window - max_output_tokens - safety_tokens(默认 256) - system_prompt_tokens`。
-  4. 定稿裁剪算法（伪代码级）：先按 `context_max_messages`（默认 40）截断，再从最旧消息开始逐条丢弃直到不超预算；**系统提示最优先保留**；**最新一条用户消息必须保留**。
-  5. 定稿边界语义：最新用户消息单条即超预算 → 该 Run 落 `FAILED`，`error` 为可读文案（不新增 HTTP 错误码）。
-  6. 定稿可替换点：`TokenEstimator` trait + `HeuristicEstimator` 默认实现，通过构造参数注入。
-  **技术要求**：算法必须能逐条判定，参数集中在配置结构体，不散落魔数。
-  **测试要求**：无（结论在 P2-021 / P2-031 验证）。
+  1. 预算来源：`[[provider.models]]` 的 `context_window` / `max_output_tokens`，缺省 8192 / 1024。
+  2. 估算公式：`tokens ≈ ceil(ascii_chars / 4) + non_ascii_chars + 4`；`available = context_window - max_output_tokens - safety_tokens - system_prompt_tokens`。
+  3. 裁剪顺序：先按 `context_max_messages` 截断最旧，再逐条丢弃直到不超预算；系统提示与最新用户消息永不裁。
+  4. 超限失败：最新用户消息单条即超预算 → Run `FAILED`、`error` = 「上下文超出模型预算」，不发起上游请求。
   **验收标准**：
-  - [ ] 伪代码级算法与参数表齐备。
-  - [ ] 四类边界（空历史 / 单条超长 / 恰好等于预算 / 系统提示本身超预算）各自给出结论。
-  - [ ] 「超预算 → Run `FAILED`」的对外文案定稿。
+  - [ ] 公式、缺省值、裁剪顺序、失败文案四处唯一确定。
+  - [ ] 估算器为 trait + 默认实现，构造点唯一。
   **完成产物**：D-P2-012、D-P2-013 定稿。
+  **测试要求**：无。
 
-- [ ] **P2-004 Run 执行模型：并发、串行、取消与关闭联动**
+- [ ] **P2-004 Run 执行模型定稿（继承 P1.1 通路）**
 
-  **目标**：用状态转换表 + 持久化时序钉死 Run 的执行模型，作为 P2-022 ~ P2-026 的唯一依据。
-  **前置依赖**：P2-001。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-006 ~ D-P2-011、D-P2-019）。
+  **目标**：在 P1.1 的执行队列之上钉死「P2 只换执行内容」的接入方式、状态转换表、持久化时序、并发与取消，作为 P2-022 ~ P2-026 的唯一依据。
+  **涉及文件 / Crate**：`decisions.md`（D-P2-028、D-P2-029；修订 D-P2-007、D-P2-008、D-P2-009、D-P2-010、D-P2-011）。
   **实施步骤**：
-  1. 记录 P1 事实：`service-core/src/session/service.rs::subscribe_run` 在订阅时把 `QUEUED → RUNNING` 并启动生产任务；`bin-tests/src/cases/session.rs::message` 断言「未订阅前 Run 应保持 `Queued`」。→ 结论：**P2 保留「订阅触发执行」**，不做「创建即执行」。
-  2. 状态转换表（起点 / 终点 / 触发方 / 守卫）：
+  1. 记录 P1.1 事实：Run 由「会话被占用 + 消息创建」触发；`RuntimeSession` 内的 `RunExecutor` 串行执行；事件先落盘 flush 再转发；`api/run/stream` 已删除。
+  2. 定执行端口：`service-core` 定义 trait（输入：Run、用户提示、`mpsc::Sender<RunEvent>`、取消信号；输出：终态结果），`agent-runtime` 实现，`lib-bin-web` 注册；`service-core` 不依赖 `agent-*`。
+  3. 状态转换表（起点 / 终点 / 触发方 / 守卫）：
      | 起点 | 终点 | 触发方 | 守卫 |
      |---|---|---|---|
-     | — | QUEUED | `api/message/create` | 事务内写用户消息 + Run |
-     | QUEUED | RUNNING | `api/run/stream` 订阅 | 注册表占位成功 + 获得 Session 租约 + `UPDATE ... WHERE status='QUEUED'` |
-     | RUNNING | COMPLETED | 执行器成功收尾 | 事务内 `WHERE status='RUNNING'` + 插入助手消息 |
-     | RUNNING | FAILED | 执行器失败收尾 | `WHERE status='RUNNING'` + 脱敏 error |
-     | QUEUED / RUNNING | CANCELLED | 取消接口 / 断线 / 关闭 / 启动自愈 | `WHERE status IN ('QUEUED','RUNNING')` |
-     | 任意终态 | 任意 | — | 禁止；条件更新影响 0 行即视为「已终态」，不报错、不覆盖 |
-  3. 持久化时序（六条路径写清楚「何时写什么」）：成功 / 失败 / 取消 / 断线 / 服务关闭 / 进程重启自愈。核心约定：**流式期间不写库**；助手消息与 `COMPLETED` 同一事务；取消与失败不写半成品助手消息；`run_completed` 必须在事务提交之后发送。
-  4. 并发模型：全局 `Semaphore(max_concurrent_runs)` + 每 Session 租约（`tokio::sync::Mutex`，公平等待实现 FIFO）→ 同 Session 单 Run；获取顺序固定「先 Session 租约，后全局信号量」；排队超时 `run_queue_timeout_ms` 到点落 `FAILED`。排队期间只发心跳。
-  5. Cancellation 归属：每 Run 一个 `CancellationToken`，由执行器持有、注册表存 clone；取消传播到 LLM 流的做法是 `select!` + drop 流；断线（`sender.closed()`）等价于取消；关闭用 Runtime 级广播（由 `lib-bin-web` 关闭钩子调用 `runtime.shutdown()`）。
-  6. 启动自愈：`RUNNING → FAILED`（`error` = 「服务重启，执行已中断」）、`QUEUED → CANCELLED`（`error` 同义），在 `lib-db` 迁移之后、开始服务之前执行一次。
-  7. 记录 `RunEventStream` 与 `holder` 的归属迁移（D-P2-019），以及「取消与完成同时发生时以数据库条件更新的结果为准」。
+     | — | QUEUED | `api/message/create` | 单事务写用户消息 + Run |
+     | QUEUED | RUNNING | 会话执行队列（占用存在） | `UPDATE ... WHERE status='QUEUED'` |
+     | RUNNING | COMPLETED | 执行器成功收尾 | 事务内条件更新 + 插入助手消息 |
+     | RUNNING | FAILED | 执行器失败收尾 | 条件更新 + 脱敏 error |
+     | QUEUED / RUNNING | CANCELLED | `api/run/cancel` / 客户端断连 / 服务关闭 / 启动自愈 | 条件更新，影响 0 行即放弃 |
+     | 任意终态 | 任意 | — | 禁止；条件更新影响 0 行视为「已终态」 |
+  4. 持久化时序：`message/create` 单事务；流式期间不写库；成功 = 助手消息 + `COMPLETED` 同事务，提交后才发 `run_completed`；失败 = `FAILED` 且不写助手消息，发 `run_failed`；取消 = `CANCELLED` 且发 `run_cancelled`；关闭 = `CANCELLED` + `server_shutdown`。
+  5. 终态事件归属：**执行层负责每条 Run 的终态事件**；P1.1 写者的「停止时兜底补写」只在最后一条事件不是终态时触发，作为安全网保留。
+  6. 并发：同会话串行由 P1.1 执行队列保证；P2 只加全局 `Semaphore(max_concurrent_runs)`，获取顺序「先队列执行（已串行）→ 再全局信号量」；排队超时 `run_queue_timeout_ms` 到点落 `FAILED`「执行排队超时」。
+  7. 取消归属：每 Run 一个 `CancellationToken`；`api/run/cancel` 先条件更新（数据库权威）再触发 token；断连/关闭由 P1.1 的 `SessionStop` 触发，与取消同权；模型流中断方式 = `select!` 命中后 drop 流。
+  8. 启动自愈：`RUNNING → FAILED`（「服务重启，执行已中断」）、`QUEUED → CANCELLED`（「服务重启，未开始的执行已取消」），在迁移之后、监听之前执行一次；占用表不恢复（D-P1.1-007）。
   **技术要求**：只写结论与时序，不写实现；所有判定必须能转成用例。
-  **测试要求**：无。
   **验收标准**：
+  - [ ] 执行端口的输入输出与注入点唯一确定，依赖方向不与 `docs/workspace.md` 冲突。
   - [ ] 状态转换表完整，含终态不可再转与幂等取消。
-  - [ ] 六条持久化路径各有明确写时序。
-  - [ ] 并发与排队参数齐备。
-  - [ ] 竞态结论明确（谁获胜、失败方的行为）。
-  **完成产物**：D-P2-006 ~ D-P2-011、D-P2-019 定稿。
+  - [ ] 六条持久化路径各有明确写时序，且标明终态事件由谁发出。
+  - [ ] 并发、排队与取消参数齐备；与 P1.1 的断连/关闭链路无冲突。
+  **完成产物**：D-P2-028、D-P2-029 新增；D-P2-007 ~ D-P2-011 修订。
+  **测试要求**：无。
 
 - [ ] **P2-005 API 契约、密钥策略与决策归档**
 
-  **目标**：把 P2 对 P1 契约的影响定成零变更结论，并给出密钥规则；同时归档全部决策与 `docs/workspace.md` 变更清单。
-  **前置依赖**：P2-001 ~ P2-004。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-014 ~ D-P2-018、D-P2-020 ~ D-P2-027）；`docs/workspace.md` 变更清单。
+  **目标**：把 P2 对契约的影响定成零变更结论，给出密钥规则，并归档 `docs/workspace.md` 变更清单。
+  **涉及文件 / Crate**：`decisions.md`（D-P2-014 ~ D-P2-018、D-P2-021 ~ D-P2-027）；`docs/workspace.md` 变更清单。
   **实施步骤**：
-  1. 逐条核对 P1 的 19 条接口（探针 12 条 + 会话 7 条）的 method / path / 入参 / 出参：确认 P2 不改。
-  2. 明确 P2 **不新增**接口、不新增 DTO 字段、不新增 `RunEventKind`；`run_failed` / `heartbeat` 由「无产出方」变为「真实产出」，字段语义不变。
-  3. 明确新增的**拒绝路径**（不新增错误码）：`session/create` 或 `message/create` 指定的 `model` 未在配置中出现 → 400，文案 `模型不可用：<id>`；上下文超预算 → Run `FAILED`（HTTP 仍 200）。
-  4. 记录 `run_started.inputTokens` 的语义微调：P1 是「按字符数估算」，P2 是「按 Context 预算估算器估算」；`run_completed.inputTokens/outputTokens` 用 Provider 真实 usage（缺失时留空）。字段名与类型不变。
-  5. 密钥策略：只存 `config.toml`（明文）或环境变量；**不新增 Provider 配置接口**；`api_key` 不进入任何 DTO；`Debug` 输出脱敏为 `***`；错误消息只允许出现 provider id 与 base_url 的 host；日志不记录请求头。
-  6. 归档：把 D-P2-xxx 全部状态定稿；把需要在实施中修改 `docs/workspace.md` 的条目独立成清单（Crate 新增、四条依赖边、`RunEventStream` / `holder` 归属、§8.1 阶段状态）。
+  1. 逐条核对 25 条接口（探针 12 + 会话/消息/Run 6 + 客户端 4 + 占用 3）的 method / path / 入参 / 出参：确认 P2 不改。
+  2. 明确 P2 **不新增**接口、DTO 字段、`RunEventKind` 取值；`run_failed` 由「无产出方」变为「真实产出」；`heartbeat` 保留但不产出（P1.1 已定）。
+  3. 明确新增的**拒绝路径**（不新增错误码）：`session/create` / `message/create` 指定的 `model` 未在配置中出现 → 400 `模型不可用：<id>`；上下文超预算 → Run `FAILED`（HTTP 仍 200）。
+  4. 记录 `run_started.inputTokens` 语义：P1 是字符数估算，P2 用预算估算器；`run_completed` 的 token 用 Provider 真实 usage（缺失时留空）。字段名与类型不变。
+  5. 密钥策略：只存 `config.toml`（明文）或环境变量；不新增 Provider 配置接口；`api_key` 不进入任何 DTO；`Debug` / `Display` 脱敏为 `***`；错误文案只允许 provider id 与 base_url 的 host；日志不记录请求头。
+  6. 归档：把 D-P2-xxx 全部状态定稿；把需要在实施中修改 `docs/workspace.md` 的条目独立成清单（Crate 新增、四条依赖边、`holder` 归属、§8.1 / §8.2 状态）。
   7. 记录 CI 策略：本地 `path` 依赖不变，P2 不碰 GitHub Actions；`make ci` 失败不作为阻塞条件，但 `make gen-check` / `make check` / `make ui-check` 必须本地通过。
-  **技术要求**：契约结论要能被 P2-035 逐条复核。
-  **测试要求**：无。
   **验收标准**：
-  - [ ] 19 条接口逐条标注「不变」。
-  - [ ] 新增拒绝路径有 doc 与用例归属（P2-017 / P2-031）。
+  - [ ] 25 条接口逐条标注「不变」。
+  - [ ] 新增拒绝路径有 doc 与用例归属（P2-017 / P2-026 / P2-031）。
   - [ ] 密钥规则可执行（脱敏位置、禁止出现的结构、可检索断言）。
   - [ ] `docs/workspace.md` 需改动的位置列成清单。
-  **完成产物**：D-P2-014 ~ D-P2-018、D-P2-020 ~ D-P2-027 定稿 + workspace.md 变更清单。
+  **完成产物**：D-P2-014 ~ D-P2-018、D-P2-021 ~ D-P2-027 定稿 + `workspace.md` 变更清单。
+  **测试要求**：无。
 
 ---
 
 ## Batch B：Agent 领域模型与类型迁移（P2-006 ~ P2-009）
 
-> P2-006 是批次入口；P2-007 依赖 P2-006；P2-008 依赖 P2-006、P2-007；**P2-009 可与 P2-006/007 并行**（只新增 `types-core` 内部类型，不动契约类型）。
+> 依赖：Batch A。P2-006 → P2-007 → P2-008；P2-009 与 P2-006 可并行（只碰 `types-core` 的配置类型）。
 
 - [ ] **P2-006 新建 `agent-core` 并迁移 Session / Message / Run 契约类型**
 
-  **目标**：按 `docs/workspace.md` 6.2 把契约类型从 `types-core::session` 整体迁入 `agent-core`，类型名、字段名、serde 行为零变化。
+  **目标**：建立 Agent 领域最底层 Crate，把 `types-core::session` 整体迁入，类型名、字段、serde 行为零差异。
   **前置依赖**：P2-005。
-  **涉及文件 / Crate**：新增 `crates/agent-core/`；`Cargo.toml`（workspace members + `[workspace.dependencies]`）；删除 `crates/types-core/src/session/`。
+  **涉及文件 / Crate**：新增 `crates/agent-core/`（`src/{lib,session/{mod,message,run,event,request,summary}}.rs`）；删除 `crates/types-core/src/session/`；`crates/types-core/src/lib.rs`；workspace `Cargo.toml`。
   **实施步骤**：
-  1. 新建 `crates/agent-core`，`Cargo.toml` 依赖与现 `types-core` 一致：`lib-core`、`framework-proc-auto(collect)`、`framework-proc-core(collect)`、`serde`、`serde_with`、`specta`、`strum`、`strum_macros`。
-  2. 文件组织：`src/lib.rs`（模块与再导出）+ `message.rs`（`Message`、`MessageRole`）+ `run.rs`（`Run`、`RunStatus`、`SessionSummary`、`MessageSendVO`）+ `event.rs`（`RunEvent`、`RunEventKind`）+ `request.rs`（`*PO` / `*Params`）+ `error.rs`（`AgentError`，P2-007 填充）。
-  3. 迁移时**逐字保留**：类型名、字段名与顺序、`#[auto_type]` / `#[auto_enum]` 参数（`clone`、`default`）、`#[serde(rename_all)]`、`#[strum(serialize_all)]`、文档注释中的契约说明。
-  4. `types-core` 删除 `session` 模块与对应依赖清理（不删除 `types-core` 本身，Provider/Model 类型由 P2-009 填充）。
-  5. 更新 `docs/workspace.md` 的成员清单与 §8.1 阶段状态（本任务执行时同步，不推迟）。
-  **技术要求**：不新建 `types-api`，不复制 DTO；`agent-core` 不依赖 tokio / rig / axum / 数据库 / 其他 `agent-*`。
-  **测试要求**：无新增用例；验证靠编译与生成物比对（P2-008）。
+  1. 原样搬迁契约类型与 `auto_*` 宏标注（`Message` / `MessageRole` / `Run` / `RunStatus` / `RunEvent` / `RunEventKind` / `SessionCreatePO` / `SessionSummary` / `MessageSendPO` / `MessageSendVO` / `MessageListParams` / `RunGetParams` / `RunCancelPO`）。
+  2. `types-core` 保留 `runtime` 模块与 Settings / Provider 等非 Agent 类型；移除 `session` 并修正引用。
+  3. 全仓替换 `types_core::session` → `agent_core::session`，按需在各 Crate 的 `Cargo.toml` 增加 `agent-core`。
+  **技术要求**：不加 `version` 约束（`path` 依赖，D-015）；`agent-core` 只依赖 `lib-core` + serde / specta / strum / `framework-proc-*`。
   **验收标准**：
-  - [ ] `cargo build --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check` 通过。
-  - [ ] `agent-core` 的依赖树只有 `lib-core` + 宏/序列化依赖（`cargo tree -p agent-core` 为证据）。
-  - [ ] 迁移前后类型清单逐项一致（名称 / 字段 / 参数 / serde 属性）。
-  **完成产物**：`crates/agent-core/` 可编译；`types-core::session` 移除；workspace 文档同步。
+  - [ ] `cargo tree -p agent-core` 无 tokio / rig / axum / sqlx。
+  - [ ] `grep -rn "types_core::session" crates` 为空。
+  - [ ] `make gen` 后两份 SDK 字段名、类型、可选性、枚举取值与迁移前逐字节一致。
+  **测试要求**：`bin-tests` 的 `runtime.contract` 等既有契约用例继续通过，不新增用例。
+  **完成产物**：`agent-core` 建立，契约类型唯一来源迁移完成。
 
 - [ ] **P2-007 Run 状态机与领域校验**
 
-  **目标**：把 `QUEUED → RUNNING → {COMPLETED, CANCELLED, FAILED}` 的状态规则做成领域内可复用、可判定的代码。
+  **目标**：把 Run 的合法状态转换写成领域方法，非法转换有明确错误类型。
   **前置依赖**：P2-006。
-  **涉及文件 / Crate**：`crates/agent-core/src/run.rs`、`crates/agent-core/src/error.rs`。
+  **涉及文件 / Crate**：`crates/agent-core/src/session/run.rs`、`crates/agent-core/src/error.rs`。
   **实施步骤**：
-  1. `RunStatus::is_terminal()`、`RunStatus::can_transition_to(next)`，转换表与 P2-004 一致。
-  2. `AgentError` 至少覆盖：`InvalidTransition { from, to }`、`NotFound`、`Invalid`、`Internal`；`Display` 文案对外可读、不含内部细节。
-  3. 提供 `Run::transition(next, now_ms) -> Result<(), AgentError>` 之类的纯函数式变更入口（不触碰数据库）。
-  4. 明确「幂等取消」在领域层的表达：终态收到取消请求时返回 `InvalidTransition`，由 Service 层转成 P1 的 400 语义（文案保持不变）。
-  **技术要求**：纯同步、无 async、无 IO；不引入 tokio / async-trait。
-  **测试要求**：无单元测试（`AGENTS.md` 第 28 条）；规则通过 P2-012 / P2-023 的调用点与 P2-032 用例验证。
+  1. `RunStatus::can_transition_to`（`QUEUED → RUNNING` / `RUNNING → COMPLETED|FAILED` / `QUEUED|RUNNING → CANCELLED`，终态不再转）。
+  2. `AgentError { InvalidTransition, NotFound, Invalid, Internal }`；`Display` 文案对外可读、不含内部细节。
+  3. 与 D-P2-004 的转换表逐条对照，覆盖 `run_cancelled`（P1.1 已有的事件值）。
   **验收标准**：
-  - [ ] 转换表在代码与 `decisions.md` D-P2-006 一致。
-  - [ ] 非法转换被 `can_transition_to` 拒绝，且终态不可再转。
-  - [ ] `AgentError` 的对外文案不含 SQL / 路径 / 堆栈。
-  **完成产物**：状态机与错误类型就绪，供 P2-012 / P2-023 引用。
+  - [ ] 转换表与 D-P2-004 一致；非法转换有错误变体与文案。
+  - [ ] 终态不可再转有显式否定用例（由 P2-026 的 `run.cancel` 覆盖）。
+  **测试要求**：不新增单元测试；行为由 `bin-tests` 的 `run.*` 用例覆盖。
+  **完成产物**：领域状态机。
 
 - [ ] **P2-008 依赖切换与 SDK 生成回归**
 
-  **目标**：`service-core` / `lib-web` 改用 `agent-core`，并证明 SDK 生成的契约语义零差异。
+  **目标**：确认类型迁移后生成物语义零差异，依赖方向成立。
   **前置依赖**：P2-006、P2-007。
-  **涉及文件 / Crate**：`crates/service-core/Cargo.toml`、`crates/lib-web/Cargo.toml`、`crates/lib-web/src/session/api.rs`、`crates/lib-web/src/probe/api.rs`、`crates/agent-core/src/lib.rs`。
+  **涉及文件 / Crate**：workspace `Cargo.toml`、各 Crate 的 `Cargo.toml`、`docs/workspace.md`（P2-030 统一回填）。
   **实施步骤**：
-  1. `service-core`、`lib-web` 的 `use types_core::session::…` 全部改为 `agent_core::…`，并从依赖表加入 `agent-core`。
-  2. `Cargo.toml` 的 `[workspace.dependencies]` 增加 `agent-core = { path = "crates/agent-core" }`，`members` 增加成员。
-  3. 复核 `docs/workspace.md`：`service-core -> agent-core` 只允许依赖类型层；`lib-web -> agent-core` 同步登记。
-  4. 记录 `lib-bin-cli` 的 `types-core` 依赖为**未使用的历史依赖**：本任务不删除（避免顺手扩大改动），只记入 `decisions.md` 并在 P2-035 复核。
-  5. 跑 `make gen`，对比迁移前后生成物：DTO 名称、字段名、字段类型与可选性、枚举取值逐项一致（允许文件内顺序变化）；把对比方法与结果写入任务记录。
-  **技术要求**：不修改任何 handler 的签名与 path；不改 `docs/api/*.md`（契约未变）。
-  **测试要求**：`make gen-check`（清空重建 + 产物校验 + 生成代码参与编译）必须通过。
+  1. `make gen` → 记录接口清单与 DTO 比对表（与 P1.1 的生成物对照）。
+  2. `cargo tree` 核对依赖方向：`agent-core` 无上层依赖；`service-core` 未依赖 `agent-runtime` 等。
+  3. `make gen-check` 全流程通过。
   **验收标准**：
-  - [ ] `make gen`、`make gen-check`、`make check` 通过，生成物字段语义零差异。
-  - [ ] `crates/types-core` 不再出现 `session` 类型；仓库内无 `types_core::session` 引用。
-  - [ ] `docs/workspace.md` 的成员与依赖边与代码一致。
-  **完成产物**：类型迁移完成并可通过生成门禁。
+  - [ ] 接口清单与 P1.1 一致（25 条），DTO 零差异。
+  - [ ] `make gen-check` 退出码 0。
+  **测试要求**：`make test ARGS="sdk"` 与 `make test ARGS="runtime.contract"` 通过。
+  **完成产物**：迁移回归记录。
 
 - [ ] **P2-009 Provider / Model / Agent 配置类型（`types-core`）**
 
-  **目标**：为 Provider 配置装载与 Runtime 参数提供类型，落在 `types-core`（内部类型，不参与 API 生成）。
+  **目标**：定义 Provider / Model / Agent 配置的结构与校验，作为 P2-017 装载与 P2-015 解析的类型来源。
   **前置依赖**：P2-005。
-  **涉及文件 / Crate**：`crates/types-core/src/{lib.rs, provider.rs, settings.rs}`。
+  **涉及文件 / Crate**：`crates/types-core/src/config/{mod,provider,agent}.rs`、`crates/types-core/src/lib.rs`。
   **实施步骤**：
-  1. `provider.rs`：`ProviderKind`（P2 只有 `OpenAiCompatible`，其余取值留给后续阶段但**不要提前实现**）、`ProviderConfig { id, kind, base_url, api_key: Secret, default_model }`、`ModelConfig { id, provider_id, context_window, max_output_tokens }`。
-  2. `Secret` 新类型：`Debug` 输出 `***`、不实现 `Serialize`、提供 `expose()` 取原值（调用点显式）。
-  3. `settings.rs`：`AgentSettings`（并发上限、排队超时、LLM idle 超时、心跳间隔、Context 参数）与 `ConfigError`。
-  4. 明确这些类型**不加** `#[auto_type]` / `#[auto_enum]`（不参与 SDK 生成，避免密钥形状进入契约）。
-  **技术要求**：不引入 tokio / rig / sqlx；默认值集中定义且与 `README.md` 的配置表一致。
-  **测试要求**：无；字段与默认值在 P2-017 的装载逻辑与 P2-035 的配置核对中验证。
+  1. `ProviderConfig { id, kind, base_url, api_key: Secret, default_model, models: Vec<ModelConfig> }`、`ModelConfig { id, context_window, max_output_tokens }`。
+  2. `AgentConfig { max_concurrent_runs, run_queue_timeout_ms, llm_idle_timeout_ms, context_max_messages, context_safety_tokens }`，全部有缺省值。
+  3. `Secret(String)`：`Debug` / `Display` 输出 `***`，取值只能 `expose()`。
+  **技术要求**：**不加 `auto_*` 宏**（内部配置类型，不参与 SDK 生成）；不新增接口。
   **验收标准**：
-  - [ ] `cargo tree -p types-core` 无 Agent / Web / DB 依赖。
-  - [ ] `Secret` 的 `Debug` 与 `Display` 均不泄漏原值。
-  - [ ] 默认值与 `README.md` 的配置表逐项一致。
-  **完成产物**：配置类型就绪，供 P2-015 / P2-017 引用。
+  - [ ] 配置类型字段与 `README.md` 的配置面一一对应，缺省值明确。
+  - [ ] `Secret` 的 `Debug` / `Display` 脱敏，且有唯一取值入口。
+  **测试要求**：脱敏与缺省由 P2-017 的用例（`llm.security`）覆盖。
+  **完成产物**：配置类型与 `Secret`。
 
 ---
 
 ## Batch C：SQLite 与 Repository（P2-010 ~ P2-014）
 
-> P2-010 → P2-011 → P2-012 → P2-013 → P2-014 串行。**C 批可与 E 批并行**。
+> 依赖：Batch B。010 → 011 → 012 → 013 → 014 强序。
 
 - [ ] **P2-010 新建 `lib-db`（连接、迁移、事务、错误）**
 
-  **目标**：把 SQLite 基础设施收敛到 `lib-db`，业务侧只见 Pool / 事务 / 迁移。
-  **前置依赖**：P2-002。
-  **涉及文件 / Crate**：新增 `crates/lib-db/`（`Cargo.toml`、`src/{lib.rs, database.rs, error.rs, migrate.rs}`）。
+  **目标**：SQLite 基础设施独立成 Crate，`service-core` 只见 Repository 接口。
+  **前置依赖**：P2-002、P2-008。
+  **涉及文件 / Crate**：新增 `crates/lib-db/`（`src/{lib,config,error,migrate,pool}.rs`）；workspace `Cargo.toml`。
   **实施步骤**：
-  1. 依赖：`lib-core`、`sqlx`（feature 组合由 P2-002 定稿）、`thiserror`。
-  2. `Database::open(path) -> Result<Database>`：创建父目录、建立 Pool、设置 PRAGMA（WAL / busy_timeout / foreign_keys）。
-  3. `Database::migrate()`：`sqlx::migrate!("./migrations")`，幂等；失败返回带迁移版本号的错误。
-  4. `Database::pool()` / `begin()` / `close()`；`DbError` 分类（`Unavailable` / `Busy` / `Constraint` / `Query`），`Display` 不含连接串与 SQL 明文（SQL 只能进 `source`，由调用方决定是否记日志）。
-  5. workspace 成员与 `[workspace.dependencies]` 同步；`docs/workspace.md` §8.1 登记 `lib-db` 已创建。
-  **技术要求**：`lib-db` 不含任何业务表名与业务 SQL；不使用 `sqlx::query!` 宏（`macros` 特性已关闭）。
-  **测试要求**：无单元测试；行为在 P2-014 用例中验证（服务端启动即触发 `open` + `migrate`）。
+  1. `Database::open(path, Config)`：`SqlitePoolOptions`（`max_connections=5`）、`PRAGMA journal_mode=WAL` / `busy_timeout=5000` / `foreign_keys=ON`。
+  2. `migrate()` 执行内嵌迁移（`sqlx::migrate!` 或等价的手写迁移表）。
+  3. 统一错误 `DbError`（打开 / 迁移 / 查询 / 事务），对外只暴露语义。
+  **技术要求**：`lib-db` 不依赖 `types-core` / `service-core` / `agent-*`；不写业务 SQL。
   **验收标准**：
-  - [ ] `cargo build` / `clippy -D warnings` / `fmt --check` 通过。
-  - [ ] `Database` 的公开面只有 open / migrate / pool / begin / close（无泄漏的 `sqlx` 泛型池类型出现在业务签名里）。
-  - [ ] 错误类型不包含连接串与 SQL 明文。
-  **完成产物**：`lib-db` 可用。
+  - [ ] `cargo tree -p lib-db` 只有 `lib-core` + `sqlx` + `tokio`。
+  - [ ] 打开失败 / 迁移失败给出可读错误，退出码非 0（由 P2-013 装配路径验证）。
+  **测试要求**：不新增单元测试；由 `persist.*` 用例覆盖。
+  **完成产物**：`lib-db`。
 
 - [ ] **P2-011 Schema 与迁移脚本**
 
-  **目标**：落地 P2-002 定稿的 schema，保证迁移可重复执行且约束真正生效。
+  **目标**：把 D-P2-002 的草案落成可重复执行的迁移。
   **前置依赖**：P2-010。
-  **涉及文件 / Crate**：`crates/lib-db/migrations/0001_init.sql`。
+  **涉及文件 / Crate**：`crates/lib-db/migrations/0001_init.sql`（及 `lib-db` 内的迁移入口）。
   **实施步骤**：
-  1. 按 P2-002 的表结构写 `0001_init.sql`：三张表、主键、外键、`status` 的 `CHECK` 约束、`messages(session_id, seq)` 唯一约束、索引。
-  2. 时间戳一律 `INTEGER`（Unix 毫秒），id 一律 `TEXT`（雪花 ID 字符串，`lib_core::id::next_id`）。
-  3. 不使用 `AUTOINCREMENT`；不使用 SQLite 的隐式 rowid 作为业务 ID。
-  4. 在 `lib-db` 的 `migrate.rs` 写清「迁移文件只追加，不修改已发布的迁移」。
-  **技术要求**：SQL 保持可读，字段注释用 `--`；一个文件只做一次 schema 变更。
-  **测试要求**：无；重复执行与约束生效在 P2-014 验证。
+  1. `sessions(id PK, title, model, created_at_ms, updated_at_ms)`。
+  2. `messages(id PK, session_id FK, run_id NULL, role, content, model NULL, input_tokens NULL, output_tokens NULL, seq, created_at_ms, UNIQUE(session_id, seq))` + 索引 `(session_id, seq)`。
+  3. `runs(id PK, session_id FK, status, model, error NULL, input_tokens NULL, output_tokens NULL, created_at_ms, updated_at_ms, finished_at_ms NULL)` + 索引 `(session_id, created_at_ms)` / `(status)`。
+  4. 迁移幂等：重复执行不报错、不改数据。
   **验收标准**：
-  - [ ] 迁移文件覆盖全部字段且与 `agent-core` 类型一一对应（逐个字段核对记录）。
-  - [ ] 外键与唯一约束显式声明。
-  - [ ] 索引覆盖 `messages(session_id, seq)`、`runs(status)`、`runs(session_id, created_at_ms)`。
-  **完成产物**：`0001_init.sql`。
+  - [ ] 约束（PK / FK / UNIQUE / 必要 CHECK）齐全，启动日志无约束错误。
+  - [ ] 连续两次启动同一 data 目录不报错（P2-014 用例）。
+  **测试要求**：`persist.migration`（P2-014）。
+  **完成产物**：迁移脚本。
 
 - [ ] **P2-012 Session / Message / Run Repository**
 
-  **目标**：把 P1 内存 `Store` 的全部数据访问改写成 Repository，并把「终态唯一提交」下沉为条件更新。
-  **前置依赖**：P2-011、P2-007。
-  **涉及文件 / Crate**：`crates/service-core/src/repository/`（`mod.rs` + 按聚合拆分）、`crates/service-core/Cargo.toml`。
+  **目标**：`service-core` 的 `repository` 层落地，承载全部 SQL 与行映射。
+  **前置依赖**：P2-011、P2-006。
+  **涉及文件 / Crate**：`crates/service-core/src/repository/{mod,session,message,run}.rs`；`crates/service-core/Cargo.toml`（新增 `lib-db`、`agent-core`）。
   **实施步骤**：
-  1. 组织：`repository/session.rs`、`repository/message.rs`、`repository/run.rs`，`repository/mod.rs` 汇成 `Repository { db: Arc<Database> }`。
-  2. Session：`create`、`get`、`list`（按 `updated_at_ms` 倒序，消息数用 `COUNT` 子查询）。
-  3. Message：`append(tx, message)`（分配 `seq` = 当前会话 `MAX(seq)+1`）、`list(session_id)`（按 `seq` 升序）。
-  4. Run：`insert(tx, run)`、`get`、`transition(run_id, expect: &[RunStatus], next, error, usage, now) -> bool`（`UPDATE ... WHERE id=? AND status IN (...)`，返回受影响行数）、`count_active()`、`heal_orphans(now)`（`RUNNING → FAILED`、`QUEUED → CANCELLED`）。
-  5. `complete_run` 走单事务：插入助手消息 + `UPDATE runs SET status='COMPLETED' ...` + 更新 `sessions.updated_at_ms`，任一步失败整体回滚。
-  6. 错误映射：`DbError → SessionError::Internal`，SQL 与连接信息只进 `source`（日志），对外固定文案。
-  **技术要求**：Repository 只被本 Crate 的 Service 调用；Service 层不出现 SQL 字符串；`seq` 分配必须与插入在同一事务，避免顺序空洞或重复。
-  **测试要求**：无单元测试；由 P2-014 / P2-031 / P2-032 用例覆盖。
+  1. Session：create / list（含 `COUNT(*)` 消息数）/ get / touch。
+  2. Message：insert（`seq = COALESCE(MAX(seq),0)+1`，同事务）/ list。
+  3. Run：create（`QUEUED`）/ start（`WHERE status='QUEUED'`）/ complete（事务内插助手消息 + `WHERE status='RUNNING'`）/ fail / cancel / get / `heal_orphans`。
+  4. 事务边界：`message_create`、完成收尾、失败、取消各自一个事务。
+  **技术要求**：SQL 只出现在 `repository`；Service 不拼 SQL；条件更新影响 0 行返回「已终态」而非错误。
   **验收标准**：
-  - [ ] `Store` 的能力全部有对应 Repository 方法，无遗漏（逐个方法核对）。
-  - [ ] 终态更新一律是条件更新，影响 0 行时返回"已终态"而非报错。
-  - [ ] 助手消息与 `COMPLETED` 在同一事务内。
-  - [ ] Service 层无 SQL 字面量（静态检索为证）。
-  **完成产物**：Repository 就绪。
+  - [ ] 全部读写有 Repository 方法，无裸 SQL 出现在 Service / Handler。
+  - [ ] 终态写入全部为条件更新。
+  **测试要求**：由 P2-014 与 P2-026 的用例覆盖。
+  **完成产物**：Repository 层。
 
-- [ ] **P2-013 用 Repository 替换内存 Store 并改为显式注入**
+- [ ] **P2-013 用 Repository 替换内存 Store、删除 `holder`、改为显式注入**
 
-  **目标**：`service-core` 变成「Service + Repository」，删除内存 Mock 存储；进程级单例改为启动期显式注入。
+  **目标**：`service-core` 变成「Service + Repository」，进程级单例改为启动期显式注入；`RuntimeState` 持有 `SessionService`。
   **前置依赖**：P2-012。
-  **涉及文件 / Crate**：`crates/service-core/src/session/{mod.rs, service.rs, error.rs}`、删除 `store.rs` 与 `holder/`；新增 `crates/lib-web/src/holder.rs`；`crates/lib-web/src/session/api.rs`、`crates/lib-web/src/probe/api.rs`；`crates/lib-bin-web/src/{lib.rs, server.rs}` 与 `Cargo.toml`。
+  **涉及文件 / Crate**：`crates/service-core/src/session/{mod,service,error}.rs`（删除 `store.rs`）；删除 `crates/service-core/src/holder/`；`crates/service-core/src/runtime/{mod,registry,session}.rs`；新增 `crates/lib-web/src/holder.rs`；`crates/lib-web/src/{session/api.rs,runtime/*.rs,probe/api.rs}`；`crates/lib-bin-web/src/{lib,server}.rs` 与 `Cargo.toml`。
   **实施步骤**：
-  1. `SessionService::new(Arc<Repository>)`；方法签名与返回类型保持不变（`SessionError` 语义不变）。
-  2. `subscribe_run` 暂时仍返回 Mock 事件流（真实执行在 P2-026 接入），只把存储换成 Repository，保证本任务后服务可跑通 P1 行为。
-  3. 删除 `service-core/src/holder/`；在 `lib-web` 新增 `holder`：`OnceLock<Arc<SessionService>>` + `install(service) -> Result<()>` + `session() -> Result<&Arc<SessionService>>` + `try_session()`。
-  4. `lib-bin-web::serve` 装配：`lib_core::directorys()` → `lib_db::Database::open(<data>/agent.db)` → `migrate()` → `heal_orphans()` → `Repository` → `SessionService` → `lib_web::holder::install(...)` → 启动服务；任一步失败给可读错误 + 退出码 1。
+  1. `SessionService::new(Arc<Repository>)`；方法签名与 `SessionError` 语义不变。
+  2. 删除 `service-core::holder`；`service-core` 内对 `SessionService` 的访问改为「构造时注入」——`RuntimeState` 增加 `session: Arc<SessionService>`（`RuntimeState::new(session)`），执行队列与占用校验用它。
+  3. `lib-web` 新增显式 holder：`OnceLock<AppState { session: Arc<SessionService>, runtime: RuntimeState }>` + `install(...)` + 访问器；Handler 改用它。
+  4. `lib-bin-web::serve` 装配：`directorys()` → `Database::open(<data>/agent.db)` → `migrate()` → `heal_orphans()` → `Repository` → `SessionService` → `RuntimeState` → `runtime::install` → 服务；任一步失败给可读错误 + 退出码 1。
   5. `probe_health` 在未安装时返回 `runningRunCount = 0`（`lib-web/examples/api_probe_server.rs` 必须仍可独立启动）。
-  6. `lib-bin-web` 的 `Cargo.toml` 增加 `lib-db`、`service-core`（`agent-runtime` 在 P2-026 加）。
   **技术要求**：Handler 的签名与 path 不变；`lib-web` 不写业务规则；`service-core` 不反向依赖 `lib-web`。
-  **测试要求**：`make test ARGS="session"` 与 `make test ARGS="web"` 必须全绿（行为与 P1 一致）。
   **验收标准**：
-  - [ ] 服务可从零启动并创建/写入/读取会话数据，数据落在 `<AGENT_HOME>/data/agent.db`。
-  - [ ] 进程内不再有 `Mutex<HashMap>` 存储与进程级 `LazyLock` 单例。
+  - [ ] 服务可从零启动并创建 / 写入 / 读取会话数据，数据落在 `<AGENT_HOME>/data/agent.db`。
+  - [ ] 进程内不再有 `Mutex<HashMap>` 会话存储与 `service-core::holder`。
   - [ ] `cargo run -p lib-web --example api_probe_server` 可启动，`probe/health` 返回 200。
-  - [ ] P1 的 `session.*` / `web.*` 用例全部通过。
-  **完成产物**：持久化存储接入，注入链路成形。
+  - [ ] P1.1 的 `runtime.*` / `session.*` / `web.*` 用例全部通过（Mock 行为仍在）。
+  **测试要求**：`make test ARGS="runtime"`、`make test ARGS="session"`、`make test ARGS="web"` 全绿。
+  **完成产物**：持久化存储接入、注入链路成形。
 
 - [ ] **P2-014 持久化、重启恢复与状态自愈用例**
 
-  **目标**：用端到端用例证明「重启不丢数据、迁移可重复、残留状态被自愈」。
+  **目标**：用端到端用例证明「重启不丢数据、迁移可重复、残留状态被自愈、占用不恢复」。
   **前置依赖**：P2-013。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/persist.rs`（新增领域）、`crates/bin-tests/src/cases/mod.rs`、`crates/bin-tests/src/server.rs`（如需要「同 data 目录重启」辅助）。
+  **涉及文件 / Crate**：`crates/bin-tests/src/cases/persist.rs`（新增领域）、`cases/mod.rs`、`server.rs`（同 data 目录重启辅助）。
   **实施步骤**：
-  1. `persist.session`（Isolated）：创建会话 + 发消息 → 停止服务端 → 用同一 `AGENT_HOME` 重启 → `session/list`、`message/list` 内容与顺序一致。
-  2. `persist.migration`（Isolated）：同一 data 目录连续启动两次，第二次启动不报错且数据保留。
-  3. `persist.queued_heal`（Isolated）：发消息得到 `QUEUED` Run → 不订阅直接重启 → 重启后该 Run 为 `CANCELLED` 且 `finishedAtMs` 有值。
-  4. 用例只通过生成的 SDK 访问；重启复用同一端口（`free_port` 后再绑定同一端口），不使用共享服务端。
-  **技术要求**：`RUNNING` 残留自愈由 P2-034 覆盖，本任务不越界；用例失败信息必须包含实际状态与会话/消息条数。
-  **测试要求**：本任务的三条用例即验证手段。
+  1. `persist.session`：建会话 + 发消息（占用后跑完）→ 停止服务端 → 同 `AGENT_HOME` 重启 → 会话与消息内容、顺序一致。
+  2. `persist.migration`：同一 data 目录连续启动两次，第二次不报错且数据保留。
+  3. `persist.queued_heal`：发消息得到 `QUEUED` Run（不占用）→ 重启 → 该 Run 为 `CANCELLED` 且 `finishedAtMs` 有值。
+  4. `persist.occupancy_reset`：重启后 `occupancy/get` 返回 404 `会话未被占用`，重新注册 + 重新占用后同一会话可继续发消息。
+  **技术要求**：用例只通过生成的 SDK；重启复用同一端口；失败信息含实际状态与条数。
   **验收标准**：
   - [ ] `make test ARGS="persist"` 全部通过，报告写入 `target/tests/<运行 ID>/persist.md`。
-  - [ ] 重启后消息顺序稳定（断言 `seq` 顺序与内容一一对应）。
-  - [ ] 迁移重复执行不产生错误日志。
+  - [ ] 消息顺序稳定（`seq` 与内容一一对应）。
+  - [ ] 迁移重复执行无错误日志。
   **完成产物**：`persist.*` 用例。
 
 ---
 
 ## Batch D：Provider 与 Rig Adapter（P2-015 ~ P2-018）
 
-> P2-015 → P2-016；P2-017 依赖 P2-009 + P2-015；**P2-018 可与 P2-015/016 并行**（只依赖 P2-005 的配置面结论）。
+> 依赖：P2-005、P2-009。015 → 016；017 依赖 009 + 015；**018 可与 015 / 016 并行**。
 
 - [ ] **P2-015 新建 `agent-route`：`LlmProvider` 抽象与 Provider / Model 解析**
 
-  **目标**：定义项目自己的 LLM 调用抽象，Rig 只作为其后的实现细节。
-  **前置依赖**：P2-009、P2-001。
-  **涉及文件 / Crate**：新增 `crates/agent-route/`（`src/{lib.rs, provider.rs, request.rs, error.rs, resolver.rs}`）。
+  **目标**：把「用哪个模型、怎么调」从 Runtime 中隔离出来，Rig 类型不外泄。
+  **前置依赖**：P2-009。
+  **涉及文件 / Crate**：新增 `crates/agent-route/`（`src/{lib,provider,model,error,rig/}`）。
   **实施步骤**：
-  1. `LlmRequest { model, system: Option<String>, messages: Vec<LlmMessage>, max_output_tokens: Option<u64>, temperature: Option<f32> }`、`LlmMessage { role: LlmRole, content: String }`（`LlmRole` 只含 `User` / `Assistant`）。
-  2. `LlmStreamEvent { Delta(String), Usage(TokenUsage), Done }`；`LlmStream = Pin<Box<dyn Stream<Item = Result<LlmStreamEvent, LlmError>> + Send + 'static>>`。
-  3. `#[async_trait] pub trait LlmProvider: Send + Sync { async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError>; }`。
-  4. `LlmError` 分类：`Config` / `Auth` / `RateLimited` / `Timeout` / `Stalled` / `Upstream` / `Decode` / `Cancelled`；`LlmError::public_message() -> &'static str` 给对外文案。
-  5. `ProviderResolver`：由 `AgentSettings` + model id 解析出 `(ProviderConfig, ModelConfig)`；未知 model 返回 `LlmError::Config` 并携带可读信息（Service 层转 400）。
-  6. 本任务**不引入 rig 依赖**（保证抽象先定、实现后接）。
-  **技术要求**：`agent-route` 不依赖 `agent-runtime` / `agent-context*` / `lib-web*`；不出现数据库类型。
-  **测试要求**：无单元测试；行为由 P2-016 与 P2-028 覆盖。
+  1. 抽象：`LlmProvider` trait（`stream(request) -> LlmStream`）、`LlmRequest { model, messages, max_output_tokens }`、`LlmStreamEvent { Delta, Usage, Done }`、`LlmError`（含 `public_message()`）。
+  2. Provider / Model 解析：按配置解析 `default_model` 与 `[[provider.models]]`；未知模型 → `LlmError::UnknownModel(id)`（由调用方映射 400 `模型不可用：<id>`）。
+  3. `rig` 子目录之外不得出现 `rig_core` 类型（连编译期类型引用也不允许）。
+  **技术要求**：`agent-route` 只依赖 `agent-core`、`types-core`、`lib-core`、`rig-core`；不依赖 `agent-runtime` / `service-core` / `lib-web*`。
   **验收标准**：
-  - [ ] `cargo tree -p agent-route` 中无 `rig`（本任务结束时）。
-  - [ ] 抽象里没有任何第三方 LLM 类型。
-  - [ ] `LlmError::public_message()` 对每类错误都有不含内部细节的文案。
-  **完成产物**：抽象层就绪。
+  - [ ] `cargo tree -i rig-core` 只命中 `agent-route`。
+  - [ ] 抽象类型可被 `agent-runtime` 使用而不引入 Rig 依赖。
+  **测试要求**：由 P2-016 / P2-018 的 `llm.*` 用例覆盖。
+  **完成产物**：`agent-route` 抽象层。
 
 - [ ] **P2-016 Rig Adapter：OpenAI 兼容 + 流式 + Usage + 错误映射**
 
-  **目标**：用 `rig-core` 实现 `LlmProvider`，把 Rig 类型完全关在本模块内。
+  **目标**：实现 `LlmProvider`，把 `rig-core` 的流式与错误映射成项目自有类型。
   **前置依赖**：P2-015、P2-001。
-  **涉及文件 / Crate**：`crates/agent-route/src/rig/{mod.rs, openai.rs}`、`crates/agent-route/Cargo.toml`、`Cargo.toml`（workspace 依赖）。可选 `crates/agent-route/src/http.rs`（idle 超时包装）。
+  **涉及文件 / Crate**：`crates/agent-route/src/rig/{mod,openai,stream,error}.rs`。
   **实施步骤**：
-  1. workspace 增加 `rig-core = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }`。
-  2. `RigProvider::new(ProviderConfig, ModelConfig)`：`OpenAIConfig::new(api_key).with_base_url(base_url).with_route(Route::Chat).client()` → `OpenAI`；按 model id 取 `Chat` 模型。
-  3. 请求映射：`LlmRequest.system` → `CompletionRequest::preamble`；`messages` → `Message::user/assistant`；`max_output_tokens` → `max_tokens`；`temperature` 透传。
-  4. 流映射：`model.stream(request)` 的 `Item<StreamEvent>` 文本增量 → `Delta`；`Streamed::finish()` 的 `usage` → `Usage`；结束补 `Done`。
-  5. 错误映射：`ProviderError::InvalidAuthentication → Auth`、`ProviderResponse` 按状态码分 `RateLimited`（429）/ `Upstream`（5xx）/ `Auth`（401/403）、`Http → Timeout|Upstream`、`Stalled → Stalled`、`Truncated → Upstream`、`Json → Decode`。
-  6. idle 超时：逐 chunk `tokio::time::timeout(llm_idle_timeout)`，到点返回 `LlmError::Stalled` 并 drop 流。
-  7. **实测并回填**（P2-001 列出的待实测项）：drop 流后连接是否被关闭、usage 是否在流尾给出、`Stalled` 默认阈值行为；结论写回 `decisions.md`。
-  **技术要求**：`rig` 只出现在 `agent-route/src/rig/` 下（可在 P2-035 用静态检索断言）；base_url 与 key 不出现在错误消息里；禁止使用 `rig_agent`。
-  **测试要求**：无单元测试；由 P2-018 的 Mock Server + P2-028 用例覆盖正常/401/500/超时/断连/非法 JSON。
+  1. 构造：`OpenAIConfig` + `with_base_url` + `Route::Chat`；`api_key` 只从 `Secret` 取值。
+  2. 流式：把 `Streamed<Completion>` 映射为 `LlmStreamEvent`；usage 缺失时不构造假值。
+  3. 错误映射：`ProviderError` → `LlmError`（认证 / 上游 / 网络 / 截断 / 解析 / 空闲超时），`public_message()` 固定脱敏文案。
+  4. 中断：取消时 drop 流；按 O-1 的实测结论记录连接是否随之关闭。
   **验收标准**：
-  - [ ] `agent-route` 之外的 crate 依赖树中无 `rig-core`（`cargo tree -i rig-core` 为证据）。
-  - [ ] 五类错误（鉴权 / 限流 / 上游 5xx / 超时 / 解码）都能映射到稳定的 `LlmError` 分类。
-  - [ ] 待实测项已回填结论，未确认的仍标 `OPEN`。
-  **完成产物**：真实 LLM 调用能力。
+  - [ ] 流式增量拼接等于完整回复（由 P2-026 用例断言）。
+  - [ ] 认证失败 / 上游 5xx / 非法 JSON / 中途断连各有 `LlmError` 变体，文案不含内部细节。
+  **测试要求**：`llm.stream` / `llm.auth_error` / `llm.upstream_error` / `llm.invalid_json`（P2-018 提供 Mock 能力，P2-026 组装断言）。
+  **完成产物**：Rig Adapter。
 
 - [ ] **P2-017 Provider 配置装载与密钥安全**
 
-  **目标**：从 `config.toml` + 环境变量装载 Provider / Model / Agent 参数，并保证密钥不泄漏。
-  **前置依赖**：P2-009、P2-015。
-  **涉及文件 / Crate**：`crates/service-core/src/provider/{mod.rs, config.rs, error.rs}`、`crates/service-core/Cargo.toml`（`toml`）、`crates/lib-bin-cli/src/config.rs`（只读复用装载约定，不复制逻辑）。
+  **目标**：把配置装载进 `service-core` 的只读 `provider` 服务，并保证密钥不泄漏。
+  **前置依赖**：P2-009、P2-015、P2-013。
+  **涉及文件 / Crate**：`crates/lib-bin-cli/src/config.rs`（新增 `[provider]` / `[[provider.models]]` / `[agent]` 段与模块文档示例）、`crates/service-core/src/provider/{mod,service}.rs`、`crates/lib-bin-web/src/server.rs`。
   **实施步骤**：
-  1. 配置结构：`[provider]` 与 `[[provider.models]]`、`[agent]`，字段与 `README.md` 的配置表一致；未出现时取默认值。
-  2. 装载优先级：环境变量 > `config.toml` > 默认值（与 P1 D-012 的方向一致；命令行不参与 Provider 配置）。
-  3. 校验：`base_url` 必须是 `http(s)://`；`default_model` 必须能在 `models` 中找到；`api_key` 为空时**启动成功但 `/api/probe/health` 保持 200**，首次调用返回可读的 `Provider 未配置` 失败（Run `FAILED`，不是 500）。
-  4. 对外暴露只读 `AgentSettings`；`api_key` 只在 `agent-route` 构造 Provider 时 `expose()` 一次。
-  5. 脱敏：`Secret` 的 `Debug`/`Display` 都是 `***`；日志里只允许 provider id 与 base_url 的 host。
-  6. 未知模型（`session/create` 或 `message/create` 传入未配置的 model）→ 400 `模型不可用：<id>`，由 `service-core` 判定、`lib-web` 映射（沿用 `SessionError::Invalid`）。
-  7. 记录配置文件权限提示（Windows 上无 POSIX 权限，文案只提示「配置含密钥，勿提交」）。
-  **技术要求**：不新增 HTTP 接口；不做热更新（改配置需重启）；`service-core` 不直接依赖 `rig`。
-  **测试要求**：密钥相关的检索断言（日志 / 响应体）由 P2-028、P2-035 覆盖。
+  1. 配置解析与校验：`kind` 只支持 `openai-compatible`；`default_model` 必须出现在 `models` 中；数值项校验范围。
+  2. 环境变量覆盖（清单见 `README.md`）；环境变量优先于文件。
+  3. `ProviderService` 只读：装载一次、提供 `provider()` / `model(id)`；未知模型返回 `UnknownModel`。
+  4. 脱敏：`Secret` 的 `Debug` / `Display`；错误只带 provider id 与 base_url 的 host；日志不打印请求头。
   **验收标准**：
-  - [ ] 环境变量覆盖生效（用例以 env 注入 mock server 地址）。
-  - [ ] `api_key` 不出现在任何 `Debug` 输出、日志、响应体（可检索断言）。
-  - [ ] 未知模型返回 400 且文案含模型 id。
-  - [ ] 缺 `api_key` 时错误可读，Run 落 `FAILED`。
-  **完成产物**：Provider 配置装载完成。
+  - [ ] 缺省配置可启动（`api_key` 为空时 `chat` 调用失败但不 panic，错误可读）。
+  - [ ] 未知模型 → 400 `模型不可用：<id>`（用例 `session.error` 扩展）。
+  - [ ] 密钥不出现在日志、响应、`Debug` 输出中。
+  **测试要求**：`llm.config`（环境变量覆盖与缺省值）、`llm.security`（canary 检索）。
+  **完成产物**：Provider 配置服务。
 
 - [ ] **P2-018 `bin-tests` 内置 OpenAI 兼容 Mock Server**
 
-  **目标**：让全部 P2 用例不依赖真实付费 API 就能验证真实 HTTP + SSE 行为。
-  **前置依赖**：P2-005（配置面）、P2-002（无强依赖，可早做）。
-  **涉及文件 / Crate**：`crates/bin-tests/src/mock_llm/`（`mod.rs`、`http.rs`、`scenario.rs`）、`crates/bin-tests/src/cases/mockllm.rs`、`crates/bin-tests/src/server.rs`（支持注入额外环境变量）、`crates/bin-tests/Cargo.toml`。
+  **目标**：让 P2 的用例不依赖付费 API，且能精确构造异常场景。
+  **前置依赖**：P2-005。
+  **涉及文件 / Crate**：`crates/bin-tests/src/cases/llm/`（Mock Server 与用例注册）、`crates/bin-tests/src/server.rs`（如需要启动辅助）。
   **实施步骤**：
-  1. 用 `tokio::net::TcpListener` 手写最小 HTTP/1.1（不引入 Web 框架；`bin-tests` 不得依赖 `lib-web` / `service-core`）。
-  2. 端点：`POST /v1/chat/completions`（`stream: true` 走 SSE，`false` 走 JSON）、`GET /v1/models`、`GET /mock/last-request`（把最近一次请求体回吐，供用例断言 Context 组装结果）、`GET /mock/stats`（连接数、被关闭连接数，供取消用例断言）。
-  3. 场景由请求里的 `model` 字段选择：`ok` / `auth_error`（401）/ `server_error`（500）/ `slow`（首帧前静默 N ms，供心跳用例）/ `stall`（中途静默，供超时用例）/ `truncate`（中途断连）/ `invalid_json`。
-  4. `Server::start` 支持传入额外环境变量（`AGENT_PROVIDER_BASE_URL` 等），使被测服务端指向 mock server；mock server 端口动态申请。
-  5. 自检用例 `mockllm.protocol`：断言 JSON 响应、SSE 分帧（`data:` 行 + 空行）、401、500、`slow` 的时序、`truncate` 的断连、`last-request` 回吐。
-  **技术要求**：mock server 在测试进程内以 tokio 任务运行，随运行结束退出；不写入 `packages/` / 仓库任何持久文件；不得成为产品代码依赖。
-  **测试要求**：`make test ARGS="mockllm"` 通过。
+  1. 手写最小 HTTP/1.1 服务（`tokio::net::TcpListener`，不引入 Web 框架）：`POST /v1/chat/completions`（JSON 与 SSE 两种响应）、`GET /v1/models`、`GET /mock/last-request`、`GET /mock/stats`。
+  2. 场景开关（按 prompt 关键字或路径参数）：正常、认证失败、上游 5xx、非法 JSON、中途断连、静默 stall、慢速分块。
+  3. 记录请求体与连接关闭计数，供「增量拼接」「取消真正断连」类断言使用。
+  **技术要求**：不创建 `bin-mock-server`；不引入 `lib-web` / `service-core` 作为 Mock 实现依赖（`bin-tests` 的 `service-core` 依赖只用于进程内驱动运行时内核）。
   **验收标准**：
-  - [ ] `mockllm.protocol` 六种场景断言通过。
-  - [ ] `cargo tree -p bin-tests` 中不出现 `lib-web` / `service-core` / `agent-runtime`。
-  - [ ] 被测服务端可通过环境变量指向 mock server 并完成一次真实调用（在 P2-026 后由 `chat.*` 用例体现）。
-  **完成产物**：可复用的 LLM Mock 基础设施。
+  - [ ] 七种场景可被用例按需选择，SSE 分块间隔可控。
+  - [ ] `/mock/last-request` 能返回完整的 messages 数组（供 Context 断言）。
+  **测试要求**：`llm.mock`（自身可用性）。
+  **完成产物**：Mock LLM Server。
 
 ---
 
 ## Batch E：Context 管理（P2-019 ~ P2-021）
 
-> P2-019 → P2-020 → P2-021 串行。**E 批可与 C 批并行**。
+> 依赖：P2-003、P2-007。019 → 020 → 021。
 
 - [ ] **P2-019 新建 `agent-context-core`**
 
-  **目标**：定义 Context 的稳定抽象，供 P2 的 `agent-context` 与 P3 之后的 Tool / Skill / MCP 共同遵循。
-  **前置依赖**：P2-006。
-  **涉及文件 / Crate**：新增 `crates/agent-context-core/`（`src/{lib.rs, item.rs, context.rs, policy.rs, error.rs}`）。
+  **目标**：定义 Context 的稳定抽象，供 P3 的 Tool / Skill / MCP 贡献内容。
+  **前置依赖**：P2-007。
+  **涉及文件 / Crate**：新增 `crates/agent-context-core/`（`src/{lib,context,item,source,policy,error}.rs`）。
   **实施步骤**：
-  1. `ContextItem { source: ContextSource, role: Option<MessageRole>, text: String, metadata: ContextMetadata }`。
-  2. `ContextSource { System, History, User, Tool, Skill, Memory }`（P2 只用前三个，其余取值留给后续阶段，**不实现具体能力**）。
-  3. `Context { items: Vec<ContextItem> }` + 只读访问器与顺序保证说明。
-  4. `ContextPolicy { max_messages, token_budget, safety_tokens }`、`ContextError { Overflow, Empty }`。
-  5. `ContextContribution` trait（贡献点占位，P2 不实现提供方）。
-  **技术要求**：不依赖 rig / axum / sqlx / tokio / `agent-context` / `agent-runtime`；纯数据与同步代码。
-  **测试要求**：无单元测试；由 P2-020 / P2-031 覆盖。
+  1. `Context`（有序 Item 集合 + metadata）、`ContextItem { role, content, source }`、`ContextSource`（System / History / User）。
+  2. `ContextPolicy`（预算、最大消息数、safety tokens）、`TokenEstimator` trait 的抽象位置。
+  3. 纯数据结构与纯函数，`async fn` 一律不出现。
   **验收标准**：
   - [ ] `cargo tree -p agent-context-core` 只有 `agent-core` + `lib-core`。
-  - [ ] 不出现 async 函数。
-  - [ ] `ContextSource` 的后续取值未引入任何实现代码。
-  **完成产物**：Context 抽象层。
+  - [ ] 无 IO、无 async、无框架依赖。
+  **测试要求**：由 P2-021 覆盖。
+  **完成产物**：Context 抽象。
 
-- [ ] **P2-020 新建 `agent-context`：Context Builder**
+- [ ] **P2-020 新建 `agent-context`：Context Builder 与裁剪**
 
-  **目标**：从 System Prompt + 会话历史 + 当前用户消息组装 Context，顺序与角色映射正确。
-  **前置依赖**：P2-019。
-  **涉及文件 / Crate**：新增 `crates/agent-context/`（`src/{lib.rs, builder.rs, history.rs, prompt.rs, error.rs}`）。
+  **目标**：把「System Prompt + 历史 + 本次输入」组装成一次请求的 messages，并按预算裁剪。
+  **前置依赖**：P2-019、P2-012（历史读取）。
+  **涉及文件 / Crate**：新增 `crates/agent-context/`（`src/{lib,builder,estimate,trim}.rs`）。
   **实施步骤**：
-  1. `ContextBuilder::new(policy, estimator)`，`build(BuildInput { system: Option<String>, history: &[Message], current: &Message }) -> Result<Context, ContextError>`。
-  2. 组装顺序固定：`System` → `History`（按 `seq` 升序）→ `User`（当前消息，必须在最后）。
-  3. 角色映射：`MessageRole::User → User`、`Assistant → Assistant`、`System → System`；`Tool` 在 P2 直接过滤（不报错）。
-  4. `prompt.rs`：默认 System Prompt 常量（说明「你是 lingting agent 的助手」等最小内容），允许配置覆盖（配置项在 P2-017 的 `[agent]` 中预留 `system_prompt`）。
-  5. Builder **不读数据库**：历史由调用方传入。
-  **技术要求**：不依赖 `agent-runtime` / `agent-route` / `lib-web*`；不发起 IO。
-  **测试要求**：无单元测试；顺序断言由 P2-031 的 `chat.multiturn`（读 mock 的 `last-request`）覆盖。
+  1. `ContextBuilder::build(session, history, prompt, policy, model)` → `Context`。
+  2. 顺序：System Prompt（最前）→ 历史（按 `seq` 升序）→ 本次用户消息（最后）；角色映射 `USER` / `ASSISTANT`（跳过 `SYSTEM` / `TOOL` 的历史消息）。
+  3. 裁剪：按 `context_max_messages` 截断最旧 → 逐条丢弃直到估算不超预算；系统提示与最新用户消息不裁；被裁条数写进 metadata（只进日志）。
+  4. `HeuristicEstimator` 实现 `TokenEstimator`；构造点唯一。
   **验收标准**：
-  - [ ] 组装顺序可在代码里一眼读出（三个阶段顺序固定，无隐式插入）。
-  - [ ] 历史严格按 `seq` 升序，不依赖调用方的顺序。
-  - [ ] `ContextError` 对空历史（只有当前消息）不报错。
-  **完成产物**：Context 组装实现。
+  - [ ] 顺序、角色映射、裁剪顺序与 D-P2-012 / D-P2-013 一致。
+  - [ ] 最新用户消息单条超预算时返回明确错误（由调用方落 `FAILED`）。
+  **测试要求**：`chat.truncate`（P2-021）。
+  **完成产物**：Context Builder。
 
-- [ ] **P2-021 Token 预算与历史裁剪**
+- [ ] **P2-021 Context 用例与可替换性核对**
 
-  **目标**：按 P2-003 的算法实现预算计算与裁剪，并把预算注入点做成可替换。
-  **前置依赖**：P2-020、P2-003。
-  **涉及文件 / Crate**：`crates/agent-context/src/{estimator.rs, budget.rs}`、`crates/agent-context-core/src/policy.rs`。
+  **目标**：证明「历史按序进入请求、系统提示在最前、超预算被裁剪、最新消息保留、估算器可替换」。
+  **前置依赖**：P2-020、P2-018。
+  **涉及文件 / Crate**：`crates/bin-tests/src/cases/chat.rs`（新增 `chat.context` / `chat.truncate`）。
   **实施步骤**：
-  1. `TokenEstimator` trait（`fn estimate(&self, text: &str) -> usize`）+ `HeuristicEstimator`（ASCII 4 字符 ≈ 1 token，非 ASCII 1 字符 ≈ 1 token，每条消息 +4）。
-  2. `ContextBudget { context_window, max_output_tokens, safety_tokens }` → `available()`；调用方从 `ModelConfig` 构造。
-  3. 裁剪：先按 `max_messages` 截断最旧消息，再逐条丢弃最旧历史直到 `estimate(context) <= available()`；系统提示与最新用户消息永不被裁。
-  4. 超限：最新用户消息单条超预算 → `ContextError::Overflow`，由 Runtime 转成 Run `FAILED`（P2-023）。
-  5. 参数全部来自 `ContextPolicy` / `ContextBudget`，代码中不出现魔法数字（固定开销 4 与公式常量集中定义）。
-  **技术要求**：裁剪过程不修改入参 `history`；返回的 `Context` 明确记录被裁掉的消息数（metadata），供日志使用。
-  **测试要求**：无单元测试；P2-031 的 `chat.truncate` 覆盖。
+  1. `chat.context`：三轮对话，断言 `/mock/last-request` 的 messages 顺序、首条 system、末条为本次输入。
+  2. `chat.truncate`：把 `AGENT_CONTEXT_MAX_MESSAGES` 压到 2、`AGENT_CONTEXT_SAFETY_TOKENS` 调大，断言请求体只含被保留的消息且包含本次输入。
+  3. 源码核对：`TokenEstimator` 为 trait，构造点唯一。
   **验收标准**：
-  - [ ] 算法与 D-P2-012 / D-P2-013 完全一致。
-  - [ ] 系统提示与最新用户消息在任何配置下都保留（代码路径可读 + 用例）。
-  - [ ] 估算器可通过构造参数替换（trait object 或泛型均可，但调用点只有一处）。
-  **完成产物**：预算与裁剪能力。
+  - [ ] 两条用例通过，报告落 `target/tests/<运行 ID>/chat.md`。
+  - [ ] 裁剪行为有可复现的配置组合。
+  **完成产物**：`chat.*` 用例（Context 部分）。
 
 ---
 
-## Batch F：Agent Runtime（P2-022 ~ P2-026）
+## Batch F：Agent Runtime 接入（P2-022 ~ P2-026）
 
-> P2-022 → P2-023 → {P2-024, P2-025} → P2-026。P2-024 与 P2-025 可并行（都改 `agent-runtime`，需协调同一批文件）。
+> 依赖：Batch C + Batch D + Batch E。022 → 023 → 024；025 在 022 之后可并行；026 依赖 023 ~ 025。
 
-- [ ] **P2-022 新建 `agent-runtime`：Run 注册表、并发闸门与 Session 租约**
+- [ ] **P2-022 新建 `agent-runtime`：Agent Loop（单轮）与执行端口实现**
 
-  **目标**：建立 Runtime 骨架与调度约束，保证「一个 Run 一个生产方」「同 Session 串行」「全局并发有上限」。
-  **前置依赖**：P2-007、P2-004。
-  **涉及文件 / Crate**：新增 `crates/agent-runtime/`（`src/{lib.rs, runtime.rs, registry.rs, scheduler.rs, error.rs}`），`RunEventStream` 迁入（见 D-P2-019）。
+  **目标**：实现 `service-core` 定义的执行端口：取出 Run → 组装 Context → 调 LLM → 流式产出事件 → 收尾（落库 + 终态事件）。
+  **前置依赖**：P2-004、P2-016、P2-020、P2-012。
+  **涉及文件 / Crate**：新增 `crates/agent-runtime/`（`src/{lib,loop_,port,registry,error}.rs`）；`crates/service-core/src/session/{driver.rs}`（端口 trait）。
   **实施步骤**：
-  1. `RunEventStream` 从 `crates/service-core/src/session/stream.rs` 迁入 `agent-runtime/src/event/stream.rs`（对外形态保持 `recv()` 不变）。
-  2. `RunRegistry { active: Mutex<HashMap<String, RunHandle>> }`，`RunHandle { cancel: CancellationToken, session_id, started_at_ms }`；`insert_once(run_id)` 原子占位，重复返回 `RuntimeError::AlreadySubscribed`。
-  3. `SessionLeases`：`DashMap<String, Arc<tokio::sync::Mutex<()>>>`（公平等待 → FIFO）；获取顺序固定「先 Session 租约，后全局 `Semaphore`」。
-  4. `AgentRuntime::subscribe(run: Run) -> Result<RunEventStream, RuntimeError>`：占位 → 取租约 → 取信号量 → 转 `RUNNING` → 起执行任务；排队超时落 `FAILED`。
-  5. `cancel(run_id)`、`shutdown()`（广播）、`running_count()`（内存视角，仅供日志；对外的 `runningRunCount` 仍取数据库，见 P2-026）。
-  6. **禁止** `service-core → agent-runtime` 反向引用（否则形成 Arc 环与依赖环）：Runtime 持有 `Arc<SessionService>`，Service 不持有 Runtime。
-  **技术要求**：注册表在任务终态必须清理（RAII guard）；重复订阅的错误语义对应 P1 的 400 文案。
-  **测试要求**：无单元测试；由 P2-033 覆盖。
+  1. `service-core` 定义端口 trait：`RunDriver::drive(&self, input: RunInput) -> RunOutcome`，`RunInput { run, prompt, events: mpsc::Sender<RunEvent>, cancel: CancellationToken }`。
+  2. `agent-runtime` 实现：`run_started` → Context → LLM 流（每段 `message_delta`）→ 成功收尾（调用 `service-core` 的完成事务）→ `run_completed`；失败 → `run_failed`。
+  3. `RunRegistry`：每 Run 一个 `CancellationToken`；Run 结束即移除。
+  4. 不实现 Tool Calling：请求体不含 tools，代码中无 tool loop。
+  **技术要求**：`agent-runtime` 可依赖 `agent-core`、`agent-context`、`agent-route`、`service-core`、`lib-core`；不依赖 `lib-web*` / `bin-*`；事件只能经 `Sender<RunEvent>` 产出。
   **验收标准**：
-  - [ ] 同一 `run_id` 只能 `insert_once` 一次。
-  - [ ] 同一 Session 的第二个 Run 在第一个终态前不进入 `RUNNING`。
-  - [ ] `cargo tree` 无循环；`service-core` 不依赖 `agent-runtime`。
-  **完成产物**：调度骨架。
+  - [ ] `cargo tree -p agent-runtime` 无 `lib-web` / `lib-bin-*` / `bin-*`；`service-core` 不依赖 `agent-runtime`。
+  - [ ] 一次成功 Run 产出 `run_started` → `message_delta`+ → `run_completed`，`seq` 连续。
+  **测试要求**：由 P2-026 覆盖。
+  **完成产物**：`agent-runtime` 与端口 trait。
 
-- [ ] **P2-023 `RunExecutor` 主流程与事务一致性**
+- [ ] **P2-023 执行端口接入 `service-core`（替换 Mock 生产方）**
 
-  **目标**：实现单轮 Agent Loop：`RUNNING → 组装 Context → 调 LLM → 累积 → 终态事务`。
-  **前置依赖**：P2-022、P2-016、P2-021、P2-012。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/{executor.rs, outcome.rs}`。
+  **目标**：删掉 Mock 生产方，执行队列改为调用已注入的端口实现；启动装配完成注册。
+  **前置依赖**：P2-022、P2-013。
+  **涉及文件 / Crate**：`crates/service-core/src/session/{run_trigger.rs,stream.rs,mod.rs}`、`crates/service-core/src/runtime/{registry,session}.rs`、`crates/lib-bin-web/src/server.rs`、`crates/lib-web/src/holder.rs`。
   **实施步骤**：
-  1. 执行步骤（与 D-P2-008 严格一致）：
-     `QUEUED→RUNNING`（条件更新）→ 发 `run_started` → 读会话历史 + 当前用户消息 → `ContextBuilder::build` → `ProviderResolver` 解析 model → `LlmProvider::stream` → 循环累积增量并发 `message_delta` → 收尾。
-  2. 成功收尾：单事务 `{INSERT assistant message, UPDATE run → COMPLETED + usage + finished_at, UPDATE session.updated_at}`；事务成功后发 `run_completed`；事务失败则改用失败路径。
-  3. 失败收尾：`UPDATE run → FAILED`（`error` = `LlmError::public_message()` 或 `ContextError::Overflow` 的固定文案）→ 发 `run_failed`；**不写助手消息**。
-  4. 上下文超限、未知模型、缺 key 都走失败路径（Run `FAILED`），不返回 HTTP 错误。
-  5. 清理：无论结局如何都移除注册表条目、释放信号量与租约。
-  **技术要求**：不在循环中写库；`Run.error` 不含 base_url、key、堆栈；助手消息 id 在发 `run_started` 之前生成（与 P1 一致：`run_started.messageId` 有值）。
-  **测试要求**：无单元测试；由 P2-031 / P2-032 覆盖成功与失败路径。
+  1. `run_trigger::drain` 的 `run_one` 改为「调用端口」；删除 `session/stream.rs` 的 Mock 生产方。
+  2. 端口实现由 `lib-bin-web` 装配时注册（`SessionService` 或 `RuntimeState` 持 `Arc<dyn RunDriver>`）；未注册时（`api_probe_server` 与部分用例）退化为「直接落 `FAILED`「执行器未装配」」，并在日志给出原因。
+  3. 事件仍写进 `RuntimeSession::producer()`，写者先落盘再转发；`notify_run` 的行为不变。
+  **技术要求**：`service-core` 不依赖 `agent-*`；执行队列的串行与停止语义不变（`RunExecutor::stop` 仍先中止再取消）。
   **验收标准**：
-  - [ ] 成功路径：`run_completed` 到达后 `run/get` 即 `COMPLETED` 且有 usage，`message/list` 多一条助手消息。
-  - [ ] 失败路径：`run_failed` 到达后 Run 为 `FAILED` 且无助手消息。
-  - [ ] `run_started` 在 `RUNNING` 已提交之后发出（用例可在事件到达后立即查 `run/get` 验证）。
-  **完成产物**：可执行的真实 Run。
+  - [ ] 仓库中不再有 Mock 回复文本（`本段由 P1 的 Mock`）。
+  - [ ] 占用中的会话发消息后真实调用 LLM，事件按序落盘并转发到 `api/client/stream`。
+  - [ ] 未占用会话的 Run 仍停在 `QUEUED`（P1.1 语义不变）。
+  **测试要求**：`session.trigger`（既有）继续通过；`run.execute`（P2-026）覆盖真实执行。
+  **完成产物**：执行端口接通，Mock 生产方下线。
 
-- [ ] **P2-024 RunEvent 生产：流式增量、序号与心跳**
+- [ ] **P2-024 取消、断连与关闭联动（含终态事件归属）**
 
-  **目标**：把事件生产从 P1 的 Mock 迁到 Runtime，并让心跳在真实长等待中真正生效。
+  **目标**：三条终止路径都真正中断模型调用，且事件文件与数据库的终态一致。
   **前置依赖**：P2-023。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/event/{mod.rs, producer.rs}`。
+  **涉及文件 / Crate**：`crates/agent-runtime/src/{loop_,registry}.rs`、`crates/service-core/src/session/{run_trigger.rs,service.rs}`、`crates/service-core/src/runtime/{session.rs,handler.rs}`、`crates/lib-bin-web/src/shutdown.rs`。
   **实施步骤**：
-  1. 移植 P1 `Producer` 的公共字段填充与 `seq` 单调规则（从 0 开始连续递增，同时作为 SSE 的 `id`）。
-  2. 心跳：等待超过 `stream_heartbeat_ms`（默认 15000）补一条 `heartbeat`（只带公共字段）；实现为「等待增量时按心跳间隔切片睡眠」。
-  3. 背压：`mpsc::channel(32)`（与 P1 一致），消费方断开即 `sender.closed()` 返回。
-  4. 空增量不发送 `message_delta`（避免空帧）。
-  5. 事件与状态一致性：`run_completed` 只在事务提交后发送；`run_failed` 只在失败终态提交后发送。
-  **技术要求**：事件字段集合与 P1 完全相同（不得新增字段）；`created_at_ms` 逐条取当前时间。
-  **测试要求**：P2-027（心跳）与 P2-031（正常流）覆盖。
+  1. `api/run/cancel`：条件更新 `CANCELLED` → 触发 token → 执行器 drop LLM 流 → 发 `run_cancelled`（`error` = 「用户取消执行」）；助手消息不写。
+  2. 客户端断连 / 占用释放：`SessionStop::ClientDisconnected|OccupancyReleased` 停执行队列 → 取消在跑 Run → 执行器发 `run_cancelled`（沿用 P1.1 的三个固定原因文本之一）。
+  3. 服务关闭：`ServerShutdown` → 执行器发 `server_shutdown`（`status=CANCELLED`）；写者兜底逻辑保留但正常情况下不再触发。
+  4. 竞态：终态条件更新影响 0 行即静默退出，不发第二条终态事件。
+  **技术要求**：取消必须在 `select!` 中 drop 流；`RunRegistry` 的清理随 Run 结束；不新增事件枚举值。
   **验收标准**：
-  - [ ] `seq` 从 0 连续无空洞，`run_completed` 为最后一条（除 `server_shutdown` 场景）。
-  - [ ] 心跳只在空闲超阈值时出现，且不打乱 `seq`。
-  - [ ] 无空 `delta` 事件。
-  **完成产物**：真实事件流。
+  - [ ] 取消后 `run/get` 为 `CANCELLED` + `finishedAtMs`，无助手消息，事件文件有 `run_cancelled`。
+  - [ ] 断连与关闭路径的事件文件终态分别正确，且不重复追加。
+  - [ ] Mock LLM 侧记录到连接关闭（O-1 结论决定断言强度）。
+  **测试要求**：`run.cancel` / `run.disconnect` / `run.shutdown`（P2-026）。
+  **完成产物**：三条终止路径闭环。
 
-- [ ] **P2-025 Cancellation：取消传播、断线与关闭联动**
+- [ ] **P2-025 全局并发上限与排队超时**
 
-  **目标**：让「取消 Run」真正中断模型调用，并保证终态只提交一次。
-  **前置依赖**：P2-023。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/{cancel.rs, executor.rs}`、`crates/lib-web/src/session/api.rs`（`run_cancel` 追加 Runtime 通知）、`crates/lib-bin-web/src/shutdown.rs`（关闭钩子联动）。
+  **目标**：多会话并发受全局上限约束，等待超时落 `FAILED`。
+  **前置依赖**：P2-022。
+  **涉及文件 / Crate**：`crates/agent-runtime/src/{limit.rs,loop_.rs}`、`crates/lib-bin-web/src/server.rs`（装配配置）。
   **实施步骤**：
-  1. 执行循环用 `tokio::select!` 监听三路：下游增量、`token.cancelled()`、`sender.closed()`。
-  2. `api/run/cancel`：先由 `service-core` 做条件更新（数据库是权威），成功后调用 `runtime.cancel(run_id)` 停止流；更新 0 行 → 维持 P1 的 400 语义。
-  3. 断线：`sender.closed()` 等价于取消——`UPDATE → CANCELLED`（条件更新，影响 0 行则不动），丢弃已累积内容，不发任何事件。
-  4. 服务关闭：`lib-bin-web` 的关闭钩子调用 `runtime.shutdown()` → 广播取消 → 执行器 `UPDATE → CANCELLED` → 发 `server_shutdown`（`status=CANCELLED` + 可读 `error`）。
-  5. 终态唯一提交：所有终态写入都是条件更新；竞态时「先提交者获胜，后者不写不改」。
-  6. Panic 兜底：执行任务用 `JoinHandle` 结果 / `catch_unwind` 捕获，panic 时尽力把 Run 落 `FAILED`（`error` = 内部错误固定文案），并确保注册表清理。
-  **技术要求**：取消必须是「真正中断 HTTP 流」（drop `LlmStream`），不允许只停 SSE；取消后 1 秒内释放信号量与租约。
-  **测试要求**：P2-032 三条用例（取消 / 断线 / 关闭）+ P2-018 的 `/mock/stats` 断言连接被关闭。
+  1. 执行入口前 `Semaphore::acquire`（`max_concurrent_runs`），超时 `run_queue_timeout_ms` 到点落 `FAILED`「执行排队超时」并发 `run_failed`。
+  2. 同会话串行继续由 P1.1 执行队列保证，不引入 Session 租约。
+  3. 排队不产生事件；`probe/health` 的 `runningRunCount` 只统计 `RUNNING`。
   **验收标准**：
-  - [ ] 取消后 Run 为 `CANCELLED`，`finishedAtMs` 有值，无助手消息。
-  - [ ] mock server 侧观察到连接被关闭（不是等流自然结束）。
-  - [ ] 取消与完成同时发生时终态唯一，不会被覆盖。
-  - [ ] 服务关闭时事件流以 `server_shutdown` 收尾且连接关闭。
-  **完成产物**：可取消的执行链路。
+  - [ ] `AGENT_MAX_CONCURRENT_RUNS=1` 时两个会话的 Run 不同时进入 `RUNNING`，且都最终落终态。
+  - [ ] 排队超时分支可被用例触发（把超时压到毫秒级）。
+  **测试要求**：`run.concurrency` / `run.queue_timeout`（P2-026）。
+  **完成产物**：并发与排队。
 
-- [ ] **P2-026 接入 Server：替换 Mock 生产方与启动装配**
+- [ ] **P2-026 真实执行端到端用例（`chat.*` / `run.*`）**
 
-  **目标**：把 Server 的真实执行链路接通，Mock 事件流与 Mock 回复彻底下线。
-  **前置依赖**：P2-024、P2-025、P2-013、P2-017。
-  **涉及文件 / Crate**：`crates/lib-web/src/session/{api.rs, mod.rs}`（删除 `stream.rs` 生产的 Mock 引用）、`crates/lib-web/src/holder.rs`、`crates/lib-bin-web/src/{server.rs, shutdown.rs}` 与 `Cargo.toml`；删除 `crates/service-core/src/session/stream.rs` 中的 Mock 回复逻辑。
+  **目标**：用用例证明真实执行、流式、失败、取消、并发、断连在 P1.1 通路上闭环。
+  **前置依赖**：P2-023 ~ P2-025、P2-018、P2-021。
+  **涉及文件 / Crate**：`crates/bin-tests/src/cases/{chat.rs,run.rs}`、`cases/mod.rs`。
   **实施步骤**：
-  1. `lib-web` 的 `run_stream` handler：校验 Run 存在且 `QUEUED`（保持 P1 文案）→ `holder::runtime().subscribe(run)` → 用迁入 `agent-runtime` 的 `RunEventStream` 组装 SSE（`session/stream.rs` 只改类型来源）。
-  2. `lib-bin-web::serve` 装配顺序：配置 → `lib-db` → `heal_orphans` → Repository → `SessionService` → `ProviderResolver` → `AgentRuntime` → `holder::install(service, runtime)` → 注册关闭钩子（含 `runtime.shutdown()`）。
-  3. `probe_health.runningRunCount` 改为数据库统计（`runs` 中 `QUEUED`/`RUNNING` 数量）。
-  4. 删除 P1 的 Mock 回复文案与定时代码路径；`service-core` 不再有 `tokio` 的定时生产任务。
-  5. `lib-bin-web` 的 `Cargo.toml` 增加 `agent-runtime`；`lib-web` 增加 `agent-core`、`agent-runtime`。
-  **技术要求**：Handler 的 path、入参、出参与错误映射不变；`lib-web` 不承载业务规则；关闭钩子必须在启动前注册（沿用 P1 顺序）。
-  **测试要求**：`make test ARGS="session"`、`make test ARGS="web"`、`make test ARGS="probe"` 必须全绿。
+  1. `chat.multiturn`：注册 → 建流 → 占用 → 三轮发消息 → 断言增量拼接等于完整回复、历史进入请求体、`run/get` 终态与 usage。
+  2. `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout`：`run_failed` + 脱敏 `error` + 无助手消息。
+  3. `run.cancel` / `run.disconnect` / `run.shutdown`：三条终止路径 + 事件文件终态。
+  4. `run.concurrency` / `run.queue_timeout`：全局上限与排队超时。
+  5. `run.journal_consistency`：同一 Run 的下行事件序列与事件文件序列一致（`event` 与 `seq` 一一对应）。
+  **技术要求**：全部经生成的 SDK；Mock LLM 由用例进程内的 Mock Server 提供（服务端通过 `AGENT_PROVIDER_BASE_URL` 指向它）。
   **验收标准**：
-  - [ ] 真实调用 Mock LLM 完成一次流式对话，`run_completed` 后 `message/list` 有助手消息。
-  - [ ] 仓库内不再有 Mock 回复文案（检索为空）。
-  - [ ] `probe/health` 的 `runningRunCount` 反映真实进行中数量。
-  - [ ] 服务优雅关闭时进行中的 Run 收尾为 `CANCELLED` 并收到 `server_shutdown`。
-  **完成产物**：P2 主链路接通。
+  - [ ] `make test ARGS="chat"` 与 `make test ARGS="run"` 全绿，报告落 `target/tests/<运行 ID>/`。
+  - [ ] 每条用例的断言能区分「Mock 行为」与「真实执行」。
+  **完成产物**：真实执行用例集。
 
 ---
 
-## Batch G：SSE 与客户端集成（P2-027 ~ P2-030）
+## Batch G：客户端与遗留项（P2-027 ~ P2-030）
 
-> P2-027 / P2-028 / P2-029 都依赖 P2-026；P2-030 无代码依赖。
+> 依赖：Batch F。027 与 028 可并行；029 / 030 无代码依赖。
 
-- [ ] **P2-027 E-3 心跳验证**
+- [ ] **P2-027 TUI 展示失败、取消与排队态**
 
-  **目标**：把 P1 遗留的 E-3（心跳在长等待时补发）变成可自动验证的用例。
-  **前置依赖**：P2-026、P2-018。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/stream.rs`（新增领域）、`crates/bin-tests/src/cases/mod.rs`、`crates/bin-tests/src/server.rs`（env 注入）。
-  **实施步骤**：
-  1. 用例 `stream.heartbeat`（Isolated）：`AGENT_STREAM_HEARTBEAT_MS=300`，mock 场景 `slow`（首帧前静默 1.5s）。
-  2. 断言：首条为 `run_started`；其后至少一条 `heartbeat`；`heartbeat` 只带公共字段（`delta`/`status`/`error` 均为空）；`seq` 连续递增；最后 `run_completed`。
-  3. 断言默认值未变：代码中默认 15000ms（静态核对，写入用例的可读提示或报告）。
-  **技术要求**：不改变生产默认行为（15s）；心跳间隔只通过环境变量调整（D-P2-020）。
-  **测试要求**：`make test ARGS="stream.heartbeat"` 通过，用例耗时 < 10s。
-  **验收标准**：
-  - [ ] 心跳事件在 `run_started` 与首个 `message_delta` 之间出现。
-  - [ ] 心跳不打乱 `seq`，不携带业务字段。
-  - [ ] 用例稳定（连续运行 3 次通过）。
-  **完成产物**：`stream.heartbeat` 用例 + P1 E-3 关闭。
-
-- [ ] **P2-028 E-4 `run_failed` 验证**
-
-  **目标**：验证真实失败分支：鉴权失败、上游 5xx、空闲超时、流中断都产出 `run_failed` 且 Run 落 `FAILED`。
-  **前置依赖**：P2-026、P2-018。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/stream.rs`。
-  **实施步骤**：
-  1. `stream.failed_auth`：mock 场景 `auth_error` → 事件流出现 `run_failed`，`error` 可读且不含 key；`run/get` 为 `FAILED`；无助手消息。
-  2. `stream.failed_upstream`：`server_error` → 同上，`error` 区分「上游错误」。
-  3. `stream.failed_timeout`：`AGENT_LLM_IDLE_TIMEOUT_MS=500` + 场景 `stall` → `run_failed`，`error` 为超时文案。
-  4. `stream.failed_truncate`：场景 `truncate` → `run_failed`（不挂死，事件流正常结束）。
-  5. 断言 `run_failed` 是最后一条事件（除关闭场景），事件流随后结束。
-  **技术要求**：错误文案断言到「可读且稳定」粒度，不断言完整句子之外的实现细节；断言 `error` 不包含 base_url、api_key、文件路径。
-  **测试要求**：四条用例通过，单个用例耗时 < 15s。
-  **验收标准**：
-  - [ ] 四类失败各一条用例通过。
-  - [ ] 失败 Run 无助手消息、有 `finishedAtMs`。
-  - [ ] `error` 中无密钥 / 路径 / 堆栈（检索断言）。
-  **完成产物**：`stream.failed_*` 用例 + P1 E-4 / R-3 关闭。
-
-- [ ] **P2-029 客户端失败展示与 W-1 控制台断言**
-
-  **目标**：让三个客户端能显示真实失败与排队状态；补 P1 遗留的浏览器 console error 断言。
+  **目标**：真实执行后 TUI 能区分「排队中 / 运行中 / 失败 / 取消」，不重写连接管理（P1.1 形态不变）。
   **前置依赖**：P2-026。
-  **涉及文件 / Crate**：`crates/lib-bin-cli/src/run.rs`、`crates/lib-bin-tui/src/{state.rs, worker.rs}`、`lingting-agent-ui/src/pages/chat/*`、`lingting-agent-ui/tests/e2e/*.spec.ts`、`crates/bin-tests/src/cases/{web/e2e.rs, cli.rs}`。
+  **涉及文件 / Crate**：`crates/lib-bin-tui/src/{worker.rs,state.rs,ui.rs}`。
   **实施步骤**：
-  1. CLI：`run` 收到 `run_failed` → 打印一行可读错误 + 非 0 退出码（`CommandError::runtime`）。
-  2. TUI：失败态显示错误文案并可重试；排队状态（收到 `heartbeat` 且尚无 `message_delta`）显示「等待执行…」。**不改 Transport 与 SDK 调用**。
-  3. WebUI：失败时显示错误提示条（复用 P1 的 `errors.ts` 与既有提示组件），停止生成后保留已收内容。
-  4. W-1：Playwright 用例收集 `page.on("console")` 的 error 级别消息，断言为空（若有已知噪音，白名单必须显式列出并注明原因）。
-  5. 用例 `web.console`（转发 Playwright）与 `cli.failed`（CLI 失败退出码与文案）。
-  **技术要求**：三端都不允许手写 `api/…` 字面量（沿用 `web.sdk-only`）；不引入新依赖。
-  **测试要求**：`make test ARGS="cli"`、`make test ARGS="web"`、`pnpm exec vp test run`、`pnpm exec playwright test` 通过。
+  1. `run_started` 之前显示「等待执行…」；`run_failed` 把脱敏 `error` 显示在消息末尾并写提示行。
+  2. `run_cancelled` / `client_closed` 走既有收尾提示，不新增交互。
+  3. 不新增接口调用，不改心跳与重连逻辑。
   **验收标准**：
-  - [ ] CLI 失败路径退出码非 0 且只输出一行错误。
-  - [ ] TUI 失败与排队态可读、可恢复。
-  - [ ] Playwright 断言 console error 为空（白名单为空）。
-  **完成产物**：客户端失败展示 + P1 W-1 关闭。
+  - [ ] `run.failed_*` 的服务端行为在 TUI 上表现为可读错误，界面不卡在流式阶段。
+  - [ ] 排队中（未 `run_started`）有明确提示。
+  **测试要求**：`tui.*` 既有用例继续通过；新增 `tui.run_failed` 覆盖失败态展示。
+  **完成产物**：TUI 状态展示。
 
-- [ ] **P2-030 P1 遗留 A-1（生成物过期检测）结案**
+- [ ] **P2-028 WebUI 展示失败、取消与排队态 + W-1（console error 断言）**
 
-  **目标**：给 P1-020 遗留的 A-1 一个明确归属与结论，不再悬空。
-  **前置依赖**：无。
-  **涉及文件 / Crate**：`.steps/p2/decisions.md`（D-P2-022）。
+  **目标**：WebUI 与 TUI 口径一致，并把 P1 遗留 W-1（浏览器 console error 断言）处置完毕。
+  **前置依赖**：P2-026。
+  **涉及文件 / Crate**：`lingting-agent-ui/src/pages/chat/`、`lingting-agent-ui/src/api/clientStream.ts`、`lingting-agent-ui/tests/`、`crates/bin-tests/src/cases/web/`。
   **实施步骤**：
-  1. 复述事实：生成物不入库（P1 D-006），门禁每次都从源码重建，因此不存在「生成物与定义不一致」的可检测状态；`make gen-check` 的等价判据是「缺生成物 / 生成失败 / 产物不完整 / 生成代码不能编译 → 非 0」。
-  2. 结论：A-1 的原始表述 `REJECTED`；等价门禁保留（`make gen-check`）。
-  3. 在 `.steps/p2/decisions.md` 记录结案，并在 `.steps/README.md` 的进度表注明（**不修改 `p1/decisions.md` 的原始结论**）。
-  **技术要求**：只写结论与理由，不新增门禁步骤（如需新增必须单独立项并说明代价）。
+  1. `run_failed` / `run_cancelled` 在气泡与提示条上呈现；排队中显示「等待执行…」。
+  2. W-1：Playwright 用例收集 `console.error` / `pageerror`，正常对话与关闭场景均断言为空（允许白名单中的已知网络错误文案，需在用例中显式列出）。
+  3. 不做本地半条消息拼接（沿用 D-011 第 4 条口径）。
+  **验收标准**：
+  - [ ] `web.e2e` 覆盖失败与取消场景，console 断言生效。
+  - [ ] `web.ui` 全绿，`make ui-check` 通过。
+  **测试要求**：`web.e2e` / `web.ui` / `web.sdk-only`。
+  **完成产物**：WebUI 状态展示 + W-1 结案。
+
+- [ ] **P2-029 P1 遗留项处置（E-3 / E-4 / A-1）**
+
+  **目标**：把 P1 报告里挂账的三条遗留项结案。
+  **前置依赖**：P2-026。
+  **涉及文件 / Crate**：`docs/reports/p1-020-acceptance.md`（结案标注，由 P2-030 统一提交）、`.steps/p2/decisions.md`（D-P2-020 / D-P2-022）。
+  **实施步骤**：
+  1. **E-3（心跳）**：P1.1 已用客户端 ping + `: keepalive` 覆盖；`RunEventKind::Heartbeat` 保留但不产出，本项标注「契约保留值，无需验证」。
+  2. **E-4（`run_failed`）**：由 `run.failed_*` 用例结案。
+  3. **A-1（生成物过期检测）**：维持 D-P2-022 的 `REJECTED` 与等价门禁（`make gen-check`）。
+  4. 若发现遗留项与原判据表述冲突，写清「原判据 / 处置 / 归属」，不留无归属项。
+  **验收标准**：
+  - [ ] 三项各有结论与证据（用例名或命令）。
+  - [ ] P1 报告中对应条目的标注在 P2-030 一并提交。
+  **测试要求**：复用 `run.failed_*`，不新增用例。
+  **完成产物**：遗留项结案记录。
+
+- [ ] **P2-030 文档回填（代码编辑完成后统一提交）**
+
+  **目标**：把 P2 落地后的架构、接口与阶段状态写回文档，保持单一事实来源。
+  **前置依赖**：P2-005 的清单 + 各落地任务完成。
+  **涉及文件 / Crate**：`docs/workspace.md`、`docs/develop.md`、`docs/api/{readme,session,provider}.md`（如需新增 provider 说明则新建）、`.steps/README.md`、`.steps/p2/*`、`docs/reports/p1-020-acceptance.md`、`docs/reports/p2-032-acceptance.md`（P2-032 创建）。
+  **实施步骤**：
+  1. `workspace.md`：Crate 新增、依赖边、§8.1 阶段范围、§8.2 剩余阶段、`holder` 归属。
+  2. `develop.md`：Provider 配置面、执行端口与 Run 触发口径、Context 预算参数。
+  3. `docs/api/session.md`：`run_failed` 的产出条件、token 语义（估算 vs 真实 usage）、排队与终态说明。
+  4. `.steps/README.md`：P2 状态与 P3 输入清单；`p2/tasks.md` 状态。
+  5. P1 报告遗留项结案标注。
+  **验收标准**：
+  - [ ] 文档与代码一致，无第二份契约定义。
+  - [ ] `docs/workspace.md` 的依赖表与 `cargo tree` 实际一致。
   **测试要求**：无。
-  **验收标准**：
-  - [ ] 决策记录中 A-1 状态为 `REJECTED` 且理由完整。
-  - [ ] 未修改 P1 已完成任务的状态与 P1 决策原文。
-  **完成产物**：A-1 结案记录。
+  **完成产物**：文档回填。
 
 ---
 
-## Batch H：端到端验收（P2-031 ~ P2-035）
+## Batch H：端到端验收（P2-031 ~ P2-032）
 
-> P2-031 ~ P2-034 依赖 P2-026（及各自的 Mock 场景），可并行；P2-035 必须在全部之后。
+> 依赖：全部批次。
 
-- [ ] **P2-031 多轮对话与 Context 生效**
+- [ ] **P2-031 端到端验收**
 
-  **目标**：证明历史确实进入模型请求、顺序正确、超预算会裁剪。
-  **前置依赖**：P2-026、P2-021、P2-018。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/chat.rs`。
+  **目标**：按 `acceptance.md` 的 15 类条目逐条验证。
+  **涉及文件 / Crate**：`crates/bin-tests`（补齐缺口用例）。
+  **验收标准**：`acceptance.md` 逐条通过（含 Build / Architecture / … / End-to-End）。
+  **测试要求**：`make test ARGS="--all"`、前端 `pnpm exec vp test run` 与 `pnpm exec playwright test`；全部用例仍在 `bin-tests`，其他 Crate 不写 `#[cfg(test)]`。
+
+- [ ] **P2-032 验收报告与阶段状态**
+
+  **目标**：沉淀结论、偏差与下游输入，并更新阶段状态。
+  **涉及文件 / Crate**：`docs/reports/p2-032-acceptance.md`（新建）、`.steps/p2/{README,tasks,acceptance}.md`、`.steps/README.md`。
   **实施步骤**：
-  1. `chat.multiturn`：同一会话连续 3 轮对话 → 通过 mock 的 `GET /mock/last-request` 断言第 3 次请求包含前两轮的 user + assistant 消息，顺序与 `message/list` 一致，system prompt 在最前。
-  2. `chat.truncate`：`AGENT_CONTEXT_MAX_MESSAGES=2` 或极小 `context_window` → 断言请求里历史被裁剪、系统提示仍在、最新用户消息在最后。
-  3. `chat.overflow`：最新用户消息超预算 → Run `FAILED`，`error` 为上下文超限文案，且没有发起上游请求（mock 的 `stats` 中请求数为 0）。
-  **技术要求**：断言对象是**真实请求体**，不是回复文本；用例不得依赖 Mock 的固定回复内容。
-  **测试要求**：三条用例通过。
+  1. 报告结构沿用 P1.1：逐条判据 + 证据 + 偏差与遗留 + 下游（P3）输入清单。
+  2. 记录 `rig-core` / `sqlx` 对编译时间与 release 体积的影响（只记录不设阈值）。
+  3. CI 失败原因单独记录，明确「与 P2 功能无关，P6 统一处理」。
+  4. 更新阶段状态与 P3 的开工前置说明。
   **验收标准**：
-  - [ ] 历史顺序、system prompt 位置、当前消息位置三项断言通过。
-  - [ ] 裁剪生效且系统提示未被裁掉。
-  - [ ] 超限时不产生上游请求。
-  **完成产物**：`chat.*` 用例。
-
-- [ ] **P2-032 取消 / 断线 / 服务关闭**
-
-  **目标**：验证三条终止路径的终态、事件与资源释放。
-  **前置依赖**：P2-026、P2-025、P2-018。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/run.rs`。
-  **实施步骤**：
-  1. `run.cancel`：`slow` 场景流式中调用 `api/run/cancel` → 返回 `CANCELLED`；事件流停止且无 `run_completed`；`run/get` 为 `CANCELLED`；无助手消息；重复取消返回 400（P1 语义）。
-  2. `run.disconnect`：消费前 N 条事件后丢弃流 → 800ms 内 Run 变 `CANCELLED`；mock 的 `stats` 显示连接被关闭。
-  3. `run.shutdown`（Isolated）：流式中调用关闭探针 → 末条事件为 `server_shutdown`（`status=CANCELLED` + 可读 `error`），事件流结束；服务端日志无 panic。
-  **技术要求**：不得只用「停止读取 SSE」当作取消证据，必须断言服务端状态与 mock 侧连接关闭。
-  **测试要求**：三条用例通过；`run.shutdown` 复用 P1 的关闭探针（debug 构建）。
-  **验收标准**：
-  - [ ] 三条路径终态正确、`finishedAtMs` 有值。
-  - [ ] mock 侧连接确实被关闭（取消与断线各一次）。
-  - [ ] 关闭后事件流立即结束，不挂死。
-  **完成产物**：`run.*` 用例。
-
-- [ ] **P2-033 多 Session 并发与同 Session 串行**
-
-  **目标**：验证隔离、串行与全局并发上限。
-  **前置依赖**：P2-026、P2-022。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/run.rs`。
-  **实施步骤**：
-  1. `run.concurrency`：两个会话各发一条并同时订阅 → 两条流都拿到完整回复；`message/list` 各自只有自己的消息；事件 `sessionId` 归属正确。
-  2. `run.session_serial`：同一会话连续发两条并同时订阅 → 第二个 Run 在第一个终态前保持 `QUEUED`（`run/get` 断言），其事件流先收到 `heartbeat` 再收到 `run_started`；最终两条都 `COMPLETED`，消息顺序为 user1/assistant1/user2/assistant2。
-  3. `run.queue_limit`（Isolated）：`AGENT_MAX_CONCURRENT_RUNS=1`，三个会话并发 → 全部完成且**同时进行中的 Run 数不超过 1**（通过 `probe/health.runningRunCount` 轮询采样断言）。
-  **技术要求**：不得断言全局计数（共享服务端原则）；断言只能落在本用例创建的会话上；`run.queue_limit` 用 Isolated。
-  **测试要求**：三条用例通过，总耗时可控（`slow` 场景参数收敛）。
-  **验收标准**：
-  - [ ] 两会话消息零串扰。
-  - [ ] 同会话严格串行且消息顺序正确。
-  - [ ] 并发上限生效（采样值 ≤ 配置值）。
-  **完成产物**：`run.concurrency` / `run.session_serial` / `run.queue_limit`。
-
-- [ ] **P2-034 重启恢复（含 `RUNNING` 自愈）**
-
-  **目标**：验证真实执行中崩溃/重启后的状态自愈与历史可继续。
-  **前置依赖**：P2-026、P2-013、P2-014。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/persist.rs`。
-  **实施步骤**：
-  1. `persist.running_heal`（Isolated）：`slow` 场景启动 Run 并收到 `run_started` → 直接杀掉服务端进程 → 同 `AGENT_HOME` 重启 → 该 Run 为 `FAILED`（`error` = 「服务重启，执行已中断」）、无助手消息、`finishedAtMs` 有值。
-  2. `persist.resume_chat`（Isolated）：重启后在**同一会话**继续发一条消息并完成 → 历史包含重启前的消息，顺序正确。
-  3. 断言重启后 `probe/health` 可访问、`session/list` 数据完整。
-  **技术要求**：杀进程用 `Server::stop` 的强制终止路径（不得走优雅关闭，否则测的是关闭而非崩溃）；用例必须回收子进程。
-  **测试要求**：两条用例通过。
-  **验收标准**：
-  - [ ] `RUNNING` 残留被自愈为 `FAILED` 且有可读原因。
-  - [ ] 重启后同一会话可继续多轮对话，历史顺序正确。
-  - [ ] 无残留 `RUNNING` 记录（`runs(status)` 检索为空）。
-  **完成产物**：`persist.running_heal` / `persist.resume_chat`。
-
-- [ ] **P2-035 契约一致性、SDK 生成与阶段验收报告**
-
-  **目标**：完成阶段收口：门禁全绿、契约零变更被证明、验收报告成文。
-  **前置依赖**：P2-027 ~ P2-034。
-  **涉及文件 / Crate**：`docs/reports/p2-035-acceptance.md`（新增）、`.steps/README.md`、`.steps/p2/README.md`（状态）。
-  **实施步骤**：
-  1. 跑并记录：`make gen`、`make gen-check`、`make check`、`make ui-check`、`make test ARGS="--all"`、`cd lingting-agent-ui && pnpm exec vp test run`、`pnpm exec playwright test`。
-  2. 契约一致性：19 条接口的 method/path、23 个 DTO 的字段名/类型/可选性、6 个 `RunEventKind` 取值逐项比对（沿用 P1-020 A-5 的方法），记录零差异结论。
-  3. `cargo tree` 复核：无循环、`agent-route` 是唯一含 `rig-core` 的 crate、`agent-core` 无基础设施依赖、未创建被禁止的 Crate。
-  4. 记录观察数据（不设阈值）：release binary 体积、冷启动时间、`make ci` 失败步骤与原因。
-  5. 按 `acceptance.md` 的 14 类逐条写结论与证据，偏差单列；更新 `.steps/README.md` 进度与 `.steps/p2/README.md` 状态。
-  **技术要求**：报告只写结论与证据，不贴大段日志；偏差必须写处置与归属阶段。
-  **测试要求**：全部命令通过（`make ci` 若因 Framework `path` 依赖失败，单独记录，不作为阻塞）。
-  **验收标准**：
-  - [ ] 14 类验收条目全部有结论与证据。
-  - [ ] SDK 两侧契约零差异，`make gen-check` 通过。
-  - [ ] 无遗留 P0 问题；偏差均有归属。
-  **完成产物**：`docs/reports/p2-035-acceptance.md` + 路线图状态更新。
+  - [ ] 报告覆盖 15 类条目，每条有证据。
+  - [ ] 偏差逐条写「处置 + 归属阶段」，无无归属项。
+  - [ ] `.steps/README.md` 的阶段进度与 P2 文档状态一致。
+  **测试要求**：无。

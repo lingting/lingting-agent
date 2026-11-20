@@ -9,7 +9,9 @@
 | 文档 | 领域 | 内容 |
 |---|---|---|
 | [probe.md](probe.md) | probe（探针与探活） | 技术验证探针、错误响应样例、`health` / `version` 探活，共 11 条 |
-| [session.md](session.md) | session（会话） | Mock 会话 / 消息 / Run 业务接口与 SSE 事件流，共 7 条 |
+| [session.md](session.md) | session（会话） | Mock 会话 / 消息 / Run 业务接口，共 6 条 |
+| [runtime.md](runtime.md) | runtime（客户端连接） | 注册、心跳 / 问询应答、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
+| [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
 
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 
@@ -33,7 +35,7 @@
 | `Void` | 204，无响应体 | `GET api/probe/void` |
 | 载荷类型 / `Result<T>` | `{"code":200,"message":"Success","data":<载荷>}`，由 `R<T>` 包装 | 绝大多数接口 |
 | `WebResponse` / `WebResponseOf<T>` | 自定义状态码与响应头；元数据中被标记为 `Blob` | `GET api/probe/response` |
-| `WebResponse` + `WebBody::Stream` | `text/event-stream`，一帧一条事件（不经 `R<T>` 包装） | `GET api/run/stream` |
+| `WebResponse` + `WebBody::Stream` | `text/event-stream`，一帧一条事件（不经 `R<T>` 包装） | `GET api/client/stream` |
 
 ### 错误响应
 
@@ -52,6 +54,15 @@
 | 404 | 对象不存在、路由不存在、方法不匹配 | 调用方 message，或 `请求接口不存在` |
 | 500 | 服务端错误（含返回值转换失败与 panic） | 固定 `服务器内部错误`，堆栈、SQL、路径只进日志 |
 
+运行时领域（[runtime.md](runtime.md) / [occupancy.md](occupancy.md)）的冲突与未注册一律 400 + **固定 message**，客户端按 message 识别（D-P1.1-005，过渡方案，等框架支持自定义 code 后只改映射函数）：
+
+| 状态 | 固定 `message` | 场景 |
+|---|---|---|
+| 400 | `客户端未注册，请重新连接` | 已反注册的 `clientId` 调用 `client/update`、`client/delete`、`client/stream`、`occupancy/*` |
+| 400 | `会话已被其他客户端占用` | 第二个客户端占用同一会话 |
+| 400 | `客户端已占用其他会话` | 已占一个会话的客户端再占第二个 |
+| 404 | `会话未被占用` | `occupancy/get` 查询无人占用的会话 |
+
 ### 字段类型
 
 | 项 | 约定 |
@@ -59,7 +70,7 @@
 | id | 一律 `String`（雪花 ID 转字符串，D-018） |
 | `i64`（数量、token 用量、`*Ms` 时间戳） | wire 上是**字符串**，传 JSON 数字直接 400；TS 侧类型为 `string` |
 | `Option<T>` | 可省略，缺省时按 `null` 或字段缺失处理 |
-| 枚举 | wire 值为 `SCREAMING_SNAKE_CASE`，如 `QUEUED` / `CANCELLED` / `USER` |
+| 枚举 | 默认 wire 值为 `SCREAMING_SNAKE_CASE`（如 `QUEUED` / `CANCELLED` / `USER` / `PING`）；SSE 事件的判别枚举显式用 `snake_case`（如 `run_started` / `session_event`），与同帧的 `event:` 行同值 |
 | 请求体 | 未知字段被忽略，字段名拼错不会报错，只会走默认值或缺失错误；不校验 `content-type` |
 | DTO 命名 | 请求体 `*PO`、查询参数 `*Params`、响应 `*VO` |
 

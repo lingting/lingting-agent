@@ -60,7 +60,7 @@
 
 - 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总；领域内用例变多时拆成 `cases/<领域>/` 子模块，由 `cases/<领域>.rs` 统一注册与放公共辅助。
 - 测试只写在 `bin-tests`：其他 crate 不写 `#[cfg(test)]` 单元测试，为测试提供的入口必须由 feature 隔离（如 `lib-bin-tui` 的 `testing`）且只在 `bin-tests` 启用。
-- 用例优先只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。**例外**：`web.*` 里断言静态资源、SPA 回落与 CORS 预检这类不经过 SDK 的路径，用 workspace 内的 `framework-http` 直发原始请求；接口 path 仍复用生成的 `PROBE_HEALTH` / `PROBE_SHUTDOWN` / `RUN_STREAM` 常量，只有「本就不存在」的路径保留字面量（那正是断言目标）。
+- 用例优先只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。**例外**：`web.*` 里断言静态资源、SPA 回落与 CORS 预检这类不经过 SDK 的路径，用 workspace 内的 `framework-http` 直发原始请求；接口 path 仍复用生成的 `PROBE_HEALTH` / `PROBE_SHUTDOWN` / `CLIENT_STREAM` 常量，只有「本就不存在」的路径保留字面量（那正是断言目标）。
 - 前端用例分两层：`lingting-agent-ui/tests/*.test.ts(x)` 是 jsdom 单元用例（Transport、SSE 切帧、`useChat`、首屏渲染），`lingting-agent-ui/tests/e2e/*.spec.ts` 是 Playwright 端到端用例（真实浏览器 + 真实服务端）。前端命令由 `bin-tests` 的 `frontend` 模块执行，不在 `package.json` 里另设 `test` 脚本。
 - 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
 - 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。
@@ -108,17 +108,18 @@
 |---|---|
 | `agent` / `agent tui [--server]` | 进入终端界面（无子命令时的默认行为，界面由 P1-015 实现） |
 | `agent server [--addr] [--port] [--log-level]` | 启动 HTTP 服务（前台常驻） |
-| `agent run <TASK> [--stream\|--json] [--server]` | 创建会话 → 发消息 → 消费 Run 事件流；`--stream` 逐段打印回复，`--json` 打印 `{sessionId, runId, status, content}` |
+| `agent run <TASK> [--stream\|--json] [--server]` | 注册客户端 → 建下行流 → 创建会话 → 占用会话 → 发消息 → 消费下行流 → 释放占用 → 反注册；`--stream` 逐段打印回复，`--json` 打印 `{sessionId, runId, status, content}` |
 | `agent status [--server]` | 探活：服务地址、健康状态、版本与协议版本、运行时长、运行中 Run 数 |
 
 传输与错误处理约定：
 
 - HTTP 收发只经 `framework-http`（`reqwest` 后端，见 `docs/workspace.md` 的依赖表），客户端不直接使用 reqwest 发请求。
-- 两个客户端分工：普通接口带 30 秒总超时；事件流不设总超时——一次回复可能持续很久，总超时会在回复中途截断，连接存活由服务端心跳（15 秒）与用户中断决定。
+- 两个客户端分工：普通接口带 30 秒总超时；事件流不设总超时——一次回复可能持续很久，总超时会在回复中途截断，连接存活由客户端心跳（每 15 秒 `api/client/update {PING}`，服务端 45 秒无心跳即判超时）与用户中断决定。
 - 成功响应统一是 `R<T>`（`{"code":200,"message":"Success","data":<载荷>}`），Transport 负责解包后交给生成的 SDK；`Void` 的 204 空响应与 `Blob` 的原始响应体原样透传。
 - 错误分类：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的 `operation timed out` 文案。
 - 错误呈现统一为一行：非 JSON 错误体会折叠空白并截断到 200 字符，不把 HTML 或多行文本原样写到终端；退出码见上一节。
-- 客户端不出现任何 path 字面量：地址只来自生成的 `ApiDefinition.path`。`Run` 事件流在元数据里是 `Blob`，生成的 `run_stream` 只能整体返回响应体，因此 `Client::subscribe_run` 用同一个 `RUN_STREAM` 常量的 path/method 走流式读取并自行解析 SSE 帧。
+- 客户端不出现任何 path 字面量：地址只来自生成的 `ApiDefinition.path`。下行流 `api/client/stream` 在元数据里是 `Blob`，生成的 `client_stream` 只能整体返回响应体，因此 `Client::subscribe_client` 用同一个 `CLIENT_STREAM` 常量的 path/method 走流式读取，并由 `EventStream` 自行解析 SSE 帧（`: keepalive` 注释帧直接丢弃）。
+- 事件推送只有 `api/client/stream` 一条通道（`.steps/p1.1/decisions.md` D-P1.1-004）：客户端自行编排「注册 → 建流 → 占用 → 发消息 → 消费 → 对账」，不存在 Run 级事件流。
 
 ## SDK 生成
 
@@ -147,7 +148,7 @@
 
 **单一来源**：服务端 `#[web_api_*]` 标注的 handler 与 `#[auto_type]` / `#[auto_enum]` 标注的 DTO，全部位于 `crates/lib-web/src/`。客户端 SDK 完全由此生成，不存在第二份手写 API 定义。任何 API 变更先改这里。
 
-**接口文档**：人类可读的接口说明（领域划分、接口清单、参数表与样例）放在 `docs/api/`，入口是 `docs/api/readme.md`，按领域一文件（`probe.md`、`session.md`）。它只做说明、不构成第二份契约，与代码不一致时以代码为准；改接口时同步对应领域文档。
+**接口文档**：人类可读的接口说明（领域划分、接口清单、参数表与样例）放在 `docs/api/`，入口是 `docs/api/readme.md`，按领域一文件（`probe.md`、`session.md`、`runtime.md`、`occupancy.md`）。它只做说明、不构成第二份契约，与代码不一致时以代码为准；改接口时同步对应领域文档。
 
 ### 改 API 的完整步骤
 
@@ -170,7 +171,7 @@
 | 响应 DTO | `*VO` |
 | 枚举 | `<业务名>Kind`（与框架 `RCodeKind` 一致），生成侧为同名结构 + `<NAME>_ALL` / `<NAME>_MAP` 映射 |
 | 字段 | camelCase；id 用 `String`（D-018）；`i64` 在 wire 上以字符串传输（D-018）；查询参数不出现 `bool`（D-021） |
-| SSE 事件 | 端点是 `GET` + 查询参数，动作段用 `stream`；返回 `WebResponse::stream`，元数据里是 `Blob`（D-007），SDK 只导出 path 常量，事件类型由服务端枚举 + DTO 生成到两侧 SDK。判别字段统一 `event`，取值 snake_case，与 SSE 的 `event:` 行同值；帧编码用 `lib-web-core` 的 `sse` 模块，不手拼字符串（D-026） |
+| SSE 事件 | 端点是 `GET` + 查询参数，动作段用 `stream`（P1.1 起只有 `api/client/stream` 一条）；返回 `WebResponse::stream`，元数据里是 `Blob`（D-007），SDK 只导出 path 常量，事件类型由服务端枚举 + DTO 生成到两侧 SDK。判别字段统一 `event`，取值 snake_case，与 SSE 的 `event:` 行同值；帧编码用 `lib-web-core` 的 `sse` 模块，不手拼字符串；空闲保活由 `lib-web` 的帧合成层注入 `: keepalive` 注释帧（D-P1.1-001） |
 
 ### 统一错误响应
 
@@ -191,6 +192,12 @@
 P1-010 起的会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`，契约类型在 `types-core` 的 `session` 模块；P2 只替换实现、不改契约。接口清单、参数表、载荷字段与样例见 `docs/api/session.md`；Mock 行为边界、错误映射与 P2 替换点见 `.steps/p1/decisions.md` D-025。
 
 约定：会话与 Run 的 ID 走查询参数或请求体（无路径占位符）；`messageCount`、token 用量与 `*Ms` 时间戳按 D-018 以字符串传输；业务失败的 404（会话/Run 不存在）与 400（参数或状态不满足规则）由 `SessionError` 映射，错误体仍是统一的 `{code,message}`。
+
+### 运行时接口（P1.1）
+
+客户端连接与会话占用的接口定义在 `crates/lib-web/src/runtime/{api,occupancy_api,stream}.rs`，业务实现在 `service-core` 的 `runtime` 模块，契约类型在 `types-core` 的 `runtime` 模块。接口清单、帧格式与样例见 `docs/api/runtime.md` 与 `docs/api/occupancy.md`；决策与参数见 `.steps/p1.1/decisions.md`。
+
+约定：服务端推送只有 `api/client/stream` 一条通道（`api/run/stream` 已移除）；Run 的执行由「会话被占用 + 消息创建」触发，未被占用的会话里 Run 停在 `QUEUED`；未注册与占用冲突一律 400 + 固定 message（过渡方案，映射集中在 `crates/lib-web/src/runtime/mod.rs` 的一个函数），客户端按 message 识别而不是按 code 猜测。
 
 ### API 版本管理
 
@@ -213,7 +220,7 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 | 端到端用例 | `lingting-agent-ui/tests/e2e/*.spec.ts`，Playwright + 真实服务端，由 `web.e2e` 执行 `pnpm exec playwright test`；`playwright.config.ts` 不启 `webServer`，服务端地址由 `WEBUI_BASE_URL` 传入（未设置时回落 `http://127.0.0.1:20102`） |
 | 端到端浏览器 | `make ui-e2e-install`（`pnpm exec playwright install chromium`）；`@playwright/test` 版本与 `lingting-agent-flow-ui` 对齐 |
 | 失败产物 | `tests/.artifacts/`（截图与追踪，已被 `.gitignore` 忽略） |
-| SDK 调用约束 | 所有请求经生成的 `ApiClient` 子类（`src/api/client.ts`）；SSE 用 fetch 流式响应自行切帧（`src/api/runStream.ts`），path 取自 `ApiDefinitions`，页面代码不出现 `api/…` 字面量（由 `web.sdk-only` 用例守护） |
+| SDK 调用约束 | 所有请求经生成的 `ApiClient` 子类（`src/api/client.ts`）；下行流用 fetch 流式响应自行切帧（`src/api/clientStream.ts`），path 取自 `ApiDefinitions.clientStream`，页面代码不出现 `api/…` 字面量（由 `web.sdk-only` 用例守护） |
 | 缩进 | 2 空格（根 `.editorconfig` 的 `[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]` 段；`[*]` 默认 4 空格只用于 Rust 等） |
 
 ## 生成物门禁与 CI

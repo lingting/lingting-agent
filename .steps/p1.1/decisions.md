@@ -1,6 +1,6 @@
 # P1.1 决策记录
 
-**状态：已开工（RT-001~RT-020 已完成，剩 Batch G 的文档回填与端到端验收）。** 本文件记录 P1.1 的阶段级决策。编号 `D-P1.1-xxx`；被否决的方案保留记录，不删除。
+**状态：已完成（RT-001 ~ RT-022 全部完成，21 条判据全部通过）。** 本文件记录 P1.1 的阶段级决策。编号 `D-P1.1-xxx`；被否决的方案保留记录，不删除。
 
 任务分解见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，协议与流程见 [README.md](README.md)。
 
@@ -417,12 +417,12 @@ max_bytes = 536870912
 
 ## 被本阶段修订的既有决策
 
-按仓库 `AGENTS.md` 的文档维护约束，回填写入对应文件（任务 RT-021），本阶段不动它们：
+按仓库 `AGENTS.md` 的文档维护约束，回填写入对应文件，执行期间不改它们；**回填已在 RT-021（2026-11-20）完成**，逐项结果如下：
 
 | 位置 | 原结论 | 修订方向 |
 |---|---|---|
 | `.steps/p1/decisions.md` D-007 | `api/run/stream` 按 `Blob` 进元数据，客户端自实现 SSE 消费 | 端点移除；SSE 契约转移到 `api/client/stream` |
 | `.steps/p1/decisions.md` D-011 | TUI 用「单一长连接 SSE + 独立 HTTP 请求」，手动重连 | 连接管理加入注册/心跳/占用，重连判据改为“客户端未注册” |
 | `.steps/p1/decisions.md` D-026 | 订阅 `api/run/stream` 即推进 `RUNNING`，消费方断开则落 `CANCELLED` | 触发点改为“会话被占用 + 消息创建”；断开语义转移到断连处理链 |
-| `.steps/p2/decisions.md` D-P2-006 | Run 由 `api/run/stream` 订阅触发 | 同上；P2 整体内容已过期，需重新生成 |
+| `.steps/p2/decisions.md` D-P2-006 | Run 由 `api/run/stream` 订阅触发 | 同上；已在 P2 方案重新生成时标 `REJECTED`，新结论见 `p2/decisions.md` D-P2-028 |
 | `docs/reports/p1-020-acceptance.md` E-1 | 以 `api/run/stream` 的帧格式作为判据 | 判据转移到 `api/client/stream` |

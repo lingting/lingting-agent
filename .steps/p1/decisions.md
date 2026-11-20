@@ -25,11 +25,11 @@
 | D-004 | API Schema 唯一来源与元数据获取方式 | DECIDED |
 | D-005 | 代码生成时机 | DECIDED (P1-007 已固化) |
 | D-006 | 生成物是否纳入版本控制 | DECIDED |
-| D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011；浏览器侧消费 P1-016 定案) |
+| D-007 | SSE 与 SDK 的类型化支持 | DECIDED (P1-011；浏览器侧消费 P1-016 定案；**P1.1 修订**：端点改为 `api/client/stream`) |
 | D-008 | 路径参数与 REST 风格路径 | DECIDED (已核实) |
 | D-009 | WebUI 静态资源嵌入方案 | DECIDED (P1-017 落地：构建期 codegen + gzip) |
 | D-010 | WebUI 技术栈 | DECIDED (P1-016 脚手架与 SDK 接入已落地) |
-| D-011 | TUI 与 Server 的连接管理 | DECIDED (P1-015 落地) |
+| D-011 | TUI 与 Server 的连接管理 | DECIDED (P1-015 落地；**P1.1 修订**：加入注册 / 心跳 / 占用，重连判据改为「客户端未注册」) |
 | D-012 | Server 地址配置与发现 | DECIDED |
 | D-013 | 优雅关闭实现方式 | DECIDED (P1-013 落地：框架公开 API) |
 | D-014 | 鉴权策略 | DECIDED (已实测) |
@@ -44,7 +44,7 @@
 | D-023 | 日志目录与归档策略 | DECIDED |
 | D-024 | 统一错误响应与错误码分配 | DECIDED |
 | D-025 | P1 Mock 会话契约与 P2 替换点 | DECIDED |
-| D-026 | P1 Streaming 契约（RunEvent + SSE） | DECIDED |
+| D-026 | P1 Streaming 契约（RunEvent + SSE） | DECIDED (**P1.1 修订**：`api/run/stream` 移除，Run 触发点改为「会话被占用 + 消息创建」) |
 | D-027 | CORS、静态资源与 WebUI 兜底路由 | DECIDED |
 | D-028 | 优雅关闭与生命周期 | DECIDED |
 | D-029 | CLI 命令结构与客户端 Transport | DECIDED |
@@ -194,6 +194,7 @@
 - **P1-011 定案**：采用方案 1。缓解手段已验证 —— 生成物导出 `RUN_STREAM.path`（Rust）与 `ApiDefinitions.runStream.path`（TS），客户端不手写 path 字面量；事件类型来自生成的 `RunEvent` / `RunEventKind`。方案 2 仍是正确终局，留作框架演进项（P2 前评估）。具体事件契约与断线语义见 D-026。
 - **P1-016 WebUI 落地结论（客户端侧消费方式）**：浏览器端选 **fetch 流式响应 + 自行解析 SSE 帧**，不用原生 `EventSource`。三条理由：`EventSource` 拿不到订阅失败时的 4xx 错误体（只会 `onerror`）、断线后自动重连（同一 Run 重订阅会被服务端 400 拒绝）、且无法主动中断；而 `fetch` 的 `AbortSignal` 正好承载「停止生成」。实现落 `lingting-agent-ui/src/api/runStream.ts`：path 取自生成的 `ApiDefinitions.runStream.path`，帧按空行切分、只解析 `data:` 行后反序列化成生成的 `RunEvent`，`id:` / `event:` / `retry:` 不参与解析（与 Rust 侧 `lib-bin-cli` 的 `EventStream` 同构）。
 - **状态**：`DECIDED`（P1-011）
+- **P1.1 修订（RT-021）**：`api/run/stream` 在 P1.1 已移除，SSE 端点的载体与契约转移到 `GET api/client/stream`（服务端推送的唯一通道），下文关于 `RUN_STREAM` / `runStream` 的描述仅保留为 P1 的历史记录。结论仍成立：SSE 在元数据里是 `Blob`，SDK 只导出 path 常量，帧由客户端自行解析（`CLIENT_STREAM` / `ApiDefinitions.clientStream`）；方案 2（框架新增 `ApiReturnType::Stream`）仍是留待评估的终局。详见 `.steps/p1.1/decisions.md` D-P1.1-004。
 
 ---
 
@@ -279,6 +280,7 @@
   7. **终端状态**：`ratatui::try_init` 进 raw 模式与备用屏幕（同时装 panic 钩子），恢复由 `Terminal` 的 `Drop` 调 `ratatui::try_restore`，正常退出、错误返回与 panic 走同一条恢复路径。
   8. **依赖**：`lib-bin-tui` 新增 Tokio（工作线程运行时）与 `unicode-width`（中英文混排的显示宽度与折行，消息区据此自己折行，避免依赖 Ratatui 的 unstable 行数接口），已同步 `docs/workspace.md` 的依赖表。
 - **状态**：`DECIDED`（2026-11-10：`bin-tests` 的 `tui.*` 用例已用无终端驱动覆盖按键迁移、输入编辑、渲染定位、流式闭环、退出时的取消与断线处理；raw 模式、备用屏幕与终端的退出恢复已由人工在真实终端验证通过）
+- **P1.1 修订（RT-021）**：连接管理在 P1.1 扩为「注册 → 建下行流 → 占用会话 → 发消息 → 消费下行流 → 退出前释放占用并反注册」，下文第 5 条的 `Esc` 与退出键仍走 `api/run/cancel`，但事件源改为 `api/client/stream`；重连判据改为收到 400 `客户端未注册，请重新连接`（服务端反注册后所有上行请求都返回它），重连后仍按服务端消息整体重载、不做本地拼接。第 3 条的「手动重连」结论不变。详见 `.steps/p1.1/decisions.md` D-P1.1-005 与 D-P1.1-011。
 
 ---
 
@@ -674,6 +676,7 @@
   - 取消：流式期间 `api/run/cancel` → 事件在下一段增量前停止（7 帧后 EOF），Run 保持 `CANCELLED`，不会被 `run_completed` 覆盖。
   - 负向用例：重复订阅 400 `Run 当前状态为 COMPLETED，不可订阅事件流`；未知 Run 404 `Run 不存在：999`。两条在日志里表现为框架的 `Web 请求异常`（`category=参数转换` / `路由不存在`），属既有观感问题，响应体与状态码正确。
 - **状态**：`DECIDED`
+- **P1.1 修订（RT-021）**：本项被拆成两部分。**已失效**：`GET api/run/stream` 端点、`RunStreamParams`、`lib-web/src/session/stream.rs`，以及第 4~7 条的事件语义（订阅即 `RUNNING`、断流落 `CANCELLED`、取消在流内生效）——它们随端点一并移除，记录保留作为 P1 的历史。**仍成立**：`RunEvent` / `RunEventKind` 的建模与 `sse` 帧编码（`lib-web-core::sse`，判别字段 `event` 为 snake_case）；帧编码现由 `crates/lib-web/src/runtime/stream.rs` 用于 `api/client/stream`，`heartbeat` 枚举值保留但不再产出。新语义：Run 只在会话被占用时由该会话的执行队列串行执行，事件先落盘 flush 再转发，断开与取消由断连处理链与事件文件的终态事件承担。详见 `.steps/p1.1/decisions.md` D-P1.1-003、D-P1.1-004、D-P1.1-011。
 
 ---
 

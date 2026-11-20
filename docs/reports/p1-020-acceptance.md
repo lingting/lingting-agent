@@ -108,7 +108,7 @@ debug 构建 `agent server --port 20102`（启动日志 `listening on 127.0.0.1:
 
 | 编号 | 结论 | 证据 |
 |---|---|---|
-| E-1 | 通过 | `curl -N api/run/stream?runId=…` 输出 `id:` / `event:` / `data:` 三行一帧、空行分隔；响应头 `content-type: text/event-stream; charset=utf-8`、`cache-control: no-cache`、`x-accel-buffering: no` |
+| E-1 | 通过（判据已由 P1.1 取代） | 原判据是 `curl -N api/run/stream?runId=…` 输出 `id:` / `event:` / `data:` 三行一帧、空行分隔，响应头 `content-type: text/event-stream; charset=utf-8`、`cache-control: no-cache`、`x-accel-buffering: no`。P1.1 移除了该端点，帧格式与响应头契约转移到 `GET api/client/stream`（`.steps/p1.1/decisions.md` D-P1.1-001），结论见 `.steps/p1.1/acceptance.md` AA-6 / AA-12 |
 | E-2 | 通过 | 事件序列 `run_started` → 16 × `message_delta` → `run_completed`，`seq` 从 0 连续递增到 17，`run_completed` 带 `status=COMPLETED` 与 token 用量 |
 | E-3 | 通过（口径修订，P2 验收） | 心跳只在单次等待超过 `HEARTBEAT_INTERVAL = 15s` 时补发（`service-core/src/session/stream.rs`），而 Mock 每 120 ms 推一段增量，当前契约下不存在可观测的心跳场景；代码路径已在，验证推至 P2 的真实 LLM 长等待 |
 | E-4 | 通过（口径修订，P2 验收） | Mock 不实现失败分支，`run_failed` 在 P1 不产出；等价的「终止事件 + 流正常结束」由新增用例 `session.stream_terminal`（`server_shutdown` 带 `status=CANCELLED` 与可读 `error`，随后流结束）和 `web.shutdown` 覆盖；`run_failed` 随 P2 真实执行一起验证 |
@@ -174,7 +174,7 @@ debug 构建 `agent server --port 20102`（启动日志 `listening on 127.0.0.1:
 | `crates/service-core/src/session/stream.rs` | Mock 生产方（回显 + 4 字符 / 120 ms） | Agent Runtime 的 Run 执行与事件推送 |
 | `crates/lib-web/src/session/api.rs` | handler 已按契约实现 | 不改（只换 service 实现） |
 | `crates/lib-bin-cli/src/client/` | 生成的 path 常量 + 自研 Transport / SSE 解析 | 不改 |
-| `lingting-agent-ui/src/api/`（`client.ts`、`runStream.ts`） | fetch Transport + fetch 流切帧 | 不改 |
+| `lingting-agent-ui/src/api/`（`client.ts`、`clientStream.ts`） | fetch Transport + fetch 流切帧（P1.1 起消费 `api/client/stream`，原 `runStream.ts` 已删除） | 不改 |
 | `make gen` 生成链路 | `lib-web` 的 `#[web_api_*]` → 两份 SDK | 不改；新增接口只加定义不手写 SDK |
 
 **P2 需要接手的验证项**

@@ -1,6 +1,6 @@
 # P1.1 验收清单
 
-**状态：已开工（RT-001~RT-004 已完成）。** 阶段边界与协议见 [README.md](README.md)，任务见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)。
+**状态：已完成（2026-11-20，21 条判据全部通过）。** 逐条结论与证据见 [`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)。阶段边界与协议见 [README.md](README.md)，任务见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)。
 
 逐条判据，全部通过才算本阶段完成。用例落在 `crates/bin-tests`（仓库 `AGENTS.md` 第 28 条）；除明确标注「人工」的条目，其余以自动化用例的结果为准。
 
@@ -56,6 +56,6 @@
 
 ## 完成判定
 
-- 全部 21 条通过，且 `tasks.md` 的全部任务标记为 `[x]`。
+- 全部 21 条通过，且 `tasks.md` 的全部任务标记为 `[x]`。（2026-11-20 达成：21 条通过、RT-001 ~ RT-022 全部 `[x]`）
 - `docs/workspace.md`、`docs/api/` 与代码一致；`p1` / `p2` 的相关决策已回填（清单见 [README.md](README.md) 第十一节）。
 - 本阶段验收通过后，**重新生成 P2 方案**（原 `p2/` 内容已过期，见 `p2/README.md` 顶部说明）。

@@ -1,7 +1,7 @@
 //! SSE（Server-Sent Events）帧编码：`id` / `event` / `data` 的组装与响应头约定。
 //!
 //! 编码与业务无关，只负责把“一条事件”拼成标准 SSE 帧；业务事件的类型由各领域 crate 定义，
-//! 响应组装由 `lib-web` 完成（P1 的唯一消费者是 `GET api/run/stream`，见 D-007、D-026）。
+//! 响应组装由 `lib-web` 完成（P1.1 起唯一消费者是 `GET api/client/stream`，见 D-P1.1-001、D-P1.1-004）。
 
 use serde::Serialize;
 

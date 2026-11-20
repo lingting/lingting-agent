@@ -1,10 +1,10 @@
 # P1.1 客户端连接与会话运行时
 
-**状态：已开工（Batch A~F 完成：RT-001~RT-020；Batch G 待开工）。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已完成（RT-001 ~ RT-022 全部完成，21 条判据全部通过，证据见 [`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)）。** 任务见 [tasks.md](tasks.md)，验收见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 **设计依据**：`.plan/运行时设计.md`。本阶段把该设计的语义（注册客户端、心跳、断连处理、会话占用、原始事件文件）落成服务端运行时内核，并因此**移除 `api/run/stream`**。
 
-**阶段定位**：插在 P1 与 P2 之间的强序阶段。P2 原方案建立在“Run 由 `api/run/stream` 订阅触发”的前提上（`p2/decisions.md` D-P2-006），本阶段改变该前提，因此 **P2 现有内容已过期**，必须在本阶段验收通过后按 P2 目标重新生成方案。
+**阶段定位**：插在 P1 与 P2 之间的强序阶段。P2 原方案建立在“Run 由 `api/run/stream` 订阅触发”的前提上（`p2/decisions.md` D-P2-006），本阶段改变该前提，因此 P2 方案在本阶段验收通过后已按新前提重新生成（2026-11-20，新增 D-P2-028 / D-P2-029）。
 
 ---
 
@@ -83,7 +83,7 @@ stateDiagram-v2
 | 注册 | `POST api/client/create`（`ClientCreatePO {}`） | 返回 `ClientCreateVO { clientId, pongAtMs }`，**响应里的首个 pong 即注册成功信号** |
 | 下行流 | `GET api/client/stream`（`ClientStreamParams { clientId }`） | `text/event-stream`，承载 `inquiry`、`session_event`、`client_closed`；空闲时每 15s 一帧 `: keepalive` 注释帧；不支持 `Last-Event-ID`（不续传） |
 | ping / 问询应答 | `POST api/client/update`（`ClientUpdatePO { clientId, kind }`，`kind ∈ {PING, INQUIRY_ACK}`） | 同步返回 pong（`R<ClientUpdateVO { pongAtMs }>`）；`pong` **不**进下行流，一次心跳只有一帧 |
-| 主动断开 | `POST api/client/delete`（`ClientDeletePO { clientId }`） | 幂等：已移除也返回成功；返回 204（`Void`） |
+| 主动断开 | `POST api/client/delete`（`ClientDeletePO { clientId }`） | 幂等：标记窗口期内重复调用成功；反注册后同一 `clientId` 返回 400 固定 message；返回 204（`Void`） |
 | 建立占用 | `POST api/occupancy/create`（`OccupancyCreatePO { clientId, sessionId }`） | 成功即启动该会话运行时会话并打开事件文件；返回 `OccupancyVO`；同一对 (clientId, sessionId) 重复调用幂等返回当前占用 |
 | 释放占用 | `POST api/occupancy/delete`（`OccupancyDeletePO { clientId }`） | 幂等；返回 204（`Void`）；释放即停止运行时会话，该会话 `QUEUED` / `RUNNING` 的 Run 一律落 `CANCELLED`，追加终态事件后 flush |
 | 查询占用 | `GET api/occupancy/get`（`OccupancyGetParams { sessionId }`） | 返回当前占用者 `OccupancyVO`（无人占用时 404 `会话未被占用`） |
@@ -101,6 +101,8 @@ stateDiagram-v2
 | 客户端未注册 / 已被反注册 | 400 | `客户端未注册，请重新连接` |
 | 会话已被其他客户端占用 | 400 | `会话已被其他客户端占用` |
 | 客户端已占用其他会话 | 400 | `客户端已占用其他会话` |
+| 查询占用但无人占用 | 404 | `会话未被占用` |
+| 会话不存在（占用时校验） | 404 | `会话不存在：<sessionId>` |
 
 > 框架确认支持自定义 code 后，只改这三处的映射（RT-008 的收敛点），不改调用方的判断位置。
 

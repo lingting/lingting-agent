@@ -82,7 +82,7 @@ flowchart TB
 | Agent 领域层（agent） | `agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`、`agent-tool`、`agent-mcp`、`agent-skill` | Agent Runtime 与 Context、Tool、MCP、Skill 能力 |
 | 程序入口层（bin） | `bin-agent`、`bin-tui`（计划）、`bin-web`（计划）、`bin-mock-server`（计划） | 组装与启动 |
 
-另有开发期工具 `bin-tests`（源码位于 `crates/bin-tests`）：端到端测试入口，不属于上述四层，不参与分发，只依赖 `lib-bin-cli` 的客户端能力与 `lib-bin-tui` 的无终端驱动（`testing` feature），通过子进程运行服务端，并用 `framework-http` 直连静态资源 / 预检这类不经过 SDK 的路径，直接用 `framework-proc-core` 的构建器校验 SDK 导出行为；前端单元与端到端用例也由它转发执行。
+另有开发期工具 `bin-tests`（源码位于 `crates/bin-tests`）：端到端测试入口，不属于上述四层，不参与分发，依赖 `lib-bin-cli` 的客户端能力、`lib-bin-tui` 的无终端驱动（`testing` feature）与 `service-core` 的运行时内核（P1.1 起，用于在进程内驱动注册表、事件文件、断连链与轮转），通过子进程运行服务端，并用 `framework-http` 直连静态资源 / 预检这类不经过 SDK 的路径，直接用 `framework-proc-core` 的构建器校验 SDK 导出行为；前端单元与端到端用例也由它转发执行。
 
 ### 2.2 依赖方向表示法
 
@@ -122,6 +122,7 @@ A -> B
 - 通用业务 DTO。
 - 通用业务枚举。
 - 通用领域事件。
+- 领域模块按领域分目录：`session`（会话 / 消息 / Run 契约）、`runtime`（客户端连接与会话占用契约，P1.1 起）。
 
 边界（明确不做）：
 
@@ -158,6 +159,10 @@ service-core
     +-- repository/     数据访问，仅由本 Crate 的 service 调用
     |
     +-- holder/         仅在确实需要跨调用共享状态时引入
+    |
+    +-- session/        P1 的会话业务与内存 Mock 存储（P2 换 Repository + Agent Runtime）
+    |
+    +-- runtime/        P1.1 的客户端注册表、会话占用、事件文件与断连处理链
 ```
 
 边界：
@@ -472,7 +477,8 @@ Web 基础能力（参考 `lingting-ai-gateway` 的 `lib-web-core`）。
 - 服务端 HTTP API。
 - API 路由。
 - Request / Response Handler。
-- SSE Endpoint。
+- SSE Endpoint（P1.1 起只有 `GET api/client/stream` 一条下行通道）。
+- 客户端连接与会话占用的运行时接口（`crates/lib-web/src/runtime/`，规则全在 `service-core`）。
 - API Metadata 收集。
 - 统一错误响应契约（`ApiError`，`auto_type`，随 SDK 生成导出；映射规则见 `docs/develop.md` 与 D-024）。
 - 探活接口 `health` / `version`（P1 位于探针模块），以及仅 debug 构建注册的关闭联调接口 `shutdown`。
@@ -495,7 +501,7 @@ CLI 公共组件，同时承载客户端的共享能力。
 - 命令分发所需的公共能力。
 - Server API Client 调用。
 - 生成的 Rust SDK 接入。
-- 客户端连接管理。
+- 客户端连接管理：注册、心跳、会话占用与下行流消费（P1.1 起）。
 - 客户端错误处理。
 - 配置装载（Server 地址、端口与日志级别，见 `docs/develop.md`）。
 
@@ -513,7 +519,7 @@ TUI 公共组件。
 - Streaming 展示。
 - 用户输入。
 - 交互事件。
-- TUI 与 Server 连接。
+- TUI 与 Server 连接：先注册并建下行流，占用会话后发消息，退出前释放占用并反注册（P1.1 起）。
 - 无终端驱动（`testing` feature）：供 `bin-tests` 驱动界面状态机、工作线程与渲染，不进入 raw 模式、不写备用屏幕。
 
 边界：通过生成的 Rust SDK 请求 Server，不负责 Agent Runtime。
@@ -620,7 +626,7 @@ manager-agent -> service-agent
 | `lib-core` | 无 | framework 基础能力 | 任何业务 / Agent / Web / Binary Crate |
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
-| `service-core` | `types-core`、`agent-core`（仅类型层，P2 起）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`）；Tokio（异步 Service 接口与内部定时任务） | `agent-*` 中除 `agent-core` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`lib-web*`、`bin-*` |
+| `service-core` | `types-core`、`agent-core`（仅类型层，P2 起）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`）；Tokio（异步 Service 接口与内部定时任务）；P1.1 起 `framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转）、`serde_json`（事件文件行格式） | `agent-*` 中除 `agent-core` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`lib-web*`、`bin-*` |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
@@ -630,15 +636,15 @@ manager-agent -> service-agent
 | `agent-route` | `agent-core`、`service-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-tool`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
-| `lib-web` | `lib-web-core`、`service-core`、`agent-core`（契约类型，P2 起）、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体） | `lib-bin-*`、`bin-*` |
+| `lib-web` | `lib-web-core`、`service-core`、`agent-core`（契约类型，P2 起）、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体）、Tokio（下行流的保活定时器与通道接收端） | `lib-bin-*`、`bin-*` |
 | `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | `framework-http`（HTTP 收发，启用 `reqwest` 后端）、Clap、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber`、Tokio（客户端命令的运行时）、`url`（查询串编码） | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖）；也不得直接依赖 reqwest 发请求（HTTP 只经 `framework-http`） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui、Tokio（工作线程的异步运行时）、`unicode-width`（显示宽度与折行） | Agent Runtime、服务端业务实现 |
-| `lib-bin-web` | `lib-web`、`lib-web-core`、`service-core`、`agent-runtime`、`lib-db`（后三者用于启动装配，P2 起）、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 的业务方法调用（只做构造与注入）、业务逻辑 |
+| `lib-bin-web` | `lib-web`、`lib-web-core`、`service-core`、`agent-runtime`、`lib-db`（后三者用于启动装配，P2 起）、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、`framework-timer`（启动心跳扫描与事件文件轮转任务）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 的业务方法调用（只做构造与注入）、业务逻辑 |
 | `bin-agent` | `lib-bin-cli`、`lib-bin-tui`、`lib-bin-web`、`lib-core` | — | 直接实现业务逻辑 |
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
 | `bin-mock-server`（计划） | `lib-web-core`、`lib-core` | Axum / `framework-web-axum` | `agent-runtime`、`service-core`、`lib-web` |
-| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`、`service-core`（不得进程内启动服务端）；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
+| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`service-core`、`types-core`、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-timer`（校对定时任务注册）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`（不得进程内启动服务端）；`service-core` 只用于进程内驱动运行时内核（注册表、事件文件、断连链、轮转），不得用它装配 Web 服务；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
 
 ### 5.2 依赖图
 
@@ -855,6 +861,8 @@ P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此
 P1 阶段不创建任何 `agent-*` Crate：`lib-web` 在 P1 只暴露 Mock 契约接口，Agent 领域 Crate 按第 8.2 节的阶段推进。
 
 Session / Message / Run 的契约类型在 P1 是**阶段裁剪**：它们落在 `types-core` 的 `session` 模块（P2 建 `agent-core` 后按 6.2 整体迁移，类型名与字段不变），Mock 业务与内存存储落在 `service-core` 的 `session` 模块，`lib-web` 的 `session` 模块只做 Handler 与错误映射。详见 `.steps/p1/decisions.md` D-025。
+
+P1.1 的运行时内核同样按领域落模块，不新增 Crate：契约类型在 `types-core` 的 `runtime` 模块（客户端连接与占用），注册表、占用、事件文件、断连处理链与定时任务在 `service-core` 的 `runtime` 模块，`lib-web` 的 `runtime` 模块只做 Handler、帧合成与错误映射；`lib-web` 的 `session/stream.rs` 随 `api/run/stream` 一并删除，事件推送只剩 `api/client/stream`。详见 `.steps/p1.1/decisions.md` D-P1.1-001 ~ D-P1.1-004。
 
 ### 8.1.1 P2 计划的依赖边（尚未实现）
 

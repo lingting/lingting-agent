@@ -4,7 +4,7 @@
 
 - 定义位置：`crates/lib-web/src/session/api.rs`（handler）、`crates/types-core/src/session/`（契约类型）
 - 业务实现：`crates/service-core/src/session/`（P2 换成 Repository + Agent Runtime）
-- 契约决策与 P2 替换点：`.steps/p1/decisions.md` D-025；事件流契约见 D-007、D-026
+- 契约决策与 P2 替换点：`.steps/p1/decisions.md` D-025；Run 触发与 `api/run/stream` 移除见 `.steps/p1.1/decisions.md` D-P1.1-004（P1 的 D-007 / D-026 已按此修订）
 
 ## 接口清单
 
@@ -16,7 +16,6 @@
 | POST | `api/message/create` | `MessageSendPO`（请求体） | `MessageSendVO` | 写入用户消息并创建 `QUEUED` 的 Run |
 | GET | `api/run/get` | `RunGetParams`（查询参数） | `Run` | Run 不存在 404 |
 | POST | `api/run/cancel` | `RunCancelPO`（请求体） | `Run` | 只允许取消 `QUEUED` / `RUNNING`，否则 400 |
-| GET | `api/run/stream` | `RunStreamParams`（查询参数） | SSE 事件流（`RunEvent`） | 订阅 Run 的事件流，只有 `QUEUED` 的 Run 可订阅 |
 
 会话与 Run 的 ID 只能走查询参数或请求体：`web_api` 的 path 不支持占位符（D-008）。
 
@@ -31,7 +30,6 @@
 | `MessageSendPO` | `content` | body | 是 | 用户消息正文；全为空白时 400 |
 | `RunGetParams` | `runId` | query | 是 | 目标 Run ID |
 | `RunCancelPO` | `runId` | body | 是 | 目标 Run ID |
-| `RunStreamParams` | `runId` | query | 是 | 目标 Run ID |
 
 ## 载荷类型
 
@@ -96,7 +94,7 @@
 | `delta` | `string \| null` | 增量文本；仅 `message_delta` 有值 |
 | `messageId` | `string \| null` | 助手消息 ID；`run_started` 与 `run_completed` 有值 |
 | `status` | `RunStatus \| null` | Run 最新状态；`run_started` 与 `run_completed` 有值 |
-| `error` | `string \| null` | 失败或终止原因；仅 `run_failed` 与 `server_shutdown` 有值，不含内部细节 |
+| `error` | `string \| null` | 失败或终止原因；仅 `run_failed`、`run_cancelled` 与 `server_shutdown` 有值，不含内部细节 |
 | `inputTokens` | `string \| null` | 输入 token 用量；`run_started` 与 `run_completed` 有值（Mock 按字符数估算） |
 | `outputTokens` | `string \| null` | 输出 token 用量；`run_completed` 有值（Mock 按字符数估算） |
 
@@ -104,32 +102,33 @@
 
 | 取值 | 触发时机 | 额外有值的字段 |
 |---|---|---|
-| `run_started` | 订阅成功、Run 转为 `RUNNING` | `status`、`messageId`、`inputTokens` |
+| `run_started` | Run 被推进到 `RUNNING`（由会话执行队列触发） | `status`、`messageId`、`inputTokens` |
 | `message_delta` | 助手回复的增量片段 | `delta` |
 | `run_completed` | Run 正常结束，助手消息已落库 | `status`、`messageId`、`inputTokens`、`outputTokens` |
 | `run_failed` | 执行失败；P1 的 Mock 不产出，留给 P2 的真实执行 | `error` |
-| `server_shutdown` | 服务关闭，事件流被主动终止（Run 已落成 `CANCELLED`） | `status`、`error` |
-| `heartbeat` | 空闲满 15 秒 | 仅公共字段 |
+| `run_cancelled` | 会话停止（占用释放 / 客户端断连）导致 Run 被取消 | `status`、`error`（固定原因文本） |
+| `server_shutdown` | 服务关闭导致 Run 终止（Run 已落成 `CANCELLED`） | `status`、`error` |
+| `heartbeat` | 保留值：Run 事件流的空闲保活；P1.1 起客户端心跳（`api/client/update`）承担保活，运行时会话暂不产出 | 仅公共字段 |
 
 P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事件的字段语义。
 
-## SSE 事件流
+## Run 触发与事件
 
-`GET api/run/stream` 不走 `R<T>` 包装，直接返回 `text/event-stream`；元数据里它是 `Blob`（D-007），SDK 只导出 path 常量，事件消费由客户端自己实现。
+`api/run/stream` 已移除（D-P1.1-004）：服务端推送只剩 `api/client/stream` 一条通道，Run 的执行由「会话被占用 + 消息创建」触发。
 
 | 项 | 约定 |
 |---|---|
-| content-type | `text/event-stream; charset=utf-8` |
-| 响应头 | `cache-control: no-cache`、`x-accel-buffering: no`（避免中间层缓冲） |
-| 帧格式 | `id: <seq>` + `event: <RunEventKind>` + `data: <RunEvent 的 JSON>`，空行结束一帧 |
-| 事件名 | 与 `data` 里的 `event` 字段同值（snake_case），客户端任取其一判别 |
-| 结束 | 服务端发出 `run_completed` 后关闭连接，没有额外的结束哨兵事件；服务关闭时改为发出 `server_shutdown` 后关闭连接（D-028） |
-| 状态推进 | 订阅即把 Run 从 `QUEUED` 推进到 `RUNNING`；`run_completed` 发出前助手消息与 Run 终态已落库 |
-| 断开 | 客户端断开（流被 drop）→ 生产方停止并释放任务，Run 落成 `CANCELLED`，不写半成品助手消息 |
-| 取消 | 流式期间调用 `api/run/cancel` → 生产方在下一段增量前发现状态变化并停止推送，Run 保持 `CANCELLED` |
-| 重复订阅 | 只有 `QUEUED` 可订阅；同一 Run 再次订阅返回 400，避免两个生产方写同一条助手消息 |
-| 服务关闭 | 生产方在下一段增量前发现关闭标记 → Run 落成 `CANCELLED` → 发出 `server_shutdown`（含 `status` 与可读 `error`）→ 连接关闭；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
-| 客户端 | 浏览器用 **fetch 流式响应 + 自行切帧**（`lingting-agent-ui/src/api/runStream.ts`）：原生 `EventSource` 拿不到订阅失败的 4xx 错误体、断线会自动重连（重订阅被 400 拒绝）、也无法中断，见 D-007 与 A-6 的 P1-016 结论；path 取自生成的 `ApiDefinitions.runStream.path`。Rust 侧用生成的 path 常量 + 自己的 SSE 解析 |
+| 触发点 | 一条规则：Run 只在所属会话**当前被占用**时执行，执行者是该会话的运行时会话 |
+| 占用时 | `api/occupancy/create` 把该会话存量 `QUEUED` 按 `createdAtMs` 升序串行执行；`api/message/create` 追加到队列尾部 |
+| 未占用时 | 新建的 Run 停在 `QUEUED`，不排队、不执行（日志记一条原因），客户端必须先占用 |
+| 串行 | 同一会话同一时刻最多一个 `RUNNING` Run；`QUEUED → RUNNING` 仍走状态 CAS，一个 Run 只有一个生产方 |
+| 落盘 | 事件先写进该会话的事件文件并 flush，再转发到 `api/client/stream`；文件是唯一事实源（见 [occupancy.md](occupancy.md) 的「事件文件」） |
+| 转发帧 | 一条 `RunEvent` 包成 `session_event` 帧，`data` 里是整条事件；`RunEvent.seq`（文件内序号）与外层 `ClientEvent.seq` 不同源 |
+| 终态 | `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` 之一收尾，之后不再向该文件追加 |
+| 断开 | 客户端断开（下行流被 drop）→ 断连处理链停止运行时会话 → `QUEUED` / `RUNNING` 的 Run 落 `CANCELLED` 并补终态事件 |
+| 取消 | `api/run/cancel` 把 Run 置 `CANCELLED` 并停止推送；客户端收到响应后本地收尾，事件文件的终态由会话停止时的写者补 `run_cancelled` |
+| 服务关闭 | 运行时会话以 `server_shutdown` 收尾（含 `status` 与可读 `error`）；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
+| 客户端 | 编排顺序为 `client/create` → `client/stream` → `occupancy/create` → `message/create` → 消费 `session_event` → `run/get` 对账；下行帧格式、心跳与问询见 [runtime.md](runtime.md)，TUI 与 WebUI 都用 fetch 流式响应自行切帧 |
 
 ## 请求与响应样例
 
@@ -181,26 +180,6 @@ HTTP/1.1 200 OK
 {"code":200,"message":"Success","data":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"CANCELLED","model":"mock-model","error":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225602000","finishedAtMs":"1767225602000"}}
 ```
 
-```text
-GET api/run/stream?runId=1842000000000000003
-
-HTTP/1.1 200 OK
-content-type: text/event-stream; charset=utf-8
-cache-control: no-cache
-x-accel-buffering: no
-
-id: 0
-event: run_started
-data: {"event":"run_started","seq":"0","runId":"1842000000000000003","sessionId":"1842000000000000001","createdAtMs":"1767225602000","delta":null,"messageId":"1842000000000000004","status":"RUNNING","error":null,"inputTokens":"2","outputTokens":null}
-
-id: 1
-event: message_delta
-data: {"event":"message_delta","seq":"1","runId":"1842000000000000003","sessionId":"1842000000000000001","createdAtMs":"1767225602120","delta":"收到你的","messageId":null,"status":null,"error":null,"inputTokens":null,"outputTokens":null}
-
-id: 2
-event: run_completed
-data: {"event":"run_completed","seq":"2","runId":"1842000000000000003","sessionId":"1842000000000000001","createdAtMs":"1767225603000","delta":null,"messageId":"1842000000000000004","status":"COMPLETED","error":null,"inputTokens":"2","outputTokens":"52"}
-```
 
 ## 错误响应
 
@@ -212,15 +191,13 @@ data: {"event":"run_completed","seq":"2","runId":"1842000000000000003","sessionI
 | `run/get`、`run/cancel` 的 `runId` 不存在 | 404 | `Run 不存在：<runId>` |
 | `message/create` 的 `content` 全为空白 | 400 | `消息内容不能为空` |
 | 取消已结束的 Run | 400 | `Run 当前状态为 <STATUS>，不可取消` |
-| `run/stream` 的 `runId` 不存在 | 404 | `Run 不存在：<runId>` |
-| 订阅的 Run 不处于 `QUEUED`（正在执行或已结束） | 400 | `Run 当前状态为 <STATUS>，不可订阅事件流` |
 | 请求体或查询参数缺失、类型不符 | 400 | 框架固定文案（`请求参数转换失败` / `查询参数转换失败` / `请求体不是有效的 JSON`） |
 | 服务内部错误（如 ID 生成失败） | 500 | `服务器内部错误`，细节只进日志 |
 
 ## Mock 行为边界
 
 - 存储是进程内内存（`Mutex<HashMap>`），**重启服务后会话、消息、Run 全部丢失**。
-- 发送消息只写入用户消息与 `QUEUED` 的 Run，不产出助手回复：助手消息与 `QUEUED → RUNNING → COMPLETED` 由 `api/run/stream` 的 Mock 生产方完成，从未订阅的 Run 会一直停在 `QUEUED`。
+- 发送消息只写入用户消息与 `QUEUED` 的 Run，不产出助手回复：助手消息与 `QUEUED → RUNNING → COMPLETED` 由该会话的运行时会话完成，因此**必须先 `api/occupancy/create` 占用会话**；未被占用的会话里 Run 会一直停在 `QUEUED`（D-P1.1-004）。
 - 助手回复的内容是回显用户输入（附一句说明），按 4 个字符一段、每段间隔 120ms 推送；`inputTokens` / `outputTokens` 按字符数估算，不是真实分词结果。
 - `messageCount` 与 `updatedAtMs` 在每次发送消息时更新；取消 Run 不影响会话统计。
 - 会话隔离由「消息按 `sessionId` 分桶」保证，不存在跨会话读取入口。

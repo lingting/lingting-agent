@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 完成：RT-014~RT-017；Batch F 完成：RT-018~RT-020）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已完成（RT-001 ~ RT-022 全部完成：Batch A 定稿、B 契约与骨架、C 连接与心跳、D 断连处理链、E 占用 / 事件文件 / 轮转、F 契约移除与客户端接入、G 文档回填与端到端验收）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)，验收证据见 [`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -254,16 +254,16 @@
 
 > 依赖：全部批次。
 
-- [ ] **RT-021 文档与既有决策回填**
+- [x] **RT-021 文档与既有决策回填**
 
   **目标**：按 `README.md` 第十一节的清单逐项回填。
   **涉及文件 / Crate**：`docs/workspace.md`、`docs/api/{readme,runtime,occupancy,session,probe}.md`、`.steps/README.md`、`.steps/p1/decisions.md`、`.steps/p2/decisions.md`、`docs/reports/p1-020-acceptance.md`。
   **验收标准**：
-  - [ ] 文档与代码一致，无第二份契约定义。
-  - [ ] D-007 / D-011 / D-026 / D-P2-006 的修订说明已写，`REJECTED` 记录保留。
+  - [x] 文档与代码一致，无第二份契约定义。
+  - [x] D-007 / D-011 / D-026 / D-P2-006 的修订说明已写，`REJECTED` 记录保留。
   **测试要求**：无。
 
-- [ ] **RT-022 端到端验收**
+- [x] **RT-022 端到端验收**
 
   **目标**：`crates/bin-tests` 运行时用例集：注册/心跳/超时/问询/主动断开/流断开/占用冲突/一对一约束/事件落盘顺序/轮转清理/关闭收尾/重连/旧端点 404。
   **验收标准**：`acceptance.md` 逐条通过。

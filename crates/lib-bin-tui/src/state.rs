@@ -278,7 +278,7 @@ impl App {
                 Vec::new()
             }
             Update::Notice { text } => {
-                // 等响应阶段出的错（建会话、发消息、订阅失败）要把阶段放回去，否则永远等下去；
+                // 等响应阶段出的错（建会话、发消息、建下行流失败）要把阶段放回去，否则永远等下去；
                 // 中断请求失败时回复本身还在进行，退回到流式阶段等事件流收尾。
                 self.phase = match self.phase {
                     Phase::Waiting => Phase::Idle,

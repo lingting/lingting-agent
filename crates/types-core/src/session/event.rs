@@ -29,7 +29,7 @@ pub enum RunEventKind {
     RunCancelled,
     /// 服务关闭：事件流被主动终止，Run 已落成 `CANCELLED`。
     ServerShutdown,
-    /// 心跳：长时间没有事件时保持连接不被中间层掐断。
+    /// 心跳：保留值。P1.1 起连接保活由客户端心跳（`api/client/update {PING}`）与下行流的 `: keepalive` 注释帧承担，运行时会话不再产出该事件。
     Heartbeat,
 }
 
