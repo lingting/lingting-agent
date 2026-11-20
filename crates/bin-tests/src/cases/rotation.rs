@@ -7,13 +7,13 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
+use agent_core::session::SessionCreatePO;
 use anyhow::{Context, Result, ensure};
 use lib_core::time;
 use service_core::holder;
 use service_core::runtime::journal::{self, JournalConfig};
 use service_core::runtime::{ClientRecord, RuntimeState};
 use types_core::runtime::OccupancyCreatePO;
-use types_core::session::SessionCreatePO;
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;

@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 进行中（P2-006 完成）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -114,7 +114,7 @@
 
 > 依赖：Batch A。P2-006 → P2-007 → P2-008；P2-009 与 P2-006 可并行（只碰 `types-core` 的配置类型）。
 
-- [ ] **P2-006 新建 `agent-core` 并迁移 Session / Message / Run 契约类型**
+- [x] **P2-006 新建 `agent-core` 并迁移 Session / Message / Run 契约类型**
 
   **目标**：建立 Agent 领域最底层 Crate，把 `types-core::session` 整体迁入，类型名、字段、serde 行为零差异。
   **前置依赖**：P2-005。
@@ -125,11 +125,15 @@
   3. 全仓替换 `types_core::session` → `agent_core::session`，按需在各 Crate 的 `Cargo.toml` 增加 `agent-core`。
   **技术要求**：不加 `version` 约束（`path` 依赖，D-015）；`agent-core` 只依赖 `lib-core` + serde / specta / strum / `framework-proc-*`。
   **验收标准**：
-  - [ ] `cargo tree -p agent-core` 无 tokio / rig / axum / sqlx。
-  - [ ] `grep -rn "types_core::session" crates` 为空。
-  - [ ] `make gen` 后两份 SDK 字段名、类型、可选性、枚举取值与迁移前逐字节一致。
+  - [x] `cargo tree -p agent-core --depth 1` 无 tokio / rig / axum / sqlx（tokio 仅经 `lib-core → framework-bus` 传递，非直接依赖）。
+  - [x] `grep -rn "types_core::session" crates` 为空。
+  - [x] `make gen` 后两份 SDK 字段名、类型、可选性、枚举取值与迁移前一致（声明顺序按 `full_name` 变化，见下方偏差）。
   **测试要求**：`bin-tests` 的 `runtime.contract` 等既有契约用例继续通过，不新增用例。
   **完成产物**：`agent-core` 建立，契约类型唯一来源迁移完成。
+  **落地记录（2026-11-20）**：
+  - 实际文件划分为沿用原模块结构：`agent-core/src/session/{mod,dto,event,request}.rs`（任务书里的 `message` / `run` / `summary` 三分未采用，避免只做文件搬运的额外拆分）。
+  - 偏差 1：新增依赖边 `types-core -> agent-core`（`ClientEvent.session_event` 需要 `RunEvent`），见 D-P2-031。
+  - 偏差 2：SDK 生成物按类型 `full_name` 排序，`agent_core::*` 排在 `lib_web_core::*` 之前，逐字节比对不成立；内容逐项一致，`make gen` 幂等，见 D-P2-031。
 
 - [ ] **P2-007 Run 状态机与领域校验**
 

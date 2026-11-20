@@ -5,13 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_core::session::{RunEvent, RunEventKind, SessionCreatePO};
 use anyhow::{Context, Result, ensure};
 use lib_core::time;
 use service_core::holder;
 use service_core::runtime::journal;
 use service_core::runtime::{ClientRecord, RuntimeState, handler};
 use types_core::runtime::OccupancyCreatePO;
-use types_core::session::{RunEvent, RunEventKind, SessionCreatePO};
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;

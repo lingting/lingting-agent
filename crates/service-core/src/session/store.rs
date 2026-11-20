@@ -3,9 +3,9 @@
 //! 会话隔离靠“消息按会话 ID 分桶”保证：任何读取都必须带会话 ID，
 //! 不存在跨会话查到消息的入口。
 
+use agent_core::session::{Message, MessageRole, Run, RunStatus, SessionSummary};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
-use types_core::session::{Message, MessageRole, Run, RunStatus, SessionSummary};
 
 /// 会话内存存储。
 #[derive(Default)]

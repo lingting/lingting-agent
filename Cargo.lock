@@ -15,6 +15,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-core"
+version = "26.11.0"
+dependencies = [
+ "framework-proc-auto",
+ "framework-proc-core",
+ "lib-core",
+ "serde",
+ "serde_with",
+ "specta",
+ "strum",
+ "strum_macros",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -281,6 +295,7 @@ dependencies = [
 name = "bin-tests"
 version = "26.11.0"
 dependencies = [
+ "agent-core",
  "anyhow",
  "clap",
  "framework-http",
@@ -1789,6 +1804,7 @@ dependencies = [
 name = "lib-web"
 version = "26.11.0"
 dependencies = [
+ "agent-core",
  "anyhow",
  "bytes",
  "framework-proc-auto",
@@ -2970,6 +2986,7 @@ dependencies = [
 name = "service-core"
 version = "26.11.0"
 dependencies = [
+ "agent-core",
  "framework-bus",
  "framework-proc-timer",
  "framework-timer",
@@ -3673,6 +3690,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "types-core"
 version = "26.11.0"
 dependencies = [
+ "agent-core",
  "framework-proc-auto",
  "framework-proc-core",
  "lib-core",

@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::session::SessionError;
 use crate::session::store::Store;
-use lib_core::{id, time};
-use types_core::session::{
+use agent_core::session::{
     Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStatus,
     SessionCreatePO, SessionSummary,
 };
+use lib_core::{id, time};
 
 /// 未指定标题时的默认会话标题。
 const DEFAULT_TITLE: &str = "新会话";

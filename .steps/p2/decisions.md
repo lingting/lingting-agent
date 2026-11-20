@@ -571,6 +571,22 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 
 ---
 
+## D-P2-031 契约类型迁入 `agent-core` 的依赖边与生成物顺序
+
+- **问题**：`types-core::runtime::client::ClientEvent` 的字段 `session_event: Option<RunEvent>` 是下行事件载荷（契约字段，不能改），而 `RunEvent` 按 P2-006 要迁入 `agent-core`；`agent-core` 不依赖 `types-core`，两个 Crate 之间必须存在一条依赖边。
+- **可选方案**：
+  1. `types-core -> agent-core`：只加一条边，模块划分与 P2-006 清单一致 —— **采用**（用户确认）。
+  2. 把 `runtime`（客户端连接与会话占用 DTO）一并迁入 `agent-core`：违背 README / D-P2-018 的「`runtime` 不属于 Agent 领域、不迁移」结论。
+  3. `RunEvent` / `RunEventKind` 留在 `types-core` 由 `agent-core` 重导出：契约类型被拆到两个 Crate，与「`agent-core` 是契约唯一来源」冲突。
+- **决策**：
+  1. 新增依赖边 `types-core -> agent-core`（`agent-core` 仍不依赖 `types-core`，不构成循环）。`docs/workspace.md` 5.1 中 `types-core` 的禁止依赖一栏需相应改为「允许 `agent-core` 这一类型层，仍禁止 service / web / bin」，由 P2-030 回填。
+  2. `session` 模块整体迁入 `crates/agent-core/src/session/`，文件划分（`dto` / `event` / `request`）与内容不变；`types-core` 只保留 `runtime`。
+  3. **生成物顺序**：SDK 生成器按类型 `full_name`（含 crate 路径）排序（`framework-proc-core` 的 `type_builder` / `enum_builder`）。类型从 `types_core::session::*` 变为 `agent_core::session::*` 后，`packages/sdk-rust/src/types.rs` 的声明顺序随之变化（`agent_*` 排在 `lib_web_core::*` 之前），**字段名、类型、可选性、枚举取值与迁移前逐项一致**。因此 P2-006 的判据按「内容一致 + 顺序按 `full_name` 重排」执行，不按逐字节比对；`packages/sdk-ts/dist/types.d.ts` 排序键相同，同样只是顺序差异。
+- **理由**：`RunEvent` 是对外契约的载荷类型，不能为迁就 Crate 边界改写；`types-core` 引一个纯类型 Crate 的代价远小于拆分契约或整体搬迁 `runtime`。
+- **状态**：`DECIDED`（`docs/workspace.md` 5.1 / 6.2 的回填归 P2-030）。
+- **承接任务**：P2-006、P2-008、P2-009、P2-030。
+---
+
 ## 附：API 契约核对（P2-005 产出）
 
 25 条接口逐条核对 `method` / `path` / 入参 / 出参，**P2 全部不变**（D-P2-014）。入参 / 出参列给的是 P1.1 落地后的类型名。

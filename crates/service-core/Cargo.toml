@@ -12,6 +12,8 @@ publish = false
 [dependencies]
 lib-core = { workspace = true }
 types-core = { workspace = true }
+# 契约类型唯一来源（P2-006 起）：会话 / 消息 / Run 与事件。
+agent-core = { workspace = true }
 
 # Mock 事件流生产任务：定时投递事件 + 用通道向消费方投递事件。
 tokio = { workspace = true }

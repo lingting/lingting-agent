@@ -11,6 +11,8 @@ publish = false
 
 [dependencies]
 lib-core = { workspace = true }
+# `runtime::client::ClientEvent` 的载荷 `RunEvent` 来自 Agent 契约类型（D-P2-031）。
+agent-core = { workspace = true }
 
 # 宏展开使用绝对路径 `::framework_proc_auto` / `::framework_proc_core` / `::serde` /
 # `::serde_with` / `::specta` / `::strum_macros`，因此必须都是直接依赖；

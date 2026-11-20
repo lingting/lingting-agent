@@ -10,6 +10,7 @@ members = [
     "crates/lib-bin-web",
     "crates/types-core",
     "crates/service-core",
+    "crates/agent-core",
     "crates/bin-tests",
 ]
 
@@ -34,6 +35,7 @@ lib-bin-tui = { path = "crates/lib-bin-tui" }
 lib-bin-web = { path = "crates/lib-bin-web" }
 types-core = { path = "crates/types-core" }
 service-core = { path = "crates/service-core" }
+agent-core = { path = "crates/agent-core" }
 bin-tests = { path = "crates/bin-tests" }
 
 framework-bus = { path = "../lingting-rust-framework/framework-bus" }

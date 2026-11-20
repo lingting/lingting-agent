@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use agent_core::session::{RunEvent, RunEventKind, SessionCreatePO as ContractSessionCreatePO};
 use anyhow::{Context, Result, anyhow, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
@@ -17,7 +18,6 @@ use service_core::holder;
 use service_core::runtime::{self, ClientRecord, RuntimeState, handler, journal};
 use tokio::sync::mpsc;
 use types_core::runtime::{ClientCloseReason, OccupancyCreatePO as ContractOccupancyCreatePO, OccupancyVO};
-use types_core::session::{RunEvent, RunEventKind, SessionCreatePO as ContractSessionCreatePO};
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;

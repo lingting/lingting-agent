@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::context::TestContext;
+use agent_core::session::RunEventKind as ContractRunEventKind;
 use anyhow::{Context, ensure};
 use framework_http::{HttpClient, HttpRequest};
 use lib_bin_cli::client::ClientError;
@@ -25,7 +26,6 @@ use types_core::runtime::ClientCloseReason as ContractClientCloseReason;
 use types_core::runtime::ClientEventKind as ContractClientEventKind;
 use types_core::runtime::ClientUpdateKind as ContractClientUpdateKind;
 use types_core::runtime::OccupancyVO as ContractOccupancyVO;
-use types_core::session::RunEventKind as ContractRunEventKind;
 
 /// 运行时领域用例。
 pub(crate) fn cases() -> Vec<Case> {

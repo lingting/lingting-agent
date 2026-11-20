@@ -4,6 +4,7 @@
 //! 需要 `await` 的动作（打开事件文件、向下行通道发送、总线通知）一律先取快照再放锁。
 //! 本模块只做内存记账，不感知传输，也不依赖任何 Web 框架。
 
+use agent_core::session::RunEvent;
 use lib_core::time::now_millis;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -11,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::sync::{Mutex, mpsc};
 use types_core::runtime::{ClientCloseReason, ClientEvent, ClientEventKind, ClientUpdateKind, OccupancyVO};
-use types_core::session::RunEvent;
 
 use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};

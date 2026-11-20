@@ -5,14 +5,14 @@
 //!
 //! Handler 只做“参数解包 + 业务调用 + 错误映射”，业务规则全部在 `service-core`。
 
+use agent_core::session::{
+    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
+    SessionSummary,
+};
 use anyhow::Result;
 use framework_web::{Json, Query, WebError, web_api_get, web_api_post};
 use service_core::holder;
 use service_core::session::SessionError;
-use types_core::session::{
-    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
-    SessionSummary,
-};
 /// 创建会话。
 #[web_api_post(path = "api/session/create")]
 pub async fn session_create(Json(po): Json<SessionCreatePO>) -> Result<SessionSummary> {

@@ -13,8 +13,8 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use agent_core::session::RunEvent;
 use tracing::warn;
-use types_core::session::RunEvent;
 
 /// 事件根目录名：`<应用数据目录>/events`，与 P2 的 `agent.db` 同级。
 pub const EVENTS_DIRECTORY: &str = "events";

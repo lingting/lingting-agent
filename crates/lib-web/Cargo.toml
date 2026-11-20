@@ -14,6 +14,8 @@ lib-core = { workspace = true }
 lib-web-core = { workspace = true }
 service-core = { workspace = true }
 types-core = { workspace = true }
+# Handler 的会话 / 消息 / Run DTO 来源（P2-006 起）。
+agent-core = { workspace = true }
 
 anyhow = { workspace = true }
 serde = { workspace = true }

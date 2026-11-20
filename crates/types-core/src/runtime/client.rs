@@ -8,7 +8,7 @@
 
 use framework_proc_auto::{auto_enum, auto_type};
 
-use crate::session::RunEvent;
+use agent_core::session::RunEvent;
 
 /// 注册的请求体：注册动作本身不携带字段，`clientId` 由服务端生成。
 #[auto_type]

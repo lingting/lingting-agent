@@ -1,7 +1,6 @@
-//! 通用领域类型：Settings、Provider、Model 与通用业务 DTO / 枚举。
+//! 通用领域类型：Settings、Provider、Model 与通用业务 DTO / 枚举，以及 P1.1 的客户端连接与会话占用契约。
 //!
-//! P1 没有 `agent-*` 领域 Crate，Session / Message / Run 的契约类型先落在本 Crate；
-//! P2 建立 `agent-core` 后按 `docs/workspace.md` 第六节整体迁移，类型名与字段不变。
+//! Session / Message / Run 的契约类型在 P2-006 迁入 `agent-core`（D-P2-018）；
+//! `runtime`（客户端连接与会话占用）不属于 Agent 领域，保留在本 Crate。
 
 pub mod runtime;
-pub mod session;
