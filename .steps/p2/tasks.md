@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 进行中（P2-006、P2-007 完成）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成，结论见 `decisions.md`；Batch C 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -154,7 +154,7 @@
   - `AgentError` 放在 `agent-core/src/error.rs`，手写 `Display` + `std::error::Error`，不引入 `thiserror`；`InvalidTransition` 的文案用 `RunStatus` 的 `Display`（`strum` 注入，取值即 wire 值 `QUEUED` / `RUNNING`）。
   - 除任务要求的 `can_transition_to` 外，补一个 `transition_to`，唯一用途是给 `InvalidTransition` 一个真实构造点，避免错误变体只有定义没有产出。
 
-- [ ] **P2-008 依赖切换与 SDK 生成回归**
+- [x] **P2-008 依赖切换与 SDK 生成回归**
 
   **目标**：确认类型迁移后生成物语义零差异，依赖方向成立。
   **前置依赖**：P2-006、P2-007。
@@ -164,12 +164,18 @@
   2. `cargo tree` 核对依赖方向：`agent-core` 无上层依赖；`service-core` 未依赖 `agent-runtime` 等。
   3. `make gen-check` 全流程通过。
   **验收标准**：
-  - [ ] 接口清单与 P1.1 一致（25 条），DTO 零差异。
-  - [ ] `make gen-check` 退出码 0。
+  - [x] 接口清单与 P1.1 一致（25 条），DTO 零差异（逐行内容集合比对，仅声明顺序按 `full_name` 变化）。
+  - [x] `make gen-check` 退出码 0。
   **测试要求**：`make test ARGS="sdk"` 与 `make test ARGS="runtime.contract"` 通过。
   **完成产物**：迁移回归记录。
+  **落地记录（2026-11-20）**：
+  - 生成物比对基线：用同一份源码（HEAD）在迁移前生成一次并留档，与迁移后生成结果逐文件比对。`sdk-rust/src/{api,enums,types}.rs`、`sdk-ts/dist/{api,enums,types}.{js,d.ts}`、`sdk-ts/package.json` 十项**行集合完全一致**，差异只有声明顺序（排序键是类型的 `full_name`，`agent_core::*` 排到 `lib_web_core::*` 之前，见 D-P2-031）。
+  - 规模核对：`make gen` 输出「路由 25 条，接口 25 条」，与 D-P2-014 的 25 条接口附表一致；Rust 侧 35 个 `pub struct`、枚举取值集合与迁移前一致。
+  - 依赖方向（`cargo tree`，`--depth 1`）：`agent-core` 只依赖 `lib-core` + `framework-proc-*` + serde / serde_with / specta / strum；`agent-core` 的调用方是 `types-core` / `service-core` / `lib-web` / `bin-tests`；`agent-core` 自身不含 `types-core`（无循环）；`service-core` 只新增 `agent-core` 一条 `agent-*` 边，未依赖 `agent-runtime` / `agent-route` / `agent-context*`。
+  - `make gen-check` 从零重建两份 SDK 后通过（清空 `packages/` → 重新生成 → 产物完整性 → `cargo check --workspace --all-targets`），退出码 0。
+  - 测试（用户授权后执行，2026-11-20）：`make test ARGS="runtime.contract"` 与 `make test ARGS="sdk"` 均通过（`runtime.contract`、`sdk.generator` 各 1 个用例，报告在 `target/tests/<运行 ID>/`）。
 
-- [ ] **P2-009 Provider / Model / Agent 配置类型（`types-core`）**
+- [x] **P2-009 Provider / Model / Agent 配置类型（`types-core`）**
 
   **目标**：定义 Provider / Model / Agent 配置的结构与校验，作为 P2-017 装载与 P2-015 解析的类型来源。
   **前置依赖**：P2-005。
@@ -180,10 +186,17 @@
   3. `Secret(String)`：`Debug` / `Display` 输出 `***`，取值只能 `expose()`。
   **技术要求**：**不加 `auto_*` 宏**（内部配置类型，不参与 SDK 生成）；不新增接口。
   **验收标准**：
-  - [ ] 配置类型字段与 `README.md` 的配置面一一对应，缺省值明确。
-  - [ ] `Secret` 的 `Debug` / `Display` 脱敏，且有唯一取值入口。
+  - [x] 配置类型字段与 `README.md` 的配置面一一对应，缺省值明确（常量集中在模块顶部，`Default` 引用同一组常量）。
+  - [x] `Secret` 的 `Debug` / `Display` 脱敏，且有唯一取值入口 `expose()`。
   **测试要求**：脱敏与缺省由 P2-017 的用例（`llm.security`）覆盖。
   **完成产物**：配置类型与 `Secret`。
+  **落地记录（2026-11-20）**：
+  - `types-core/src/config/{mod,provider,agent}.rs`：`ProviderConfig` / `ProviderKind`（`kebab-case`，只声明 `openai-compatible`）/ `ModelConfig` / `Secret` 在 `provider.rs`，`AgentConfig` 与五个缺省值常量在 `agent.rs`。
+  - 数值类型按现有配置风格取原生类型（`usize` 计数与 token、`u64` 毫秒），不用契约层的 `i64`——本模块不进 wire，装载方是 `lib-bin-cli`。
+  - 缺省值：`context_window = 8192` / `max_output_tokens = 1024` 落在 `ModelConfig` 字段上（`#[serde(default = ...)]`）；`AgentConfig` 用结构级 `#[serde(default)]` + `Default`，段缺省与字段缺省都能回落。
+  - `ProviderConfig` 的 `id` / `kind` / `base_url` / `default_model` 不给缺省值：这些值没有文档依据，取值来源与「缺段是否可启动」由 P2-017 决定，避免在类型层凭空编造默认值。
+  - `Secret` 用 `#[serde(transparent)]` 承载明文 `String`，`Debug` / `Display` 手写为 `***`，`expose()` 是唯一取值入口；未预置 `is_empty()` 之类便捷方法，需要时由调用方走 `expose()`。
+  - 本任务只定结构与缺省，**不做校验**（`kind` 取值由 serde 拒绝、`default_model` 必须出现在 `models`、数值范围校验都归 P2-017）。
 
 ---
 
