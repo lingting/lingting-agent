@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 进行中（P2-006 完成）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成，结论见 `decisions.md`；Batch B 进行中（P2-006、P2-007 完成）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -135,7 +135,7 @@
   - 偏差 1：新增依赖边 `types-core -> agent-core`（`ClientEvent.session_event` 需要 `RunEvent`），见 D-P2-031。
   - 偏差 2：SDK 生成物按类型 `full_name` 排序，`agent_core::*` 排在 `lib_web_core::*` 之前，逐字节比对不成立；内容逐项一致，`make gen` 幂等，见 D-P2-031。
 
-- [ ] **P2-007 Run 状态机与领域校验**
+- [x] **P2-007 Run 状态机与领域校验**
 
   **目标**：把 Run 的合法状态转换写成领域方法，非法转换有明确错误类型。
   **前置依赖**：P2-006。
@@ -145,10 +145,14 @@
   2. `AgentError { InvalidTransition, NotFound, Invalid, Internal }`；`Display` 文案对外可读、不含内部细节。
   3. 与 D-P2-004 的转换表逐条对照，覆盖 `run_cancelled`（P1.1 已有的事件值）。
   **验收标准**：
-  - [ ] 转换表与 D-P2-004 一致；非法转换有错误变体与文案。
-  - [ ] 终态不可再转有显式否定用例（由 P2-026 的 `run.cancel` 覆盖）。
+  - [x] 转换表与 D-P2-009（P2-004 定稿）一致；非法转换有错误变体与文案。
+  - [x] 终态不可再转在状态机上显式否定（终态到任意状态均为 `false`）；端到端否定用例由 P2-026 的 `run.cancel` 覆盖。
   **测试要求**：不新增单元测试；行为由 `bin-tests` 的 `run.*` 用例覆盖。
   **完成产物**：领域状态机。
+  **落地记录（2026-11-20）**：
+  - 契约类型仍留在 `session/dto.rs`，`session/run.rs` 只承载 `RunStatus` 的固有 impl，不搬动类型（避免只做文件搬运的改动）。
+  - `AgentError` 放在 `agent-core/src/error.rs`，手写 `Display` + `std::error::Error`，不引入 `thiserror`；`InvalidTransition` 的文案用 `RunStatus` 的 `Display`（`strum` 注入，取值即 wire 值 `QUEUED` / `RUNNING`）。
+  - 除任务要求的 `can_transition_to` 外，补一个 `transition_to`，唯一用途是给 `InvalidTransition` 一个真实构造点，避免错误变体只有定义没有产出。
 
 - [ ] **P2-008 依赖切换与 SDK 生成回归**
 
