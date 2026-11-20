@@ -4,21 +4,23 @@ use crate::{cors, shutdown, webui};
 use anyhow::{Context, Result, anyhow};
 use framework_web::{WebRoute, use_web};
 use framework_web_axum::{WebRouteWrapper, axum_builder};
+use service_core::runtime::JournalConfig;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{Instrument, info, info_span};
 
 /// 启动 Web Server 并常驻运行，收到关闭信号后完成优雅关闭再返回。
 ///
+/// `events` 是事件文件轮转配置：由 `bin-agent` 从 `config.toml` 解析后透传，启动时注入一次。
 /// 关闭链路与超时策略见 D-028：超时未能排空时以错误返回，由调用方转成非 0 退出码。
 /// 内部创建 Tokio 运行时，调用方按同步方式调用即可。
-pub fn serve(host: &str, port: u16) -> Result<()> {
+pub fn serve(host: &str, port: u16, events: JournalConfig) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("创建 Tokio 运行时失败")?;
 
-    let result = runtime.block_on(run(host, port));
+    let result = runtime.block_on(run(host, port, events));
     if let Err(error) = &result {
         // 日志已初始化，运行期错误写入日志（控制台 + 文件），调用方只需处理退出码。
         tracing::error!("服务运行失败：{error:#}");
@@ -26,15 +28,16 @@ pub fn serve(host: &str, port: u16) -> Result<()> {
     result
 }
 
-async fn run(host: &str, port: u16) -> Result<()> {
+async fn run(host: &str, port: u16, events: JournalConfig) -> Result<()> {
     // 记录启动时刻，供 health 接口返回启动时间与运行时长。
     lib_web::probe::mark_startup();
     // 运行时状态（客户端注册表 / 占用表 / 标记集合）：本进程唯一实例，启动时注入一次。
     // 与 P2 的 Repository 注入同形，`service_core::holder` 的单例替换留到 P2。
-    if !service_core::runtime::install(service_core::runtime::RuntimeState::new()) {
+    let state = service_core::runtime::RuntimeState::new().with_journal_config(events);
+    if !service_core::runtime::install(state) {
         tracing::warn!("运行时状态已注入，跳过重复注入");
     }
-    // 运行时定时任务（心跳扫描 / 问询投递 / 超时标记）：运行时唯一，关闭后由任务自己停手。
+    // 运行时定时任务（心跳扫描 / 问询投递 / 超时标记 / 事件文件轮转）：运行时唯一，关闭后由任务自己停手。
     framework_timer::start(None, framework_timer::TimerOption::default());
     // 链接锚点：不引用路由收集函数时，inventory 注册项会被链接器丢弃，接口会全部 404。
     let routes = lib_web::web_routes();

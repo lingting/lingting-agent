@@ -5,7 +5,7 @@
 //! 本模块只做内存记账，不感知传输，也不依赖任何 Web 框架。
 
 use lib_core::time::now_millis;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -15,7 +15,7 @@ use types_core::session::RunEvent;
 
 use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
-use super::journal;
+use super::journal::{self, JournalConfig};
 use super::session::RuntimeSession;
 
 /// 进程内运行时状态：由 `lib-bin-web` 启动时构造并注入。
@@ -24,6 +24,8 @@ pub struct RuntimeState {
     inner: Arc<RwLock<Registry>>,
     /// 事件文件根目录：显式注入（用例的临时目录）或首次使用时按应用目录推导并缓存。
     events_root: OnceLock<PathBuf>,
+    /// 事件文件轮转配置：启动时注入一次，运行期不变（不做热更新）。
+    journal: JournalConfig,
 }
 
 /// 注册表的全部内存数据，读写都走 `RuntimeState::inner` 这一把锁。
@@ -53,6 +55,7 @@ impl RuntimeState {
         Self {
             inner: Arc::new(RwLock::new(Registry::default())),
             events_root: OnceLock::new(),
+            journal: JournalConfig::default(),
         }
     }
 
@@ -61,6 +64,17 @@ impl RuntimeState {
         let state = Self::new();
         state.events_root.set(root.into()).ok();
         state
+    }
+
+    /// 换用指定的事件文件轮转配置（`lib-bin-web` 启动时按 `config.toml` 注入）。
+    pub fn with_journal_config(mut self, config: JournalConfig) -> Self {
+        self.journal = config;
+        self
+    }
+
+    /// 事件文件轮转配置：轮转任务与用例读它。
+    pub fn journal_config(&self) -> JournalConfig {
+        self.journal
     }
 
     /// 事件文件根目录：首次使用时按应用目录推导并缓存。
@@ -88,6 +102,16 @@ impl RuntimeState {
     /// 取出运行时会话：停止动作必须在锁外执行，因此先摘下再收尾。
     pub(crate) fn take_session(&self, session_id: &str) -> Option<RuntimeSession> {
         write(&self.inner).sessions.remove(session_id)
+    }
+
+    /// 摘下全部运行时会话：关闭流程逐条停止并 flush（停止动作在锁外执行）。
+    pub(crate) fn take_sessions(&self) -> Vec<RuntimeSession> {
+        std::mem::take(&mut write(&self.inner).sessions).into_values().collect()
+    }
+
+    /// 受保护的会话目录：正在占用（即正在写入）的会话，轮转只计不删。
+    pub fn occupied_sessions(&self) -> HashSet<String> {
+        read(&self.inner).occupancy_by_session.keys().cloned().collect()
     }
 
     /// 某个会话的事件生产方写入端：Run 执行方（RT-018）与用例据此投递事件。
@@ -184,6 +208,18 @@ impl RuntimeState {
         }
         inserted
     }
+
+    /// 服务关闭时的标记：**覆盖**已有原因，保证关闭导致的会话终止语义一律是 `ServerShutdown`。
+    ///
+    /// 关闭流程对全部客户端调用；返回本次是否真的写入（客户端已不在注册表里返回 `false`）。
+    pub fn mark_shutdown(&self, client_id: &str) -> bool {
+        let marked = write(&self.inner).mark_shutdown(client_id);
+        if marked {
+            super::handler::notify();
+        }
+        marked
+    }
+
     /// 取走全部标记（take 语义）：返回一次即清空，处理链因此天然幂等。
     pub fn take_marks(&self) -> Vec<(String, ClientCloseReason)> {
         let marks = std::mem::take(&mut write(&self.inner).marks);
@@ -302,6 +338,17 @@ impl Registry {
             return false;
         }
         self.marks.insert(client_id.to_string(), reason);
+        true
+    }
+
+    /// 服务关闭：无条件写 `ServerShutdown` 标记，覆盖已有原因（关闭是最后一次标记机会）。
+    fn mark_shutdown(&mut self, client_id: &str) -> bool {
+        let Some(record) = self.clients.get_mut(client_id) else {
+            return false;
+        };
+        record.state = ClientState::Marked;
+        self.marks
+            .insert(client_id.to_string(), ClientCloseReason::ServerShutdown);
         true
     }
 

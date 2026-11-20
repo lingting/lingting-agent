@@ -7,6 +7,12 @@
 //! addr = "127.0.0.1"
 //! port = 20100
 //! log_level = "info"
+//!
+//! [runtime.events]
+//! # 保留的会话目录数上限；0 表示不限制
+//! max_sessions = 200
+//! # data/events 下总字节数上限；0 表示不限制
+//! max_bytes = 536870912
 //! ```
 //!
 //! 服务端与客户端共用同一份地址来源（D-012）：`agent server` 用它决定监听地址，
@@ -46,6 +52,17 @@ pub struct ServerConfig {
     pub port: u16,
     /// 日志级别。
     pub log_level: LevelFilter,
+    /// 事件文件轮转配置（`[runtime.events]`）。
+    pub runtime_events: RuntimeEventsConfig,
+}
+
+/// 事件文件轮转配置：`None` 表示取服务端默认值，`Some(0)` 表示该维度不限制。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeEventsConfig {
+    /// 保留的会话目录数上限。
+    pub max_sessions: Option<u64>,
+    /// `data/events` 下总字节数上限。
+    pub max_bytes: Option<u64>,
 }
 
 /// 客户端连接配置。
@@ -65,6 +82,10 @@ pub fn resolve_server(args: &ServerArgs) -> Result<ServerConfig> {
         host,
         port,
         log_level: resolve_level(args.log_level.as_deref(), &file)?,
+        runtime_events: RuntimeEventsConfig {
+            max_sessions: file.runtime.events.max_sessions,
+            max_bytes: file.runtime.events.max_bytes,
+        },
     })
 }
 
@@ -211,6 +232,7 @@ fn load_file() -> Result<FileConfig> {
 #[serde(default)]
 struct FileConfig {
     server: FileServer,
+    runtime: FileRuntime,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -219,4 +241,18 @@ struct FileServer {
     addr: Option<String>,
     port: Option<u16>,
     log_level: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct FileRuntime {
+    events: FileRuntimeEvents,
+}
+
+/// 事件文件轮转配置：字段缺省时由服务端取默认值。
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct FileRuntimeEvents {
+    max_sessions: Option<u64>,
+    max_bytes: Option<u64>,
 }

@@ -1,15 +1,29 @@
-//! 运行时定时任务：心跳扫描、问询投递与超时标记（RT-010）。
+//! 运行时定时任务：心跳扫描、问询投递、超时标记与事件文件轮转（RT-010、RT-016）。
 //!
-//! 任务只做“判定 + 标记 + 投递”：真正的清理（反注册、停运行时会话、关下行通道）在断连处理链里；
-//! 一次扫描先取客户端快照再逐个判定，不持锁跨 `await`，也不阻塞事件写入。
+//! 任务只做“判定 + 标记 + 投递”与“统计 + 删除”：真正的清理（反注册、停运行时会话、关下行通道）
+//! 在断连处理链里；一次扫描先取快照再逐个判定，不持锁跨 `await`，也不阻塞事件写入。
+//! 轮转的统计与删除放在阻塞线程池里，同一时刻只有一份统计。
 
 use framework_proc_timer::timer;
 use framework_timer::TimerResult;
 use lib_core::lifecycle;
 use lib_core::time::now_millis;
+use tracing::{info, warn};
 use types_core::runtime::ClientCloseReason;
 
-use super::{ClientRecord, ClientState, RuntimeState};
+use super::{ClientRecord, ClientState, RuntimeState, journal};
+
+/// 轮转周期：启动后立即跑一次，之后按该周期执行（README 第六节）。
+///
+/// 宏参数只接受字面量，因此 `#[timer]` 上的 `60000` 必须与本常量保持一致。
+pub const ROTATION_INTERVAL_MS: i64 = 60_000;
+/// 轮转任务名：与 `#[timer]` 的函数名一致，`wake` 靠它按名唤醒。
+const ROTATION_TIMER: &str = "event_rotation";
+
+/// 唤醒一次轮转：每个运行时会话建立后调用，动作在定时任务的独立任务里执行。
+pub(crate) fn wake_rotation() {
+    framework_timer::wake(ROTATION_TIMER);
+}
 
 /// 扫描周期：超时客户端在 `CLIENT_TTL_MS` + 一个周期内被标记（README 第四节）。
 ///
@@ -55,5 +69,48 @@ async fn client_scan() -> TimerResult {
         return TimerResult::success();
     };
     scan(state, now_millis(), !lifecycle::is_shutdown());
+    TimerResult::success()
+}
+
+/// 轮转任务入口：统计 `data/events` 的会话目录与字节数，超限即最旧先删。
+///
+/// 统计与删除都在阻塞线程池里串行完成：不占异步 worker，也不阻塞事件写入。
+/// 关闭流程置位后直接返回：客户端与运行时会话已交给断连处理链收尾。
+#[timer(interval = 60000)]
+async fn event_rotation() -> TimerResult {
+    let Some(state) = super::state() else {
+        return TimerResult::success();
+    };
+    if lifecycle::is_shutdown() {
+        return TimerResult::success();
+    }
+    let config = state.journal_config();
+    if config.unlimited() {
+        return TimerResult::success();
+    }
+    let root = match state.events_root() {
+        Ok(root) => root.to_path_buf(),
+        Err(error) => {
+            warn!(%error, "推导事件文件根目录失败，跳过轮转");
+            return TimerResult::success();
+        }
+    };
+    // 保护判据只有占用表快照：不去探测文件状态，避免与正在写入的会话竞态。
+    let protected = state.occupied_sessions();
+    match tokio::task::spawn_blocking(move || journal::rotate(&root, config, &protected)).await {
+        Ok(Ok(summary)) if !summary.removed.is_empty() => info!(
+            removed = summary.removed.len(),
+            failed = summary.failed.len(),
+            sessions = summary.sessions,
+            bytes = summary.bytes,
+            "事件文件轮转完成"
+        ),
+        Ok(Ok(summary)) if !summary.failed.is_empty() => {
+            warn!(failed = summary.failed.len(), "事件文件轮转未能删除全部候选目录");
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => warn!(%error, "统计事件文件目录失败，跳过轮转"),
+        Err(error) => warn!(%error, "轮转任务执行失败"),
+    }
     TimerResult::success()
 }

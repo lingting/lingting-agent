@@ -5,9 +5,11 @@ mod disconnect;
 mod journal;
 mod occupancy;
 mod probe;
+mod rotation;
 mod runtime;
 mod sdk;
 mod session;
+mod shutdown;
 mod tui;
 mod web;
 
@@ -21,6 +23,8 @@ pub fn all() -> Vec<Case> {
     cases.extend(journal::cases());
     cases.extend(occupancy::cases());
     cases.extend(probe::cases());
+    cases.extend(rotation::cases());
+    cases.extend(shutdown::cases());
     cases.extend(runtime::cases());
     cases.extend(sdk::cases());
     cases.extend(session::cases());

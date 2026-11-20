@@ -272,6 +272,8 @@ impl RuntimeState {
             }
         }
         self.insert_session(session);
+        // 每个运行时会话建立后触发一次轮转：统计与删除在定时任务的独立任务里做，不阻塞事件写入。
+        super::timer::wake_rotation();
         Ok(())
     }
 

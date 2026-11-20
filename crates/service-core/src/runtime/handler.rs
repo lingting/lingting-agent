@@ -1,10 +1,11 @@
-//! 断连处理链：订阅总线通知、串行执行清理（RT-011 ~ RT-013）。
+//! 断连处理链：订阅总线通知、串行执行清理（RT-011 ~ RT-013、RT-017）。
 //!
 //! 所有断连来源只做两件事：在 [`RuntimeState`] 里写一次标记，再发一条
 //! [`ClientDisconnected`] 通知。处理链订阅同一通知，串行执行
 //! 「反注册 → 释放占用 → 关闭下行通道」，任一步失败都继续后续步骤并记日志。
 //!
 //! 顺序不可交换（`README.md` 7.2）：先移除记录，重连的新连接才不会与旧运行时会话抢同一份文件。
+//! 服务关闭走同一条链（[`shutdown`]）：先给全部客户端打 `ServerShutdown` 标记，再停掉残留运行时会话。
 
 use std::sync::OnceLock;
 
@@ -74,6 +75,26 @@ async fn handle(state: &RuntimeState) -> usize {
     marks.len()
 }
 
+/// 关闭流程：给全部客户端打 `ServerShutdown` 标记，复用断连链收尾，返回处理的客户端数量。
+///
+/// 关闭导致的会话终止一律落 `server_shutdown`（[`stop_reason`]）；链跑完后把剩余的运行时会话
+/// 一并摘下并 flush，关闭后不允许留下未收尾的事件文件。
+pub async fn shutdown(state: &RuntimeState) -> usize {
+    for record in state.clients() {
+        state.mark_shutdown(&record.client_id);
+    }
+    let handled = process(state).await;
+
+    // 补偿路径：占用记录缺失或链没覆盖到的运行时会话同样要收尾（会话已摘下，无需会话锁）。
+    for session in state.take_sessions() {
+        let session_id = session.session_id().to_string();
+        if let Err(error) = session.stop(SessionStop::ServerShutdown).await {
+            warn!(session_id, %error, "关闭时停止运行时会话失败，继续收尾");
+        }
+    }
+    handled
+}
+
 /// 单个客户端的清理链：通知帧 → 反注册 → 停止运行时会话 → 撤回占用登记。
 ///
 /// 顺序不可交换：`client_closed` 帧必须在反注册前发（反注册会丢弃下行通道），
@@ -88,10 +109,7 @@ async fn clean(state: &RuntimeState, client_id: &str, reason: ClientCloseReason)
         // 与占用接口共用同一把会话锁：停止动作不会与建立 / 释放交叉。
         let lock = state.session_lock(&occupancy.session_id);
         let _guard = lock.lock().await;
-        match state
-            .stop_session(&occupancy.session_id, SessionStop::ClientDisconnected)
-            .await
-        {
+        match state.stop_session(&occupancy.session_id, stop_reason(reason)).await {
             Some(Ok(())) => {}
             Some(Err(error)) => warn!(
                 %error,
@@ -116,5 +134,13 @@ async fn clean(state: &RuntimeState, client_id: &str, reason: ClientCloseReason)
             "客户端断连已清理"
         ),
         (None, _) => warn!(client_id, ?reason, "断连清理时客户端已不在注册表"),
+    }
+}
+
+/// 标记原因决定会话终止语义：服务关闭落 `server_shutdown`，其余断连落 `run_cancelled`（RT-003）。
+fn stop_reason(reason: ClientCloseReason) -> SessionStop {
+    match reason {
+        ClientCloseReason::ServerShutdown => SessionStop::ServerShutdown,
+        _ => SessionStop::ClientDisconnected,
     }
 }

@@ -52,7 +52,10 @@ fn server(args: &ServerArgs) -> ExitCode {
     };
 
     // 运行期错误由 serve 内部写入日志，这里只负责刷盘与退出码。
-    let result = lib_bin_web::serve(&config.host, config.port);
+    // 事件文件轮转配置：缺省字段在此收敛为服务端默认值，再交给运行时注入。
+    let events =
+        lib_bin_web::JournalConfig::resolve(config.runtime_events.max_sessions, config.runtime_events.max_bytes);
+    let result = lib_bin_web::serve(&config.host, config.port, events);
     guard.flush();
 
     if result.is_ok() {

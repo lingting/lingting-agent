@@ -1,6 +1,6 @@
 # P1.1 任务清单
 
-**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 部分完成：RT-014、RT-015）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（Batch A 定稿完成：RT-001~RT-004；Batch B 完成：RT-005~RT-006；Batch C 完成：RT-007~RT-010；Batch D 完成：RT-011~RT-013；Batch E 完成：RT-014~RT-017）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、协议与模块落位见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -192,24 +192,24 @@
   - [x] 客户端断开后事件仍全部落盘。
   **测试要求**：`bin-tests` 覆盖“无占用也落盘”与“慢客户端不阻塞落盘”。
 
-- [ ] **RT-016 轮转清理**
+- [x] **RT-016 轮转清理**
 
   **目标**：按 `max_sessions` / `max_bytes` 任一超限清理，最旧会话目录先删，保护占用中目录。
   **涉及文件 / Crate**：`crates/service-core/src/runtime/journal.rs`（清理）、`timer.rs`（周期任务）、`crates/lib-bin-cli/src/config.rs` + `crates/lib-bin-web/src/server.rs`（配置透传）。
   **技术要求**：统计与删除都在独立任务里做，不阻塞事件写入；删除失败跳过并继续；0 表示不限制。
   **验收标准**：
-  - [ ] 会话数超限、字节数超限、两者同时超限三种场景都只清到限内。
-  - [ ] 占用中的会话目录从不被删。
-  - [ ] 配置缺省时使用默认值；显式 0 关闭限制。
+  - [x] 会话数超限、字节数超限、两者同时超限三种场景都只清到限内。
+  - [x] 占用中的会话目录从不被删。
+  - [x] 配置缺省时使用默认值；显式 0 关闭限制。
   **测试要求**：`bin-tests` 用临时目录覆盖三种超限场景与保护规则。
 
-- [ ] **RT-017 关闭流程集成**
+- [x] **RT-017 关闭流程集成**
 
   **目标**：`is_shutdown` → 停定时任务 → 按断连链处理全部客户端（`ServerShutdown`）→ 停全部运行时会话并 flush → 交给现有排空窗口。
   **涉及文件 / Crate**：`crates/lib-bin-web/src/{server,shutdown}.rs`、`crates/service-core/src/runtime/handler.rs`。
   **验收标准**：
-  - [ ] 关闭后无残留 `RUNNING` 运行时会话、无未 flush 文件。
-  - [ ] 与现有 `server_shutdown` 事件语义不冲突。
+  - [x] 关闭后无残留 `RUNNING` 运行时会话、无未 flush 文件。
+  - [x] 与现有 `server_shutdown` 事件语义不冲突。
   **测试要求**：`bin-tests` 复用 P1 关闭用例口径。
 
 ---

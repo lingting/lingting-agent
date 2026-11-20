@@ -16,9 +16,10 @@ pub mod session;
 mod timer;
 
 pub use client::{CLIENT_TTL_MS, ClientRecord, ClientState, INQUIRY_AFTER_MS, INQUIRY_WINDOW_MS, PendingInquiry};
+pub use journal::{JournalConfig, RotationSummary};
 pub use registry::RuntimeState;
 pub use session::{RuntimeSession, SessionStop};
-pub use timer::{SCAN_INTERVAL_MS, scan};
+pub use timer::{ROTATION_INTERVAL_MS, SCAN_INTERVAL_MS, scan};
 
 use std::fmt;
 use std::sync::OnceLock;
@@ -75,4 +76,14 @@ pub fn install(state: RuntimeState) -> bool {
 /// 取已注入的运行时状态；未注入时为空（当前由 `lib-bin-web` 保证注入）。
 pub fn state() -> Option<&'static RuntimeState> {
     STATE.get()
+}
+
+/// 关闭流程入口：把「停全部客户端与运行时会话」交给断连处理链，返回处理的客户端数量。
+///
+/// 未注入运行时状态时（只跑用例的进程）直接返回 0：没有东西需要收尾。
+pub async fn shutdown() -> usize {
+    match state() {
+        Some(state) => handler::shutdown(state).await,
+        None => 0,
+    }
 }

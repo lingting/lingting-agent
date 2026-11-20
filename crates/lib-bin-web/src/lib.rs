@@ -6,3 +6,5 @@ mod shutdown;
 mod webui;
 
 pub use server::serve;
+/// 事件文件轮转配置：`bin-agent` 从 `config.toml` 解析后透传给 [`serve`]。
+pub use service_core::runtime::JournalConfig;
