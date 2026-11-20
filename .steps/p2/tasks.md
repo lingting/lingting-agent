@@ -297,7 +297,7 @@
 
 > 依赖：P2-005、P2-009。015 → 016；017 依赖 009 + 015；**018 可与 015 / 016 并行**。
 
-- [ ] **P2-015 新建 `agent-route`：`LlmProvider` 抽象与 Provider / Model 解析**
+- [x] **P2-015 新建 `agent-route`：`LlmProvider` 抽象与 Provider / Model 解析**
 
   **目标**：把「用哪个模型、怎么调」从 Runtime 中隔离出来，Rig 类型不外泄。
   **前置依赖**：P2-009。
@@ -308,12 +308,23 @@
   3. `rig` 子目录之外不得出现 `rig_core` 类型（连编译期类型引用也不允许）。
   **技术要求**：`agent-route` 只依赖 `agent-core`、`types-core`、`lib-core`、`rig-core`；不依赖 `agent-runtime` / `service-core` / `lib-web*`。
   **验收标准**：
-  - [ ] `cargo tree -i rig-core` 只命中 `agent-route`。
-  - [ ] 抽象类型可被 `agent-runtime` 使用而不引入 Rig 依赖。
+  - [x] `cargo tree -i rig-core` 只命中 `agent-route`。
+  - [x] 抽象类型可被 `agent-runtime` 使用而不引入 Rig 依赖。
   **测试要求**：由 P2-016 / P2-018 的 `llm.*` 用例覆盖。
   **完成产物**：`agent-route` 抽象层。
 
-- [ ] **P2-016 Rig Adapter：OpenAI 兼容 + 流式 + Usage + 错误映射**
+  **落地记录（2026-11-20）**：
+  - 文件：`crates/agent-route/src/{lib,provider,model,error}.rs`；`rig/` 子目录留到 P2-016 与 Adapter 一起落地，本任务不建空占位。
+  - `LlmProvider::stream(&self, LlmRequest) -> LlmStreamFuture`：返回装箱 Future 而非 `async fn`，因为 Runtime 以 `Arc<dyn LlmProvider>` 持有它（dyn 兼容）。
+  - `LlmStream` 是类型擦除的事件流句柄（内部 `Pin<Box<dyn Stream>>`），向上只暴露 `next()`；取消就是 drop 它，不需要额外信号。`Stream` 抽象来自 `futures-util`，只在 Adapter 与句柄内部出现。
+  - `LlmMessage { role, content }` 复用 `agent-core` 的 `MessageRole`，不再造一套角色枚举；`LlmRequest.max_output_tokens` 取 `Option<u64>`（与 Provider 协议的语义一致，由调用方从 `ModelConfig.max_output_tokens` 转过来）。
+  - `LlmStreamEvent::{Delta, Usage, Done}`：`Usage` 在 `Done` 之前产出；Provider 没给出用量就不产出，不构造假值（D-P2-001 第 6 条的反面）。
+  - `LlmError` 七个变体（未知模型 / 认证 / 上游 / 网络 / 截断 / 解析 / 空闲超时），`public_message()` 返回固定脱敏文案，原始错误只进 `Error::source`；未知模型由调用方映射 400，本 Crate 不做状态码。
+  - 解析器命名为 `ModelRoute`（`new(ProviderConfig)` / `config()` / `default_model()` / `model(Option<&str>)`），未知 id 返回 `LlmError::UnknownModel`。**不做配置校验**：`default_model` 是否在 `models` 中、`kind` 取值、数值范围都归 P2-017。
+  - 依赖：`agent-core` / `types-core` / `lib-core` / `futures-util` / `rig-core`，**不依赖 `service-core`**。`docs/workspace.md` 的依赖表与 D-P2-016 写的是 `agent-route -> service-core`、解析归 `service-core`，与本节技术要求冲突；按本节执行，`workspace.md` 的这条边待 P2-030 回填时更正。
+  - `rig-core`（`default-features = false, features = ["reqwest","rustls"]`）在 `Cargo.toml` 与 workspace 依赖中声明；`cargo tree -i rig-core` 当前只命中 `agent-route`。
+
+- [x] **P2-016 Rig Adapter：OpenAI 兼容 + 流式 + Usage + 错误映射**
 
   **目标**：实现 `LlmProvider`，把 `rig-core` 的流式与错误映射成项目自有类型。
   **前置依赖**：P2-015、P2-001。
@@ -324,10 +335,22 @@
   3. 错误映射：`ProviderError` → `LlmError`（认证 / 上游 / 网络 / 截断 / 解析 / 空闲超时），`public_message()` 固定脱敏文案。
   4. 中断：取消时 drop 流；按 O-1 的实测结论记录连接是否随之关闭。
   **验收标准**：
-  - [ ] 流式增量拼接等于完整回复（由 P2-026 用例断言）。
-  - [ ] 认证失败 / 上游 5xx / 非法 JSON / 中途断连各有 `LlmError` 变体，文案不含内部细节。
+  - [ ] 流式增量拼接等于完整回复（由 P2-026 用例断言；本任务无 Mock Server，暂不勾选）。
+  - [x] 认证失败 / 上游 5xx / 非法 JSON / 中途断连各有 `LlmError` 变体，文案不含内部细节。
   **测试要求**：`llm.stream` / `llm.auth_error` / `llm.upstream_error` / `llm.invalid_json`（P2-018 提供 Mock 能力，P2-026 组装断言）。
   **完成产物**：Rig Adapter。
+
+  **落地记录（2026-11-20）**：
+  - 文件：`crates/agent-route/src/rig/{mod,openai,stream,error}.rs`；`lib.rs` 增加 `pub mod rig`（`rig_core` 的代码引用只在这 4 个文件里，`lib.rs` 只有 doc 提到依赖名）。
+  - 构造：`OpenAiProvider::new(&ProviderConfig, Option<Duration>)` → `OpenAIConfig::new(api_key.expose().to_owned())` + `with_base_url` + `with_route(Route::Chat)` + `.client()`（共享 reqwest 连接池）。密钥只经 `Secret::expose()` 取一次，不进错误、不进日志。
+  - 调用：每次 `client.chat(model_id).with_idle_timeout(...)`，固定 Chat Completions（D-P2-001 第 5 条）；空闲超时交给 `ProviderError::Stalled`，不自研计时器。
+  - 请求翻译：`LlmMessage` → `Message::system` / `user` / `assistant`；用 `CompletionRequest::new(最后一条).messages(其余).max_tokens(..)` 拼装（Rig 的 `chat_history` 以最后一条为 prompt）。`TOOL` 角色兜底成 `user`（历史里的工具消息由 P2-020 过滤）。
+  - `LlmError` 调整：新增 `InvalidRequest { reason }`（消息为空时不发请求、不 panic）；除 `UnknownModel` / `InvalidRequest` 外，各变体都携带 `source: Box<dyn Error + Send + Sync>`，`source()` 供日志、`public_message()` 仍是固定文案。原 `Upstream { status }` 去掉状态码字段——只有 `ProviderResponse` 带状态码，其余上游错误没有，保留会造成空值。
+  - 错误映射：`InvalidAuthentication` → `Authentication`；`Http` → `Network`；`Json` → `InvalidResponse`；`Truncated` → `Truncated`；`Stalled` → `IdleTimeout`；其余（`ProviderResponse` / `Provider` / `Response` / `Request` / `Url` / `CacheExpired` / `MismatchedDimensions` / `Relayed` / `UnsupportedOption` 及将来新增变体）→ `Upstream`。
+  - 流式：`futures_util::stream::unfold` + `Relay` 状态机；只转发 `StreamEvent::Text`（推理、工具调用等 P2 不消费）；流结束后用 `Streamed::partial().usage` 取用量，两个计数齐全才产 `Usage`，否则跳过，最后必产 `Done`；出错时 Rig 把错误作为最后一项给出，映射后同样作为最后一条事件。
+  - 中断：drop `LlmStream` → drop `Relay` → drop `Streamed`，没有后台任务持流（与 O-1 一致）。**连接是否随之关闭仍未实测**：本阶段还没有 Mock Server（P2-018 才落地），按 O-1 结论，用例只断言「终态 + 事件文件有终态 + Mock 不再收到分块」。
+  - 未做：`CompletionResponse::error` / `finish_reason` 的语义判断留给 P2-022 / P2-026；P2 不消费 reasoning 与 tool 事件。
+  - 注意：验收 A-4 / P-7 的 `grep -rn "rig" crates/agent-route/src` 会命中 `lib.rs` 的一行 doc（写依赖方向），代码引用只在 `rig/` 内；该条按代码引用核对。
 
 - [ ] **P2-017 Provider 配置装载与密钥安全**
 

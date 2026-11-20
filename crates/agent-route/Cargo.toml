@@ -1,0 +1,22 @@
+[package]
+name = "agent-route"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Provider / Model 解析与 LLM 调用适配"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+agent-core = { workspace = true }
+types-core = { workspace = true }
+# 事件流用 `Stream` 抽象：`LlmStream` 内部持有，向上只暴露 `next()`。
+futures-util = { workspace = true }
+# Rig 只在 `rig` 子模块的 Adapter 里出现（P2-016 落地）；上层只见本 Crate 的抽象（D-P2-001）。
+rig-core = { workspace = true }
+
+[lints]
+workspace = true

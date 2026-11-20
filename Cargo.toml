@@ -11,6 +11,7 @@ members = [
     "crates/types-core",
     "crates/service-core",
     "crates/agent-core",
+    "crates/agent-route",
     "crates/lib-db",
     "crates/manager-agent",
     "crates/bin-tests",
@@ -38,6 +39,7 @@ lib-bin-web = { path = "crates/lib-bin-web" }
 types-core = { path = "crates/types-core" }
 service-core = { path = "crates/service-core" }
 agent-core = { path = "crates/agent-core" }
+agent-route = { path = "crates/agent-route" }
 lib-db = { path = "crates/lib-db" }
 manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
@@ -113,6 +115,8 @@ windows-sys = { version = "0.61", features = [
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 # SQLite 单文件，无网络数据库：不启用 TLS、`any`、`json` 与 `macros`（D-P2-003）。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "sqlite"] }
+# LLM 接入只允许 agent-route 使用；不启用 Rig 的 Agent Loop 相关特性（D-P2-001）。
+rig-core = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }
 proc-macro2 = { version = "1.0" }
 quote = { version = "1.0" }
 syn = { version = "2.0", features = ["full"] }

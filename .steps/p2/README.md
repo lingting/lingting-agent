@@ -1,6 +1,6 @@
 # P2：基础 Agent Runtime
 
-**状态：进行中（2026-11-20 开工）：Batch A（P2-001 ~ P2-005）已定稿，Batch B（P2-006 ~ P2-009）已完成，Batch C（P2-010 ~ P2-014）已完成并验收。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
+**状态：进行中（2026-11-20 开工）：Batch A（P2-001 ~ P2-005）已定稿，Batch B（P2-006 ~ P2-009）已完成，Batch C（P2-010 ~ P2-014）已完成并验收，Batch D 进行中（P2-015、P2-016 已落地）。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
 
 > 依据：P1 验收结论（[`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）、P1.1 验收结论（[`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)）与仓库实际代码。凡与既有文档不一致之处，以代码为准并记入 `decisions.md`。
 > 任务见 [`tasks.md`](tasks.md)，判据见 [`acceptance.md`](acceptance.md)，决策见 [`decisions.md`](decisions.md)。
