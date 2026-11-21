@@ -1,0 +1,21 @@
+[package]
+name = "agent-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Context 组装：System Prompt、会话历史、Token 预算与裁剪"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# Context 的抽象类型与预算规则。
+agent-context-core = { workspace = true }
+# 会话摘要、消息与角色（历史来源）。
+agent-core = { workspace = true }
+# 裁剪条数与被选中的系统提示词文件只进日志（D-P2-013 第 5 条）。
+tracing = { workspace = true }
+
+[lints]
+workspace = true

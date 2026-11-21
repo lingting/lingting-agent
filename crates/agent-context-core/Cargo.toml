@@ -1,0 +1,18 @@
+[package]
+name = "agent-context-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Agent Context 的稳定抽象：Item、来源、预算策略与 Token 估算"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+# 角色枚举（`MessageRole`）属于 Agent 领域基础类型，本 Crate 不自造一套。
+agent-core = { workspace = true }
+
+[lints]
+workspace = true

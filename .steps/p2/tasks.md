@@ -412,7 +412,7 @@
 
 > 依赖：P2-003、P2-007。019 → 020 → 021。
 
-- [ ] **P2-019 新建 `agent-context-core`**
+- [x] **P2-019 新建 `agent-context-core`**
 
   **目标**：定义 Context 的稳定抽象，供 P3 的 Tool / Skill / MCP 贡献内容。
   **前置依赖**：P2-007。
@@ -422,12 +422,19 @@
   2. `ContextPolicy`（预算、最大消息数、safety tokens）、`TokenEstimator` trait 的抽象位置。
   3. 纯数据结构与纯函数，`async fn` 一律不出现。
   **验收标准**：
-  - [ ] `cargo tree -p agent-context-core` 只有 `agent-core` + `lib-core`。
-  - [ ] 无 IO、无 async、无框架依赖。
+  - [x] `cargo tree -p agent-context-core` 只有 `agent-core` + `lib-core`。
+  - [x] 无 IO、无 async、无框架依赖。
   **测试要求**：由 P2-021 覆盖。
   **完成产物**：Context 抽象。
 
-- [ ] **P2-020 新建 `agent-context`：Context Builder 与裁剪**
+  **落地记录（2026-11-21）**：
+  - 文件：`crates/agent-context-core/src/{lib,source,item,context,policy,error}.rs`，与任务书一致。
+  - `Context { items, metadata }` 只提供读取与 `into_items()`；`ContextMetadata { session_id, model, trimmed_messages, estimated_tokens }` 全部是「只进日志」信息（D-P2-013 第 5 条）。
+  - `TokenEstimator` 放在 `policy.rs`（预算主题内），`estimate(text)` 只算正文，每条消息的固定开销由常量 `MESSAGE_TOKEN_OVERHEAD = 4` 单独累加，避免 trait 里出现第二条取巧路径。
+  - `ContextPolicy` 承载四项预算输入（`context_window` / `max_output_tokens` / `safety_tokens` / `max_messages`），另给纯函数 `available_tokens(system_tokens)` 落地 D-P2-012 第 3 条；换算配置归调用方，本 Crate 不认识 `types-core`。
+  - `ContextError` 只有两个变体：`PromptTooLarge`（文案即 D-P2-013 第 4 条要求的「上下文超出模型预算」）与 `SystemPrompt`（读取失败，`source` 携带原始 IO 错误）。错误定义放本 Crate 是因为 P2-020 不新增 error 文件。
+  - 核对：`cargo tree -p agent-context-core --depth 1` 只有 `agent-core` + `lib-core`；源码无 `async` / `std::fs` / 框架依赖。
+- [x] **P2-020 新建 `agent-context`：Context Builder 与裁剪**
 
   **目标**：把「System Prompt + 历史 + 本次输入」组装成一次请求的 messages，并按预算裁剪。
   **前置依赖**：P2-019、P2-012（历史读取）。
@@ -438,24 +445,35 @@
   3. 裁剪：按 `context_max_messages` 截断最旧 → 逐条丢弃直到估算不超预算；系统提示与最新用户消息不裁；被裁条数写进 metadata（只进日志）。
   4. `HeuristicEstimator` 实现 `TokenEstimator`；构造点唯一。
   **验收标准**：
-  - [ ] 顺序、角色映射、裁剪顺序与 D-P2-012 / D-P2-013 一致。
-  - [ ] 最新用户消息单条超预算时返回明确错误（由调用方落 `FAILED`）。
+  - [x] 顺序、角色映射、裁剪顺序与 D-P2-012 / D-P2-013 一致。
+  - [x] 最新用户消息单条超预算时返回明确错误（由调用方落 `FAILED`）。
   **测试要求**：`chat.truncate`（P2-021）。
   **完成产物**：Context Builder。
 
+  **落地记录（2026-11-21）**：
+  - 文件：`crates/agent-context/src/{lib,builder,estimate,system,trim}.rs`。比任务书多一个 `system.rs`：系统提示词来源需要「扫描 + 读取」，与组装、估算、裁剪是三件独立的事。
+  - **系统提示词来源（用户口径，P2-021 前定稿）**：`AGENT_HOME` 下的 `AGENTS.md`，不是内置常量。匹配顺序为「名称全大写、扩展名不区分大小写的 `AGENTS.md`」优先，其次「忽略大小写后名称匹配的 Markdown 文件」；同档位多个候选按文件名排序取第一个，并打日志记录选中的文件。**每次 `build` 都现场扫描并读取，不缓存**（改完提示词无需重启）。找不到文件或内容为空 → 系统提示词为空字符串 → **不发送空消息**，`Context` 里没有 system Item；因此验收 X-2 的「首条为 system」需要用例在 `AGENT_HOME` 下放 `AGENTS.md`。
+  - `ContextBuilder::new(home)` 从应用根目录构造，内部 `Arc::new(HeuristicEstimator)` 是估算器的唯一构造点；`with_estimator(home, estimator)` 只用于可替换性核对（X-6）。
+  - `build` 的五个参数：`session`（取 `id` 进 metadata）、`history`（按 `seq` 升序、**不含本次输入**，由调用方保证）、`prompt`、`policy`、`model`（进 metadata 与日志）。**不做去重**：调用方传什么就是什么，避免「按内容猜哪条是本次输入」的隐式行为。
+  - 裁剪顺序落地为 `trim.rs` 的两个纯函数：`dropped_by_count`（先按 `max_messages` 截断最旧）→ `dropped_by_budget`（从最旧一端整条丢弃直到估算不超 `policy.available_tokens(系统提示词开销)`）；系统提示词与本次输入不在待裁集合里，天然不会被裁。超出部分按 `saturating` 归 0。
+  - 本次输入单条超预算 → `ContextError::PromptTooLarge`（`Display` =「上下文超出模型预算」），不发请求；系统提示词文件存在但读不出来（权限 / 编码）→ `ContextError::SystemPrompt`，目录不存在视为「没有提示词文件」。
+  - 估算：`HeuristicEstimator::estimate` = `ceil(ascii/4) + 非 ASCII 字符数`，每条消息另加 `MESSAGE_TOKEN_OVERHEAD`（D-P2-012 第 2 条）。
+  - **测试交接**：本任务的验收标准可由源码核对，`chat.truncate` 随 P2-021 交到 Batch F（服务端此时仍是 Mock 生产方，断言无从产生）。
 - [ ] **P2-021 Context 用例与可替换性核对**
 
   **目标**：证明「历史按序进入请求、系统提示在最前、超预算被裁剪、最新消息保留、估算器可替换」。
   **前置依赖**：P2-020、P2-018。
   **涉及文件 / Crate**：`crates/bin-tests/src/cases/chat.rs`（新增 `chat.context` / `chat.truncate`）。
   **实施步骤**：
-  1. `chat.context`：三轮对话，断言 `/mock/last-request` 的 messages 顺序、首条 system、末条为本次输入。
+  1. `chat.context`：三轮对话，断言 `/mock/last-request` 的 messages 顺序、首条 system、末条为本次输入；`AGENT_HOME` 下需放 `AGENTS.md`（系统提示词来自该文件，缺文件时不发 system 消息，见 P2-020 落地记录）。
   2. `chat.truncate`：在 `config.toml` 里把 `[agent] context_max_messages` 压到 2、`context_safety_tokens` 调大，断言请求体只含被保留的消息且包含本次输入。
   3. 源码核对：`TokenEstimator` 为 trait，构造点唯一。
   **验收标准**：
   - [ ] 两条用例通过，报告落 `target/tests/<运行 ID>/chat.md`。
   - [ ] 裁剪行为有可复现的配置组合。
   **完成产物**：`chat.*` 用例（Context 部分）。
+
+  **交接说明（2026-11-21）**：本任务在 Batch E **未开工**，交到 Batch F 与 P2-026 一起落地。原因：两条用例都断言 Mock LLM 侧的 `/mock/last-request`，而服务端的执行通路此时仍是 P1.1 的 Mock 生产方（真实调用要等 P2-022 / P2-023）；在 Batch F 之前写出来必然失败，无法勾选验收标准。Batch E 的出口因此按「Context 可组装、可裁剪、可替换估算」判定，由 P2-019 / P2-020 的落地记录承担。
 
 ---
 
