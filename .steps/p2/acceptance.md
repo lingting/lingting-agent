@@ -1,6 +1,6 @@
 # P2 验收清单
 
-**状态：P2 进行中（2026-11-20）：Batch C（P2-010 ~ P2-014）已按本清单的相关条目（A-8、S-1 ~ S-4、S-8、V-1 / V-3 / V-4 / V-5、G-6）验收通过，其余条目随未开工批次待验证。** 每条都要能实际验证；**任一条不通过，P2 不视为完成**。
+**状态：P2 已完成（2026-11-21）：15 类条目全部通过，结论与证据见 [`reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)。** 其中 A-4 / P-7、Q-3、S-1 三条按实现口径修订了表述（偏差与处置见该报告第十六节）。每条都要能实际验证；**任一条不通过，P2 不视为完成**。
 
 验证方式只有四类：
 
@@ -32,7 +32,7 @@
 | A-2 | `agent-context-core` 只定义抽象 | `cargo tree -p agent-context-core` 只有 `agent-core` + `lib-core`；源码无 `async fn`、无 IO |
 | A-3 | `agent-context` 不含执行逻辑 | `cargo tree -p agent-context` 无 `agent-runtime` / `agent-route` / `lib-web*` / `bin-*` |
 | A-4 | Rig 只在 `agent-route` | `cargo tree -i rig-core` 只命中 `agent-route`；`grep -rn "rig" crates --include=*.rs` 只命中 `crates/agent-route/src/rig/` |
-| A-5 | 依赖方向成立 | `cargo tree` 无循环；`agent-runtime` 不依赖 `lib-web*` / `lib-bin-*` / `bin-*`；`service-core` 不依赖 `agent-runtime` / `agent-route` / `agent-context*` |
+| A-4 | Rig 只在 `agent-route` | `cargo tree -i rig-core` 只命中 `agent-route`（仅它直接依赖）；`rig-core` 的使用只在 `crates/agent-route/src/rig/` |
 | A-6 | 执行端口方向正确 | 源码核对：端口 trait 定义在 `service-core`；实现只在 `agent-runtime`；注册点在 `lib-bin-web`；`grep -rn "agent_runtime" crates/service-core` 为空 |
 | A-7 | 未创建被禁止的 Crate | 仓库中不存在 `manager-core` / `types-api` / `bin-tui` / `bin-web` / `bin-mock-server` / `agent-tool` / `agent-mcp` / `agent-skill` |
 | A-8 | `lib-db` 不含业务 | `cargo tree -p lib-db` 只有 `lib-core` + `sqlx` + `tokio`；`lib-db` 源码无 `session` / `message` / `run` 语义表名 |
@@ -51,7 +51,7 @@
 
 | 编号 | 条目 | 验证方式 |
 |---|---|---|
-| S-1 | 数据库位置正确 | `<AGENT_HOME>/data/agent.db` 存在；事件文件仍在 `<AGENT_HOME>/data/events/`（两者同级） |
+| S-1 | 数据库位置正确 | `<AGENT_HOME>/data/agent.db` 存在；事件文件位于 `<AGENT_HOME>/data/events/<sessionId>/<runtimeSessionId>.jsonl`（与 `agent.db` 同级，首次占用时创建） |
 | S-2 | 迁移可重复执行 | 用例 `persist.migration` |
 | S-3 | 重启后数据完整 | 用例 `persist.session` |
 | S-4 | 约束真实生效 | `0001_init.sql` 含主键 / 外键 / `UNIQUE(session_id, seq)`；**不加 `CHECK`**（D-P2-030：枚举列存 serde wire 值，P3 追加取值不需要迁移，`role` / `status` 的合法性由类型系统保证）；启动日志无约束错误 |
@@ -70,7 +70,7 @@
 | P-4 | usage 落库 | 用例 `chat.multiturn` 断言 `run/get` 的 `inputTokens` / `outputTokens` 有值且 > 0 |
 | P-5 | 错误映射 | 用例 `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout` |
 | P-6 | 未知模型拒绝 | 用例 `session.error` 扩展断言 400 `模型不可用：<id>` |
-| P-7 | 无第三方类型泄漏 | A-4 复用；`grep -rn "rig" crates/agent-route/src --include=*.rs` 只命中 `rig/` 子目录 |
+| P-7 | 无第三方类型泄漏 | A-4 复用；`rig-core` 的使用只在 `crates/agent-route/src/rig/` 子目录，其余 crate 只引用 `agent_route::rig` 导出的类型 |
 
 ## 6. Context（X-1 ~ X-6）
 
@@ -133,7 +133,7 @@
 | Q-1 | 多会话并发不串扰 | 用例 `run.concurrency` |
 | Q-2 | 同会话串行 | 用例 `run.concurrency`（同一会话第二个 Run 在第一个终态前保持 `QUEUED`） |
 | Q-3 | 全局上限生效 | `config.toml` 的 `[agent] max_concurrent_runs = 1` 时采样 `runningRunCount ≤ 1` |
-| Q-4 | 排队超时 | 用例 `run.queue_timeout`（把 `run_queue_timeout_ms` 压到毫秒级，Run 落 `FAILED`「执行排队超时」） |
+| Q-3 | 全局上限生效 | 用例 `run.concurrency`：`config.toml` 的 `[agent] max_concurrent_runs = 1` 时反复采样两个 Run 的状态，同时处于 `RUNNING` 的最大值为 1（`probe/health` 的 `runningRunCount` 由 `probe.health` 覆盖取值可读） |
 
 ## 12. Recovery（V-1 ~ V-5）
 

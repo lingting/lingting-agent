@@ -15,10 +15,12 @@ use lib_bin_cli::sdk::{
 
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::context::TestContext;
-use crate::flow::{occupy, register};
+use crate::flow::{self, occupy, register};
 use crate::server::Server;
 /// 等待 Run 抵终态的上限：Mock 生产方按固定间隔吐增量，留足余量。
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+/// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（与 `manager-agent` 的 `HEAL_RUNNING` 逐字一致）。
+const HEAL_RUNNING: &str = "服务重启，执行中的 Run 已终止";
 
 /// 持久化领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -47,6 +49,12 @@ pub(crate) fn cases() -> Vec<Case> {
             prep: &[],
             run: occupancy_reset,
         },
+        Case {
+            name: "persist.running_heal",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: running_heal,
+        },
     ]
 }
 
@@ -68,6 +76,77 @@ fn queued_heal(context: &TestContext) -> CaseFuture<'_> {
 /// 占用不随重启恢复；重新注册 + 重新占用后可继续发消息。
 fn occupancy_reset(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move { occupancy_reset_body(context).await })
+}
+
+/// 执行中的 Run 在服务被强杀后自愈成 `FAILED`，且终态不被后续重启覆盖（V-2、D-4）。
+fn running_heal(context: &TestContext) -> CaseFuture<'_> {
+    Box::pin(async move { running_heal_body(context).await })
+}
+
+/// 用例主体：`mock:slow` 让 Run 停在 `RUNNING`，强杀服务端后重启，核对自愈结果。
+async fn running_heal_body(context: &TestContext) -> Result<CaseOutcome> {
+    let port = context.port()?;
+    let server = start(context).await?;
+
+    let session = create_session(context, "运行中自愈").await?;
+    let client_id = register(context).await?;
+    occupy(context, &client_id, &session.id).await?;
+    let mut stream = subscribe(context, &client_id).await?;
+    let sent = send(context, &session.id, &format!("mock:slow 运行中 {}", context.token())).await?;
+    // 慢速分块让 Run 维持 RUNNING：收到首段增量即说明执行已开始。
+    flow::wait_first_delta(&mut stream, &sent.run.id).await?;
+    let before = run_of(context, &sent.run.id).await?;
+    ensure!(
+        before.status == RunStatus::Running,
+        "强杀前 Run 应处于 Running，实际 {:?}",
+        before.status
+    );
+    ensure!(before.finished_at_ms.is_none(), "执行中的 Run 不应有结束时间");
+    drop(stream);
+
+    // `restart` 走 `start_kill`：不是优雅关闭，进程内的执行状态随进程一起丢失。
+    let server = restarted(context, server, port).await?;
+    let healed = run_of(context, &sent.run.id).await?;
+    ensure!(
+        healed.status == RunStatus::Failed,
+        "重启后执行中的 Run 应为 Failed，实际 {:?}",
+        healed.status
+    );
+    ensure!(
+        healed.error.as_deref() == Some(HEAL_RUNNING),
+        "自愈原因应为 {HEAL_RUNNING}，实际 {:?}",
+        healed.error
+    );
+    let finished_at_ms = healed.finished_at_ms.context("自愈后的 Run 应有结束时间")?;
+    ensure!(
+        !has_assistant_message(context, &session.id).await?,
+        "自愈不应补写助手消息"
+    );
+
+    // 第二次重启：已落终态的 Run 不被自愈覆盖（D-4）。
+    let _server = restarted(context, server, port).await?;
+    let again = run_of(context, &sent.run.id).await?;
+    ensure!(
+        again.status == RunStatus::Failed && again.error.as_deref() == Some(HEAL_RUNNING),
+        "终态 Run 不应被再次自愈改写：{again:?}"
+    );
+    ensure!(
+        again.finished_at_ms == Some(finished_at_ms),
+        "终态 Run 的结束时间不应被改写：{:?} != {finished_at_ms}",
+        again.finished_at_ms
+    );
+
+    // 异常不留 RUNNING，且服务端日志无 panic 行（L-5）。
+    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
+    ensure!(!log.contains("panic"), "服务端日志出现 panic 行");
+    let log_lines = log.lines().count();
+
+    Ok(vec![
+        format!("强杀前 Run 状态 {:?}，无结束时间", before.status),
+        format!("重启后 Run 状态 {:?}，原因 {HEAL_RUNNING}", healed.status),
+        "第二次重启后终态与结束时间保持不变，无助手消息".to_string(),
+        format!("服务端日志 {log_lines} 行，无 panic"),
+    ])
 }
 
 /// 用例主体：建会话 → 占用 → 发消息跑完 → 重启 → 核对会话与消息。

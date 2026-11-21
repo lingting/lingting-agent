@@ -9,18 +9,22 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use agent_core::session as domain;
 use anyhow::{Context, Result, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
     ApiClient, MessageListParams, MessageRole, MessageSendPO, RunCancelPO, RunEventKind, RunStatus,
 };
+use manager_agent::runtime::{ClientRecord, journal};
 use tokio::time::sleep;
+use types_core::runtime::OccupancyCreatePO;
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::cases::llm::mock::MockServer;
 use crate::context::TestContext;
 use crate::flow::{self, Occupied};
 use crate::server::{self, config};
+use crate::support::{runtime_state, session_service, temp_directory};
 
 /// 一次失败路径对外的脱敏文案（与 `agent-route` 的 `public_message()` 逐字一致）。
 const AUTH_ERROR: &str = "调用模型失败：认证失败";
@@ -30,6 +34,8 @@ const UPSTREAM_ERROR: &str = "调用模型失败：上游服务错误";
 const TIMEOUT_ERROR: &str = "调用模型失败：响应超时";
 /// 排队超时的失败文案。
 const QUEUE_TIMEOUT: &str = "执行排队超时";
+/// 未注入执行端口时的失败文案（与 `manager-agent` 的 `REASON_NOT_ASSEMBLED` 逐字一致）。
+const NOT_ASSEMBLED: &str = "执行器未装配";
 /// 用户取消的原因文本（D-P2-029）。
 const CANCEL_REASON: &str = "用户取消执行";
 /// 断连的原因文本（沿用 P1.1 的固定文本）。
@@ -83,6 +89,12 @@ pub(crate) fn cases() -> Vec<Case> {
             run: failed_upstream,
         },
         Case {
+            name: "run.execute",
+            kind: CaseKind::Shared,
+            prep: &[],
+            run: execute,
+        },
+        Case {
             name: "run.journal_consistency",
             kind: CaseKind::Shared,
             prep: &[],
@@ -108,9 +120,19 @@ pub(crate) fn cases() -> Vec<Case> {
 
 /// 用共享 Mock 与追加配置起一次服务端：只需要 `[agent]` 参数、不需要 Mock 观测记录的用例走这里。
 async fn serve_with<T>(context: &TestContext, extra: &str, body: impl Future<Output = Result<T>>) -> Result<T> {
+    serve_with_level(context, extra, "warn", body).await
+}
+
+/// 同 [`serve_with`]，但指定服务端日志级别。
+async fn serve_with_level<T>(
+    context: &TestContext,
+    extra: &str,
+    level: &str,
+    body: impl Future<Output = Result<T>>,
+) -> Result<T> {
     let mock = server::shared_mock().await?;
     let text = config(mock.base_url(), extra);
-    server::serve_once(context, &text, body).await
+    server::serve_once_level(context, &text, level, body).await
 }
 
 /// 认证失败：`run_failed` + 脱敏文案，无助手消息。
@@ -414,7 +436,7 @@ async fn shutdown_body(context: &TestContext) -> Result<Vec<String>> {
 
 /// 全局并发上限：`max_concurrent_runs = 1` 时两个会话的 Run 不同时进入 `RUNNING`（P2-025）。
 fn concurrency(context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move { serve_with(context, CONCURRENCY_EXTRA, concurrency_body(context)).await })
+    Box::pin(async move { serve_with_level(context, CONCURRENCY_EXTRA, "trace", concurrency_body(context)).await })
 }
 
 /// 并发用例主体：两个会话同时发慢速消息，采样两个 Run 的状态直到都抵终态。
@@ -482,10 +504,23 @@ async fn concurrency_body(context: &TestContext) -> Result<Vec<String>> {
     first.release(context).await?;
     second.release(context).await?;
 
+    // 并发写入不撞锁：运行期日志里不应出现锁竞争与 panic（S-7、L-5）。
+    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
+    let conflicts: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("database is locked") || line.contains("SQLITE_BUSY") || line.contains("panic"))
+        .collect();
+    ensure!(
+        conflicts.is_empty(),
+        "并发运行期日志不应有锁竞争或 panic：{conflicts:?}"
+    );
+    let log_lines = log.lines().count();
+
     Ok(vec![
         format!("采样 {samples} 次，同时 RUNNING 的最大值：{max_running}"),
         "两个 Run 都抵 Completed".to_string(),
         "配置：max_concurrent_runs = 1".to_string(),
+        format!("服务端日志 {log_lines} 行，无 database is locked / SQLITE_BUSY / panic"),
     ])
 }
 
@@ -615,6 +650,14 @@ fn is_terminal(status: RunStatus) -> bool {
     matches!(status, RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled)
 }
 
+/// 域状态是否已抵终态（进程内用例直接用域类型，不经过 SDK）。
+fn is_domain_terminal(status: domain::RunStatus) -> bool {
+    matches!(
+        status,
+        domain::RunStatus::Completed | domain::RunStatus::Failed | domain::RunStatus::Cancelled
+    )
+}
+
 /// 读取会话消息列表。
 async fn list_messages(context: &TestContext, session_id: &str) -> Result<Vec<lib_bin_cli::sdk::Message>> {
     let messages = context
@@ -625,4 +668,120 @@ async fn list_messages(context: &TestContext, session_id: &str) -> Result<Vec<li
         .await
         .map_err(ClientError::from_call)?;
     Ok(messages)
+}
+
+/// 执行端口装配（G-4）：未注入执行端口时 Run 落 `FAILED`「执行器未装配」。
+///
+/// 「真实 LLM 调用产出事件」的一半由 `chat.multiturn` 与其余 `run.*` 覆盖（共享服务端已注入端口）；
+/// 这里补另一半：本进程的装配从不注入执行端口，会话被占用后队列取到 Run 直接判失败。
+fn execute(context: &TestContext) -> CaseFuture<'_> {
+    Box::pin(async move { execute_body(context).await })
+}
+
+/// 用例主体：建会话 → 发消息（Run 停在 `QUEUED`）→ 占用（队列启动）→ 断言终态与事件文件。
+async fn execute_body(context: &TestContext) -> Result<Vec<String>> {
+    let root = temp_directory("execute")?;
+    let state = runtime_state(&root).await?;
+    let client_id = format!("execute-{}", context.token());
+    state.register(ClientRecord::connected(client_id.clone()));
+    let service = session_service().await?;
+    let session = service
+        .create_session(domain::SessionCreatePO {
+            title: Some(format!("执行端口 {}", context.token())),
+            model: None,
+        })
+        .await
+        .context("创建会话失败")?;
+
+    // 未占用：Run 停在 QUEUED（P1.1 的触发点是「会话被占用 + 消息创建」）。
+    let sent = service
+        .send_message(domain::MessageSendPO {
+            session_id: session.id.clone(),
+            content: format!("未装配执行器 {}", context.token()),
+        })
+        .await
+        .context("发送消息失败")?;
+    ensure!(
+        sent.run.status == domain::RunStatus::Queued,
+        "未占用时 Run 应为 Queued，实际 {:?}",
+        sent.run.status
+    );
+
+    // 建立占用即启动执行队列：driver 为空，Run 直接落终态。
+    let occupancy = state
+        .acquire(OccupancyCreatePO {
+            client_id: client_id.clone(),
+            session_id: session.id.clone(),
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    let deadline = Instant::now() + flow::RUN_TIMEOUT;
+    let mut settled = None;
+    while Instant::now() < deadline {
+        let run = service
+            .get_run(domain::RunGetParams {
+                run_id: sent.run.id.clone(),
+            })
+            .await
+            .context("查询 Run 失败")?;
+        if is_domain_terminal(run.status) {
+            settled = Some(run);
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    let finished = settled.context("执行队列未在超时内处理 QUEUED Run")?;
+    ensure!(
+        finished.status == domain::RunStatus::Failed,
+        "未装配执行器时 Run 应落 Failed，实际 {:?}",
+        finished.status
+    );
+    ensure!(
+        finished.error.as_deref() == Some(NOT_ASSEMBLED),
+        "失败原因应为 {NOT_ASSEMBLED}，实际 {:?}",
+        finished.error
+    );
+    ensure!(finished.finished_at_ms.is_some(), "失败后应写 finishedAtMs");
+
+    let messages = service
+        .list_messages(domain::MessageListParams {
+            session_id: session.id.clone(),
+        })
+        .await
+        .context("读取消息失败")?;
+    ensure!(
+        messages.len() == 1 && messages[0].role == domain::MessageRole::User,
+        "未装配执行器的 Run 不应写助手消息，实际 {} 条消息",
+        messages.len()
+    );
+
+    // 事件文件（写者先落盘再转发）：以 `run_failed` 收尾。
+    let path = journal::session_directory(&root, &session.id).join(format!("{}.jsonl", occupancy.runtime_session_id));
+    let journal_deadline = Instant::now() + Duration::from_secs(10);
+    let mut events = flow::read_journal(&path).unwrap_or_default();
+    while events.last().is_none_or(|event| !flow::is_terminal(event.event)) {
+        ensure!(
+            Instant::now() < journal_deadline,
+            "事件文件未在超时内以终态收尾：{}",
+            path.display()
+        );
+        sleep(Duration::from_millis(20)).await;
+        events = flow::read_journal(&path).unwrap_or_default();
+    }
+    let terminal = events.last().context("事件文件应有终态事件")?;
+    ensure!(
+        terminal.event == RunEventKind::RunFailed,
+        "事件文件应以 run_failed 收尾，实际 {:?}",
+        terminal.event
+    );
+
+    state.release_occupancy(&client_id).await.map_err(anyhow::Error::from)?;
+    std::fs::remove_dir_all(&root).ok();
+
+    Ok(vec![
+        "真实执行的一半：chat.multiturn / run.* 已注入执行端口".to_string(),
+        format!("未装配执行器：Run {} 落 Failed，原因 {NOT_ASSEMBLED}", sent.run.id),
+        format!("事件文件：{} 条事件，以 run_failed 收尾", events.len()),
+    ])
 }

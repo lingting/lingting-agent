@@ -4,6 +4,7 @@
 //! 服务端要访问的 Mock LLM——服务端 `config.toml` 的 `[provider] base_url` 指向
 //! [`mock::MockServer::base_url`] 即可。
 
+mod canary;
 mod config;
 pub(crate) mod mock;
 mod security;
@@ -13,6 +14,12 @@ use crate::case::{Case, CaseKind};
 /// LLM 领域用例。
 pub(crate) fn cases() -> Vec<Case> {
     vec![
+        Case {
+            name: "llm.canary",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: canary::canary,
+        },
         Case {
             name: "llm.config",
             kind: CaseKind::Shared,

@@ -83,6 +83,11 @@ impl Server {
 
     /// 用给定配置启动服务端：需要 `[agent]` 预算或指向独立 Mock 的用例走这里。
     pub async fn start_with(port: u16, log_dir: PathBuf, config: &str) -> Result<Self> {
+        Self::start_with_level(port, log_dir, config, "warn").await
+    }
+
+    /// 同 [`Self::start_with`]，但自定义日志级别：需要检索日志内容的用例（`llm.canary`）用 `trace`。
+    pub async fn start_with_level(port: u16, log_dir: PathBuf, config: &str, level: &str) -> Result<Self> {
         std::fs::create_dir_all(&log_dir).with_context(|| format!("创建测试目录失败：{}", log_dir.display()))?;
         // 配置随应用根目录落地：`[provider]` 段存在时 `session/create` 会校验模型归属（D-P2-015）。
         std::fs::write(log_dir.join(CONFIG_FILE), config)
@@ -103,7 +108,7 @@ impl Server {
             .arg("--port")
             .arg(port.to_string())
             .arg("--log-level")
-            .arg("warn")
+            .arg(level)
             .env(ENV_HOME, &log_dir)
             // 静态资源目录（`lingting-agent-ui/dist`）按服务端进程工作目录解析，固定到仓库根目录，
             // 否则从其他目录跑测试时 WebUI 会 503。
@@ -186,7 +191,17 @@ pub(crate) async fn serve_once<T>(
     config: &str,
     body: impl Future<Output = Result<T>>,
 ) -> Result<T> {
-    let server = Server::start_with(context.port()?, context.home().to_path_buf(), config).await?;
+    serve_once_level(context, config, "warn", body).await
+}
+
+/// 同 [`serve_once`]，但自定义服务端日志级别：需要检索日志内容的用例（S-7 / L-5）用 `trace`。
+pub(crate) async fn serve_once_level<T>(
+    context: &TestContext,
+    config: &str,
+    level: &str,
+    body: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let server = Server::start_with_level(context.port()?, context.home().to_path_buf(), config, level).await?;
     let result = body.await;
     let stopped = server.stop().await;
     match (result, stopped) {

@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：代码任务全部完成（2026-11-21）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿）、Batch D（P2-015 ~ P2-018）完成、Batch E（P2-019 ~ P2-020）完成、Batch F（P2-021 ~ P2-026）已完成并验收（`chat` / `run` / `session` / `runtime` / `tui` / `web` 用例、`make check`、`make ui-check` 全绿）、Batch G（P2-027 ~ P2-030）已完成（TUI / WebUI 状态展示、W-1 与 P1 遗留项结案、文档回填），结论见 `decisions.md`；剩余 Batch H（P2-031 / P2-032，端到端验收与报告）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：P2 已完成（2026-11-21）：32 个任务（Batch A ~ H）全部完成，`acceptance.md` 的 15 类共 92 条判据全部通过，结论与证据见 [`reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)。** Batch H 补齐了 `run.execute` / `persist.running_heal` / `llm.canary` 三个此前缺失的用例，并为 S-7 / L-5 引入 `trace` 日志级；A-4 / P-7、Q-3、S-1 三条按实现口径修订了判据表述。任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -712,14 +712,14 @@
 
 > 依赖：全部批次。
 
-- [ ] **P2-031 端到端验收**
+- [x] **P2-031 端到端验收**
 
   **目标**：按 `acceptance.md` 的 15 类条目逐条验证。
   **涉及文件 / Crate**：`crates/bin-tests`（补齐缺口用例）。
   **验收标准**：`acceptance.md` 逐条通过（含 Build / Architecture / … / End-to-End）。
   **测试要求**：`make test ARGS="--all"`、前端 `pnpm exec vp test run` 与 `pnpm exec playwright test`；全部用例仍在 `bin-tests`，其他 Crate 不写 `#[cfg(test)]`。
 
-- [ ] **P2-032 验收报告与阶段状态**
+- [x] **P2-032 验收报告与阶段状态**
 
   **目标**：沉淀结论、偏差与下游输入，并更新阶段状态。
   **涉及文件 / Crate**：`docs/reports/p2-032-acceptance.md`（新建）、`.steps/p2/{README,tasks,acceptance}.md`、`.steps/README.md`。
@@ -729,7 +729,7 @@
   3. CI 失败原因单独记录，明确「与 P2 功能无关，P6 统一处理」。
   4. 更新阶段状态与 P3 的开工前置说明。
   **验收标准**：
-  - [ ] 报告覆盖 15 类条目，每条有证据。
-  - [ ] 偏差逐条写「处置 + 归属阶段」，无无归属项。
-  - [ ] `.steps/README.md` 的阶段进度与 P2 文档状态一致。
+  - [x] 报告覆盖 15 类条目，每条有证据。
+  - [x] 偏差逐条写「处置 + 归属阶段」，无无归属项。
+  - [x] `.steps/README.md` 的阶段进度与 P2 文档状态一致。
   **测试要求**：无。

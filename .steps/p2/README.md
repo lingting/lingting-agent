@@ -1,6 +1,6 @@
 # P2：基础 Agent Runtime
 
-**状态：代码任务全部完成（2026-11-21）：Batch A（P2-001 ~ P2-005）已定稿，Batch B ~ Batch G 全部完成（Batch C、F 已验收；Batch G 含 TUI / WebUI 状态展示、W-1 与 P1 遗留项结案、文档回填），剩余 Batch H（P2-031 / P2-032：端到端验收与阶段报告）。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
+**状态：P2 已完成（2026-11-21）：32 个任务（Batch A ~ H）全部完成，15 类验收共 92 条全部通过（结论与证据见 [`reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)；A-4 / P-7、Q-3、S-1 三条按实现口径修订了表述）。** 上一版方案建立在「Run 由 `api/run/stream` 订阅触发」的前提上（旧 D-P2-006），该前提已被 **P1.1** 移除；本版按 P1.1 的客户端连接与会话运行时模型重写。
 
 > 依据：P1 验收结论（[`docs/reports/p1-020-acceptance.md`](../../docs/reports/p1-020-acceptance.md)）、P1.1 验收结论（[`docs/reports/p1.1-022-acceptance.md`](../../docs/reports/p1.1-022-acceptance.md)）与仓库实际代码。凡与既有文档不一致之处，以代码为准并记入 `decisions.md`。
 > 任务见 [`tasks.md`](tasks.md)，判据见 [`acceptance.md`](acceptance.md)，决策见 [`decisions.md`](decisions.md)。

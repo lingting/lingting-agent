@@ -1,6 +1,6 @@
 # Personal Agent 开发路线图
 
-本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已完成，P2 代码任务全部完成（Batch A ~ G，剩 Batch H 端到端验收与阶段报告），P3–P6 只做阶段级规划。**
+本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已完成，P2 已完成（Batch A ~ H；15 类验收全部通过，报告见 [`reports/p2-032-acceptance.md`](../docs/reports/p2-032-acceptance.md)），P3–P6 只做阶段级规划。**
 
 本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构以 `docs/develop.md` 的「前端工程」一节为准。
 
@@ -53,7 +53,7 @@
 |------|------|----------|------|
 | **P1** | 基础工程架构 | 单 Binary 双运行模式、Server 基础能力、统一 API 契约、TS/Rust 双 SDK 生成、TUI/WebUI 最小闭环（Mock） | [p1/README.md](p1/README.md) |
 | **P1.1** | 客户端连接与会话运行时 | 客户端注册/心跳/问询、断连处理链、显式会话占用、原始事件文件与轮转、移除 `api/run/stream`、TUI/WebUI 接入 | [p1.1/README.md](p1.1/README.md)（已细化：`tasks.md` / `acceptance.md` / `decisions.md`） |
-| **P2** | 基础 Agent Runtime | Rig Provider Adapter、Agent Loop、Context、Streaming（经 P1.1 事件通路）、SQLite 持久化、Run 生命周期与取消 | [p2/README.md](p2/README.md)（32 个任务 / 8 个批次，代码任务完成，剩 Batch H） |
+| **P2** | 基础 Agent Runtime | Rig Provider Adapter、Agent Loop、Context、Streaming（经 P1.1 事件通路）、SQLite 持久化、Run 生命周期与取消 | [p2/README.md](p2/README.md)（32 个任务 / 8 个批次，已完成） |
 | **P3** | Tool System | Tool Trait / Registry / Executor、Tool Calling Loop、权限与审计、并行调用、5 个内置工具 | [p3/README.md](p3/README.md) |
 | **P4** | MCP Integration | 基于 rmcp 的 MCP Client Manager、Server Registry、工具发现与适配 | [p4/README.md](p4/README.md) |
 | **P5** | Skills | Skill 发现与加载、SKILL.md、渐进披露、Skill 与 Tool 协作 | [p5/README.md](p5/README.md) |
@@ -99,7 +99,7 @@ P6 Production Readiness
 | SDK 生成 | `make gen` 一条命令产出两份 SDK，产物落 `packages/sdk-rust`（`#[path]` 引入 `lib-bin-cli`）与 `packages/sdk-ts`（由 `lingting-agent-ui/` 内的 pnpm workspace 消费），均不入库（D-006 已修订）；**生成必须在 `make build` / `make ui-install` 之前执行** |
 | P1 | **已完成**：P1-001 ~ P1-020 全部完成并通过验收（九类条目全部通过，结论与证据见 [`reports/p1-020-acceptance.md`](../docs/reports/p1-020-acceptance.md)）；判据修订（A-1、E-3、E-4）见 `p1/decisions.md` D-032。下一步：P2 细化前先读该报告的「P2 输入清单」 |
 | P1.1 | **已完成**：22 个任务（7 个批次）全部完成，21 条判据全部通过，结论与证据见 [`reports/p1.1-022-acceptance.md`](../docs/reports/p1.1-022-acceptance.md)；本阶段移除了 `api/run/stream`，服务端推送只剩 `api/client/stream`，Run 触发点改为「会话被占用 + 消息创建」，并新增客户端注册 / 心跳 / 问询、会话占用、事件文件与轮转 |
-| P2 | **代码任务全部完成（2026-11-21）**：`p2/`（32 个任务、8 个批次、15 类验收、32 项决策 + 5 项 OPEN，其中 O-1 / O-3 / O-4 已结案）按 P1.1 的客户端连接与会话运行时模型重写——Run 触发点继承 P1.1，P2 只把「产出 Mock 事件」换成真实 Agent Loop（D-P2-028）。Batch A ~ G 已完成（Batch C 的 SQLite + Repository、Batch F 的真实执行、Batch G 的 TUI / WebUI 状态展示与 W-1 / P1 遗留项结案、文档回填）；剩 Batch H（P2-031 端到端验收、P2-032 报告），对 `acceptance.md` 的 15 类条目与 `docs/reports/p2-032-acceptance.md` 尚未产出 |
+| P2 | **已完成（2026-11-21）**：`p2/`（32 个任务、8 个批次、15 类验收共 92 条、32 项决策 + 5 项 OPEN，其中 O-1 / O-3 / O-4 已结案）按 P1.1 的客户端连接与会话运行时模型重写——Run 触发点继承 P1.1，P2 只把「产出 Mock 事件」换成真实 Agent Loop（D-P2-028）。Batch A ~ H 全部完成，15 类判据全部通过（A-4 / P-7、Q-3、S-1 三条按实现口径修订），结论与证据见 [`reports/p2-032-acceptance.md`](../docs/reports/p2-032-acceptance.md)；本轮补齐了 `run.execute` / `persist.running_heal` / `llm.canary` 三个此前缺失的用例 |
 | P3–P6 | 未开始，仅有阶段级规划 |
 
 ---
@@ -109,7 +109,7 @@ P6 Production Readiness
 1. **开始 P1 前**：先读 `p1/README.md` 的阶段边界与执行顺序，再读 `p1/decisions.md` 中所有 `OPEN` 项，确认哪些必须在动手前讨论。
 2. **执行任务**：按 `p1/tasks.md` 的依赖顺序取任务。任务分为若干批次（Batch），同一批次内可以并行，批次之间必须按顺序。
 3. **验收**：每个阶段结束时对照该阶段的 `acceptance.md` 逐条确认（P1 / P1.1 / P2 已有该文件；P3–P6 暂以各自 README 中的“阶段验收方向”为准）。
-4. **细化后续阶段**：P1、P1.1 已完成，P2 代码任务已完成（剩端到端验收与报告）；P3–P6 在前一阶段验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`，禁止提前细化。
+4. **细化后续阶段**：P1、P1.1、P2 已完成；P3–P6 在前一阶段验收通过后、正式开工前才展开成 `tasks.md` / `acceptance.md` / `decisions.md`，禁止提前细化。
 5. **结构设计**：Cargo Workspace、Crate 划分与依赖方向以 `docs/workspace.md` 为准；前端工程结构在 P1-016 前确认。
 
 ---
