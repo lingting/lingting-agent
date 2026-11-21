@@ -37,6 +37,7 @@ pub struct ProviderConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     /// OpenAI 兼容协议（P2 唯一支持的形态）。
+    #[serde(rename = "openai-compatible")]
     OpenAiCompatible,
 }
 

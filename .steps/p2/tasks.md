@@ -376,7 +376,7 @@
   - `session/create`：装配层先用 `provider.default_model` 补缺省模型，未知 id 用 `LlmError::public_message()` 转 `SessionError::Invalid`（400）；无 `[provider]` 段不校验。
   - 用例：新增 `llm` 领域（`llm.config` / `llm.security`），`session.error` 扩展未知模型分支；`bin-tests` 服务端在 `AGENT_HOME` 下写最小 `config.toml`（`default_model = "mock-model"`，其余用例可见行为不变）。
   - 未做：日志文件的 canary 检索（Z-1，需真实调用模型，归 P2-031 / P2-032）。
-- [ ] **P2-018 `bin-tests` 内置 OpenAI 兼容 Mock Server**
+- [x] **P2-018 `bin-tests` 内置 OpenAI 兼容 Mock Server**
 
   **目标**：让 P2 的用例不依赖付费 API，且能精确构造异常场景。
   **前置依赖**：P2-005。
@@ -387,10 +387,24 @@
   3. 记录请求体与连接关闭计数，供「增量拼接」「取消真正断连」类断言使用。
   **技术要求**：不创建 `bin-mock-server`；不引入 `lib-web` / `service-core` 作为 Mock 实现依赖（`bin-tests` 的 `service-core` 依赖只用于进程内驱动运行时内核）。
   **验收标准**：
-  - [ ] 七种场景可被用例按需选择，SSE 分块间隔可控。
-  - [ ] `/mock/last-request` 能返回完整的 messages 数组（供 Context 断言）。
+  - [x] 七种场景可被用例按需选择，SSE 分块间隔可控。
+  - [x] `/mock/last-request` 能返回完整的 messages 数组（供 Context 断言）。
   **测试要求**：`llm.mock`（自身可用性）。
   **完成产物**：Mock LLM Server。
+
+  **落地记录（2026-11-21）**：
+  - 位置：`crates/bin-tests/src/cases/llm/mock/`（`mod` / `http` / `handler` / `scenario` / `reply` / `record` / `case`）；同时把原来的 `cases/llm.rs` 拆成 `cases/llm/{mod,config,security}.rs`，`cases()` 增 `llm.mock`。
+  - HTTP 层（`http.rs`）：手写 HTTP/1.1，一条连接一个请求（响应固定 `Connection: close`），`Content-Length` 定长请求体，不支持分块上传；请求头 16 KiB、请求体 1 MiB 上限。SSE 不写 `content-length`，以关连接收尾。
+  - 路由（`handler.rs`）：`…/chat/completions` 与 `…/models` 按路径后缀匹配（`[provider] base_url` 写不写 `/v1` 都能用），控制端点 `/mock/stats`、`/mock/last-request`。
+  - 场景（`scenario.rs`）：`normal` / `auth` / `upstream` / `invalid_json` / `disconnect` / `stall` / `slow`，按「最后一条消息里的 `mock:<场景>` → 查询串 `scenario=` → 路径前缀 `/mock/<场景>/`」取第一个命中。关键字那条是给真实 Provider 用的：服务端只改 `base_url` 即可选中异常（P2-026 / P2-031 依赖它）。
+  - 节奏参数：`chunk_ms`（默认 10ms，`slow` 默认 200ms，上限 2000ms）、`stall_ms`（默认 30s，上限 120s）。
+  - 响应（`reply.rs`）：正文回显最后一条消息（`Mock 回复：<内容>`），增量每帧 6 个字符保证多帧；末帧带 `finish_reason` 与 `usage`（两计数均 `>= 1`，按 4 字符 1 token 估算）。`invalid_json` 回 200 + 故意写坏的 JSON；`auth` / `upstream` 回 OpenAI 风格错误体（401 / 503）。
+  - 观测（`record.rs`）：`/mock/stats` 给 `requests` / `chatRequests` / `chatJson` / `chatSse` / `scenarios` / `streamsCompleted` / `streamsAborted` / `lastRequestAtMs`；`/mock/last-request` 直接返回最近一次 chat 请求体（完整 `messages`）。连接关闭靠「每写一帧后 `try_read` 探 EOF」识别，Mock 自己主动断开 / 静默的场景不计入完成或中断计数，只体现在场景分布里。
+  - `llm.mock` 用例覆盖：模型清单、普通补全（回显 + 用量）、`last-request` 消息顺序、SSE 增量拼接与 `chunk_ms=150` 的耗时下界、关键字 / 查询串 / 路径前缀三种场景选择、`invalid_json` 不可解析、`slow` 默认间隔、客户端关闭后 `streamsAborted` 增加、七种场景都被记录。
+  - **实测（O-1 的遗留推断已成立）**：`llm.mock` 里执行 `drop` 流式响应后 `streamsAborted` 0 → 1，即 reqwest 释放 body 时确实关闭 TCP 连接。N-2「取消真正中断模型调用」可以按「连接关闭计数 +1」断言，不必降级。
+  - **顺带修正 P2-017 遗留**：`types-core` 的 `ProviderKind::OpenAiCompatible` 原为 `rename_all = "kebab-case"`，serde 生成 `open-ai-compatible`，与 P2 计划 / 文档 / 服务端 `config.toml` 的 `openai-compatible` 不一致（共享服务端启动即退出码 2，全量用例都跑不起来）。按计划口径改为变体级 `#[serde(rename = "openai-compatible")]`，`open-ai-compatible` 不再被接受。
+  - 验证：`make test ARGS="llm"`（`llm.config` / `llm.mock` 1936ms / `llm.security` 全通过）、`make test ARGS="session"` 全通过（未知模型分支走同一份 `[provider]` 配置）。
+  - 未做：`server.rs` 的 `TEST_CONFIG` 仍指向不可达地址，服务端接入 Mock 的启动辅助留给 P2-026。
 
 ---
 

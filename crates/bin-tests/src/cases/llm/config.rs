@@ -1,21 +1,15 @@
-//! LLM 配置用例：Provider / Agent 段的装载与校验（P2-017），以及密钥不泄漏的检索。
+//! `llm.config`：`[provider]` / `[[provider.models]]` / `[agent]` 段的装载与校验（P2-017）。
 //!
-//! 全部进程内执行，不依赖 Mock LLM Server：`llm.config` 把 TOML 文本直接喂给
-//! `lib_bin_cli::config::parse_llm`（P2-017 起配置只来自 `config.toml` 与命令行，没有环境变量覆盖）；
-//! `llm.security` 用 canary 密钥构造 `ProviderService`，检索 `Debug` / `Display` / 错误文案。
-//! 服务端日志文件的 canary 检索归端到端验收 Z-1（P2-032）。
+//! 进程内执行，不依赖 Mock LLM Server：TOML 文本直接喂给
+//! `lib_bin_cli::config::parse_llm`（P2-017 起配置只来自 `config.toml` 与命令行，
+//! 没有环境变量覆盖）。
 
-use crate::case::{Case, CaseFuture, CaseKind};
+use crate::case::CaseFuture;
 use crate::context::TestContext;
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::config::parse_llm;
-use manager_agent::ProviderService;
 use types_core::config::agent::{DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS};
 use types_core::config::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
-use types_core::config::{ModelConfig, ProviderConfig, ProviderKind, Secret};
-
-/// `llm.security` 的 canary：只要出现在任何可输出文本里就算泄漏。
-const CANARY: &str = "sk-canary-8b7f3d0c1e4a";
 
 /// 一份完整合法的配置：Provider 两个模型（一个全字段、一个只写 id 走缺省值）+ 全量 Agent 参数。
 const FULL_CONFIG: &str = r#"
@@ -47,30 +41,7 @@ context_max_messages = 10
 context_safety_tokens = 128
 "#;
 
-/// 拼一份只含 `[provider]` 段（给定内容）与最小 `[agent]` 段的配置文本。
-fn with_provider(section: &str) -> String {
-    format!("{section}\n[agent]\nmax_concurrent_runs = 2\n")
-}
-
-/// LLM 配置领域用例。
-pub(crate) fn cases() -> Vec<Case> {
-    vec![
-        Case {
-            name: "llm.config",
-            kind: CaseKind::Shared,
-            prep: &[],
-            run: config,
-        },
-        Case {
-            name: "llm.security",
-            kind: CaseKind::Shared,
-            prep: &[],
-            run: security,
-        },
-    ]
-}
-
-fn config(_context: &TestContext) -> CaseFuture<'_> {
+pub(super) fn config(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let mut notes = Vec::new();
 
@@ -240,48 +211,9 @@ id = "model-a"
     })
 }
 
-fn security(_context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move {
-        let provider = ProviderService::new(Some(canary_provider()));
-        ensure!(provider.configured(), "写了 [provider] 段时应视为已配置");
-
-        let config = provider.provider().context("已配置时必须能取到 Provider 配置")?;
-        let missing = provider
-            .model(Some("no-such-model"))
-            .err()
-            .context("未知模型必须解析失败")?;
-
-        let rendered = [
-            format!("{provider:?}"),
-            format!("{config:?}"),
-            format!("{}", config.api_key),
-            format!("{:?}", config.api_key),
-            format!("{missing}"),
-            format!("{missing:?}"),
-            missing.public_message(),
-        ];
-        for text in &rendered {
-            ensure!(!text.contains(CANARY), "密钥出现在可输出文本里：{text}");
-        }
-
-        // 未配置 Provider：文案可读，同样不携带任何密钥。
-        let unconfigured = ProviderService::new(None);
-        ensure!(!unconfigured.configured(), "没有 [provider] 段时应视为未配置");
-        let message = unconfigured
-            .model(None)
-            .err()
-            .context("未配置 Provider 时解析模型必须失败")?
-            .public_message();
-        ensure!(
-            message == "调用模型失败：未配置 Provider",
-            "未配置 Provider 的文案不符：{message}"
-        );
-
-        Ok(vec![
-            format!("已检索 {} 处可输出文本，canary 未出现", rendered.len()),
-            format!("未配置 Provider：{message}"),
-        ])
-    })
+/// 拼一份只含 `[provider]` 段（给定内容）与最小 `[agent]` 段的配置文本。
+fn with_provider(section: &str) -> String {
+    format!("{section}\n[agent]\nmax_concurrent_runs = 2\n")
 }
 
 /// 断言一份配置文本必须装载失败，返回错误文案。
@@ -289,21 +221,5 @@ fn expect_failure(text: &str) -> Result<String> {
     match parse_llm(text) {
         Ok(_) => bail!("这份配置应当被拒绝：{text}"),
         Err(error) => Ok(format!("{error:#}")),
-    }
-}
-
-/// 带 canary 密钥的 Provider 配置：密钥确实进了结构体，检索才有意义。
-fn canary_provider() -> ProviderConfig {
-    ProviderConfig {
-        id: "canary".to_string(),
-        kind: ProviderKind::OpenAiCompatible,
-        base_url: "https://api.example.com/v1".to_string(),
-        api_key: Secret::new(CANARY),
-        default_model: "canary-model".to_string(),
-        models: vec![ModelConfig {
-            id: "canary-model".to_string(),
-            context_window: DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-        }],
     }
 }
