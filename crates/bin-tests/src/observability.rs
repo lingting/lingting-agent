@@ -88,6 +88,21 @@ fn runtime_section() -> String {
         metrics.session_lock_hold.calls, metrics.session_lock_hold.max_millis, metrics.session_lock_hold.total_millis
     ));
     text.push_str(&format!(
+        "| 取会话锁等待 | {} 次，最长 {}ms（累计 {}ms） |\n",
+        metrics.session_lock_wait.calls, metrics.session_lock_wait.max_millis, metrics.session_lock_wait.total_millis
+    ));
+    text.push_str(&format!(
+        "| 注册表整表锁 | 读 {} 次（最长等 {}ms）｜写 {} 次（最长等 {}ms） |\n",
+        metrics.registry_lock.reads,
+        metrics.registry_lock.read_wait_max_millis,
+        metrics.registry_lock.writes,
+        metrics.registry_lock.write_wait_max_millis
+    ));
+    text.push_str(&format!(
+        "| 下行转发 | {} 帧，单帧最长 {}ms |\n",
+        metrics.registry_lock.forwards, metrics.registry_lock.forward_max_millis
+    ));
+    text.push_str(&format!(
         "| 取数据库连接 | {} 次，最长 {}ms |\n\n",
         metrics.database.calls, metrics.database.max_millis
     ));

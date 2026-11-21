@@ -30,6 +30,9 @@ const APPEND_WARN_MS: u128 = 50;
 /// 会话锁持有达到这个阈值记 `warn`：锁内出现收尾等待或 IO 了（P2.1-006）。
 #[cfg(feature = "metrics")]
 const LOCK_WARN_MS: u128 = 200;
+/// 注册表锁与会话锁的等待达到这个阈值记 `warn`：整表锁已经把请求串在同一处（P2.1-008.1）。
+#[cfg(feature = "metrics")]
+const LOCK_WAIT_WARN_MS: u128 = 100;
 
 /// 断连清理链指标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -94,6 +97,38 @@ pub struct SessionLockHold {
     pub max_millis: u64,
 }
 
+/// 注册表整表锁指标（P2.1-008.1）：判断整表 `RwLock` 是否在热路径上制造排队。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RegistryLockMetrics {
+    /// 取读锁次数。
+    pub reads: u64,
+    /// 读锁累计等待耗时（毫秒）。
+    pub read_wait_millis: u64,
+    /// 读锁单次最长等待耗时（毫秒）。
+    pub read_wait_max_millis: u64,
+    /// 取写锁次数；每转发一条下行事件至少一次。
+    pub writes: u64,
+    /// 写锁累计等待耗时（毫秒）。
+    pub write_wait_millis: u64,
+    /// 写锁单次最长等待耗时（毫秒）。
+    pub write_wait_max_millis: u64,
+    /// 下行转发次数。
+    pub forwards: u64,
+    /// 单次转发的临界区最长耗时（毫秒，含取写锁与投递）。
+    pub forward_max_millis: u64,
+}
+
+/// 会话锁取锁等待指标（P2.1-008.1）：只覆盖等锁；锁内持有时间见 [`SessionLockHold`]。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionLockWait {
+    /// 取锁次数。
+    pub calls: u64,
+    /// 累计等待耗时（毫秒）。
+    pub total_millis: u64,
+    /// 单次最长等待耗时（毫秒）。
+    pub max_millis: u64,
+}
+
 /// 运行时指标的全量快照。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
@@ -109,6 +144,10 @@ pub struct MetricsSnapshot {
     pub session_locks: SessionLockMetrics,
     /// 会话锁持有时间（P2.1-006）。
     pub session_lock_hold: SessionLockHold,
+    /// 注册表整表锁（P2.1-008.1）。
+    pub registry_lock: RegistryLockMetrics,
+    /// 会话锁取锁等待（P2.1-008.1）。
+    pub session_lock_wait: SessionLockWait,
     /// 数据库取连接等待。
     pub database: DatabaseAcquire,
 }
@@ -170,6 +209,29 @@ static LOCK_CALLS: AtomicU64 = AtomicU64::new(0);
 static LOCK_NANOS: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "metrics")]
 static LOCK_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+// 注册表整表锁、下行转发与会话锁取锁等待（P2.1-008.1）。
+#[cfg(feature = "metrics")]
+static REG_READS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static REG_READ_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static REG_READ_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static REG_WRITES: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static REG_WRITE_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static REG_WRITE_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static FORWARDS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static FORWARD_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static WAIT_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// 只读快照：调用方取一次即可，不重置。未启用采集时全部为 0。
 pub fn snapshot() -> MetricsSnapshot {
@@ -206,6 +268,21 @@ pub fn snapshot() -> MetricsSnapshot {
                 calls: LOCK_CALLS.load(Ordering::Relaxed),
                 total_millis: millis(LOCK_NANOS.load(Ordering::Relaxed)),
                 max_millis: millis(LOCK_MAX_NANOS.load(Ordering::Relaxed)),
+            },
+            registry_lock: RegistryLockMetrics {
+                reads: REG_READS.load(Ordering::Relaxed),
+                read_wait_millis: millis(REG_READ_NANOS.load(Ordering::Relaxed)),
+                read_wait_max_millis: millis(REG_READ_MAX_NANOS.load(Ordering::Relaxed)),
+                writes: REG_WRITES.load(Ordering::Relaxed),
+                write_wait_millis: millis(REG_WRITE_NANOS.load(Ordering::Relaxed)),
+                write_wait_max_millis: millis(REG_WRITE_MAX_NANOS.load(Ordering::Relaxed)),
+                forwards: FORWARDS.load(Ordering::Relaxed),
+                forward_max_millis: millis(FORWARD_MAX_NANOS.load(Ordering::Relaxed)),
+            },
+            session_lock_wait: SessionLockWait {
+                calls: WAIT_CALLS.load(Ordering::Relaxed),
+                total_millis: millis(WAIT_NANOS.load(Ordering::Relaxed)),
+                max_millis: millis(WAIT_MAX_NANOS.load(Ordering::Relaxed)),
             },
             database: DatabaseAcquire {
                 calls: database.calls,
@@ -349,6 +426,65 @@ pub(crate) fn record_session_lock_hold(elapsed: Duration) {
         LOCK_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
         if elapsed.as_millis() >= LOCK_WARN_MS {
             warn!(elapsed_ms = elapsed.as_millis(), "会话锁持有时间过长");
+        }
+    }
+}
+
+/// 记一次注册表读锁的等待时长：只算等锁，不含临界区。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables, dead_code))]
+pub(crate) fn record_registry_read(wait: Duration) {
+    #[cfg(feature = "metrics")]
+    {
+        let nanos = to_nanos(wait);
+        REG_READS.fetch_add(1, Ordering::Relaxed);
+        REG_READ_NANOS.fetch_add(nanos, Ordering::Relaxed);
+        REG_READ_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        if wait.as_millis() >= LOCK_WAIT_WARN_MS {
+            warn!(wait_ms = wait.as_millis(), "注册表读锁等待时间过长");
+        }
+    }
+}
+
+/// 记一次注册表写锁的等待时长：只算等锁，不含临界区。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables, dead_code))]
+pub(crate) fn record_registry_write(wait: Duration) {
+    #[cfg(feature = "metrics")]
+    {
+        let nanos = to_nanos(wait);
+        REG_WRITES.fetch_add(1, Ordering::Relaxed);
+        REG_WRITE_NANOS.fetch_add(nanos, Ordering::Relaxed);
+        REG_WRITE_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        if wait.as_millis() >= LOCK_WAIT_WARN_MS {
+            warn!(wait_ms = wait.as_millis(), "注册表写锁等待时间过长");
+        }
+    }
+}
+
+/// 记一次下行转发：从取写锁到投递完成的整段，是「每帧一条事件」的临界区。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables, dead_code))]
+pub(crate) fn record_downlink_forward(elapsed: Duration) {
+    #[cfg(feature = "metrics")]
+    {
+        let nanos = to_nanos(elapsed);
+        FORWARDS.fetch_add(1, Ordering::Relaxed);
+        FORWARD_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        if elapsed.as_millis() >= LOCK_WAIT_WARN_MS {
+            warn!(elapsed_ms = elapsed.as_millis(), "下行转发的临界区耗时过长");
+        }
+    }
+}
+
+/// 记一次会话锁取锁等待：只算等锁，锁内持有时间另见 [`record_session_lock_hold`]。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables, dead_code))]
+pub(crate) fn record_session_lock_wait(elapsed: Duration) {
+    #[cfg(feature = "metrics")]
+    {
+        let nanos = to_nanos(elapsed);
+        WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
+        WAIT_NANOS.fetch_add(nanos, Ordering::Relaxed);
+        WAIT_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        if elapsed.as_millis() >= LOCK_WAIT_WARN_MS {
+            warn!(wait_ms = elapsed.as_millis(), "会话锁取锁等待时间过长");
         }
     }
 }

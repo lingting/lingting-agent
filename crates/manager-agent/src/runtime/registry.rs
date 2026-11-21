@@ -171,7 +171,12 @@ impl RuntimeState {
     ///
     /// 持有时间由守卫的 `Drop` 记进指标：它与收尾时长是否解耦由这个数字证明。
     pub(crate) async fn lock_session(&self, session_id: &str) -> SessionLock {
-        let guard = self.session_lock(session_id).lock_owned().await;
+        let lock = self.session_lock(session_id);
+        #[cfg(feature = "metrics")]
+        let waiting = Instant::now();
+        let guard = lock.lock_owned().await;
+        #[cfg(feature = "metrics")]
+        metrics::record_session_lock_wait(waiting.elapsed());
         SessionLock {
             started: Instant::now(),
             _guard: guard,
@@ -562,7 +567,12 @@ pub(crate) struct Downlink {
 impl Downlink {
     /// 转发一条事件；需要标记断连时同时发出通知。
     pub(crate) fn forward(&self, event: &RunEvent) {
-        if write(&self.inner).forward(&self.client_id, event) {
+        #[cfg(feature = "metrics")]
+        let started = Instant::now();
+        let marked = write(&self.inner).forward(&self.client_id, event);
+        #[cfg(feature = "metrics")]
+        metrics::record_downlink_forward(started.elapsed());
+        if marked {
             super::handler::notify();
         }
     }
@@ -576,7 +586,12 @@ impl Downlink {
 }
 /// 取读锁；锁中毒时沿用内部数据，避免单次 panic 让注册表永久失效。
 fn read(inner: &RwLock<Registry>) -> RwLockReadGuard<'_, Registry> {
-    inner.read().unwrap_or_else(|error| error.into_inner())
+    #[cfg(feature = "metrics")]
+    let waiting = Instant::now();
+    let guard = inner.read().unwrap_or_else(|error| error.into_inner());
+    #[cfg(feature = "metrics")]
+    metrics::record_registry_read(waiting.elapsed());
+    guard
 }
 
 /// 会话锁的持有守卫：离开作用域时把持有时间记进指标（P2.1-006）。
@@ -645,5 +660,10 @@ fn lock(
 
 /// 取写锁，中毒处理同 [`read`]。
 fn write(inner: &RwLock<Registry>) -> RwLockWriteGuard<'_, Registry> {
-    inner.write().unwrap_or_else(|error| error.into_inner())
+    #[cfg(feature = "metrics")]
+    let waiting = Instant::now();
+    let guard = inner.write().unwrap_or_else(|error| error.into_inner());
+    #[cfg(feature = "metrics")]
+    metrics::record_registry_write(waiting.elapsed());
+    guard
 }

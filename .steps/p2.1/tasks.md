@@ -1,6 +1,6 @@
 # P2.1 任务清单
 
-**状态：Batch A 已完成（P2.1-001 ~ 003，2026-11-21）；Batch B 已完成（P2.1-004 ~ 008，2026-11-21，逐任务「修复前 / 修复后」对照见 `docs/reports/p2.1-004 ~ 008`）；Batch C ~ E 待开工（7 个任务 / 3 个批次）。** 阶段目标、边界、根因分析与判据见本目录 [README.md](README.md)；`acceptance.md` 不单独建（判据在 README §七），`decisions.md` 已随 Batch A 展开。关键结论：**K-1 未复现**，G-1 口径改为「结构修复 + 指标对照」（[decisions.md](decisions.md) D-P2.1-007）；Batch B 修掉四处结构缺陷（测试侧同步阻塞、全局断连链、锁内收尾、锁表只增），H-3 复核结论为「许可与 journal 都不是瓶颈」。
+**状态：Batch A 已完成（P2.1-001 ~ 003，2026-11-21）；Batch B 已完成（P2.1-004 ~ 008，2026-11-21，逐任务「修复前 / 修复后」对照见 `docs/reports/p2.1-004 ~ 008`）；Batch C ~ E 待开工（7 个任务 / 3 个批次）；Batch B 追加 P2.1-008.1 / 008.2（锁面与数据库读路径复核，审查型）：008.1 / 008.2 均已完成（锁面与数据库读路径逐项「不改」，见 `docs/reports/p2.1-008.1-lock-audit.md`、`docs/reports/p2.1-008.2-db-read-cache.md`）。** 阶段目标、边界、根因分析与判据见本目录 [README.md](README.md)；`acceptance.md` 不单独建（判据在 README §七），`decisions.md` 已随 Batch A 展开。关键结论：**K-1 未复现**，G-1 口径改为「结构修复 + 指标对照」（[decisions.md](decisions.md) D-P2.1-007）；Batch B 修掉四处结构缺陷（测试侧同步阻塞、全局断连链、锁内收尾、锁表只增），H-3 复核结论为「许可与 journal 都不是瓶颈」。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码审查、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -66,7 +66,7 @@
 
 ---
 
-## Batch B：结构性并发缺陷修复（P2.1-004 ~ P2.1-008）
+## Batch B：结构性并发缺陷修复（P2.1-004 ~ P2.1-008.2）
 
 > 依赖：P2.1-001 ~ P2.1-003。**一次只改一处，改完单独跑一轮全量**，禁止多处同改；每处修复在报告里保留「修复前 / 修复后」数据。
 
@@ -152,6 +152,86 @@
   - [x] 如调整了 journal 写入方式，附修复前后对比，且 `git diff` 里没有测试侧限流改动（本任务无代码改动）。
   - [x] 事件顺序语义不变（先落盘 flush 再转发）。
   **测试要求**：`make test ARGS="--all"` 前后各一次。**已授权并执行**（复用 P2.1-007 的全量轮与 `run.concurrency` 单跑）。
+
+- [x] **P2.1-008.1 同步锁与共享状态复核（锁面：ArcSwap / 无锁可替换性）**（已完成，结论为「逐项不改」，见 [`docs/reports/p2.1-008.1-lock-audit.md`](../../docs/reports/p2.1-008.1-lock-audit.md)）
+
+  **目标**：逐处检阅进程内全部同步锁与共享状态，判定「能否换成 `ArcSwap` 或其他无锁方式」。判据不是「是否用了 ArcSwap」，而是「锁是否仍在热路径上制造排队」；**「不改」也是合格结论**，但必须附指标或结构理由。
+  **前置依赖**：P2.1-008（先把许可与 journal 的结论落定，避免与写路径同改）。
+  **涉及文件 / Crate**：`crates/manager-agent/src/runtime/{registry,handler,session}.rs`、`crates/manager-agent/src/runner/cancel.rs`、`crates/agent-runtime/src/{limit,port}.rs`、`crates/lib-bin-tui/src/worker.rs`、`crates/lib-core/src/directorys.rs`（现状参照）、`crates/{manager-agent,lib-bin-tui}/Cargo.toml`（仅当决定引入 `arc-swap` 时）。
+  **实施步骤**：
+  1. 建立锁面清单（文件 + 字段 + 锁类型 + 临界区是否跨 `await` + 每单位动作次数）。至少覆盖：
+     - `registry.rs::RuntimeState::inner: Arc<RwLock<Registry>>`：整表一把 `RwLock`；`Downlink::forward` **每帧一条事件取一次写锁**（`allocate_seq` 自增与 `channels` 查找都在锁内），`mark_stream_closed` / `heartbeat` / `occupy` 也走写锁。
+     - `registry.rs::Registry::session_locks: HashMap<String, Arc<AsyncMutex<()>>>`（读锁快路径 + 写锁插入 + P2.1-007 的回收）。
+     - `registry.rs::Finalizer::pending: Mutex<HashMap<..>>`（短临界区，不跨 `await`）。
+     - `handler.rs::CHAINS: OnceLock<RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>`（P2.1-005 的按客户端串行单位）。
+     - `runtime/session.rs` 写者的 `journal: Arc<std::sync::Mutex<Journal>>`（`append` 在 `spawn_blocking` 内持锁）。
+     - `runner/cancel.rs::RunCancels::inner: Mutex<HashMap<String, Entry>>`（锁内只做内存读写）。
+     - `lib-bin-tui/src/worker.rs`：`Arc<Mutex<LinkSnapshot>>`（读多写少）与 `AsyncMutex<LinkState>`（跨 `await` 的连接状态机）。
+     - `OnceLock` 类（`holder`、`probe`、`lifecycle`、`registry` 的 `events_root` / `driver`）：只写一次，直接排除并写明理由。
+     - `agent-runtime` 的 `Semaphore` 许可：不是锁（排队行为已由 P2.1-008 定性），不在本任务改默认值。
+  2. 按「锁的用途」分类后再判可替换性，避免把语义问题当性能问题：
+     - **互斥原语**（`session_locks`、`CHAINS`、`LinkState`）：提供「同一会话 / 同一客户端串行」语义，**不得** ArcSwap 化；只允许把其所在索引表换成 `ArcSwap`，且收益必须由指标证明。
+     - **读多写少快照**（`LinkSnapshot`、客户端状态与 `channels`）：ArcSwap 明确可行，读侧只 `load` + `Arc::clone`。
+     - **整表状态**（`Registry`）：ArcSwap 结构上可行，但写侧要整表 clone；**必须先拆掉「每帧取写锁」**（序号改 `AtomicU64`、通道表独立快照），否则只是把写锁换成 clone 成本。
+     - **阻塞线程内的短锁**（`journal`）：优先评估「单写者 + 频道」而非换锁类型。
+  3. 补测量口径（只在 P2.1-003 的 `metrics` 特性下采集）：每帧取写锁次数与等待时长、锁表取锁次数与等待、临界区最长时长。没有数字不做改造。
+  4. 依测量结果逐项定论；确需改的**一次只改一处**，改完单独跑一轮全量并留前后对照；未改项写明理由与数据。
+  **技术要求**：
+  - 语义零变化：同会话串行、断连顺序（`client_closed` → 反注册 → 停运行时会话 → 撤回占用）、先落盘 flush 再转发、锁内不跨 `await`。
+  - 依赖：`arc-swap` 已在 workspace（`lib-core` 已用），向其他 Crate 引入仍需在 `decisions.md` 登记范围与理由。
+  - 测试侧锁（`bin-tests/src/server.rs` 的共享服务端 `LOCK`、`support.rs` 的 `app_home` 锁、`cases/llm/mock/record.rs` 的 `Mutex`）是测试进程**故意串行**的夹具，不在本任务范围，只登记不改。
+  - 锁中毒处理策略不变（保留现有 `unwrap_or_else(|e| e.into_inner())` 语义）。
+  **验收标准**：
+  - [x] 锁面清单完整，每项标出「锁类型 / 临界区是否跨 `await` / 每单位动作次数」。
+  - [x] 每项都有明确结论（改 / 不改），「不改」附指标或结构理由，无沉默项。
+  - [x] 若引入 `ArcSwap`（条件未触发：本轮无锁实现改动，见 decisions.md D-P2.1-011）：对应读路径不再取互斥锁，且改造前后有同一轮次的指标对照（不靠失败数）。
+  - [x] `session_locks` / `CHAINS` 的「同一会话 / 同一客户端串行」语义仍成立（`runtime.occupancy` / `runtime.handler` / `runtime.disconnect` / `tui.reconnect` 全通过）。
+  - [x] `git diff` 无测试侧限流改动、无用例名变化、无接口与 `RunEvent` 契约变化。
+  **测试要求**：`make test ARGS="runtime tui"`、`make test ARGS="--all"`。**已授权并执行**（32/32 墙钟 18s、73/73 墙钟 33s）。
+  **完成产物**：`docs/reports/p2.1-008.1-lock-audit.md`（锁面清单 + 逐项结论 + 首轮基线数据）；`decisions.md` 增加锁面口径（D-P2.1-010）与 `arc-swap` 引入范围（D-P2.1-011）。两轮实测的读写等待与单帧转发耗时全部 0ms、100ms 阈值零触发，因此**未做任何锁实现改动**。
+
+- [x] **P2.1-008.2 数据库读路径复核（表级内存快照 + 失效事件）**（已完成，结论为「不改」，机制口径定稿但不落地，见 [`docs/reports/p2.1-008.2-db-read-cache.md`](../../docs/reports/p2.1-008.2-db-read-cache.md)）
+
+  **目标**：逐处检阅执行期的 DB 读位置，判定能否改为「进程内持有一份表快照（`ArcSwap`），读时 `Arc::clone`；数据库写入后发布变更通知，由异步订阅方重读 DB 并替换快照」，用内存快照消除重复查询。目标是消除**读放大**，不是把数据库整体搬到内存，也不是让缓存参与业务判定。
+  **前置依赖**：P2.1-008、P2.1-008.1（先定锁面口径，避免缓存自身引入新的锁热点）。
+  **涉及文件 / Crate**：`crates/service-core/src/repository/{session,message,run}.rs`、`crates/service-core/src/session/{service.rs,mod.rs}`、`crates/service-core/Cargo.toml`、`crates/manager-agent/src/{session.rs,assemble.rs,holder.rs}`、`crates/manager-agent/src/runtime/{occupancy.rs,handler.rs}`、`crates/types-core/src/`（变更通知类型）、`crates/lib-web/src/{probe,session}/api.rs`、`crates/lib-db/src/pool.rs`（取连接口径）。
+  **实施步骤**：
+  1. 建立执行期读清单（调用点 + 每次请求的查询数 + 频率 + 结果是否被当成权威判定）。至少覆盖：
+     - 探活 `api/probe/health` → `running_run_count()` → `SELECT COUNT(*) FROM runs WHERE status = 'RUNNING'`：每探活一次一条聚合查询（TUI 连接与重连各触发一次）。
+     - `api/session/list` → `sessions()`：全表扫描 + 每行 `(SELECT COUNT(*) FROM messages ...)` 相关子查询，成本随会话数与消息数增长。
+     - `api/message/list` → `require_session()` + `messages()`：同一请求两条查询。
+     - `api/message/create` → `require_session()` + 事务写。
+     - Run 执行期：`session_summary()` / `history_before_run()` / `user_prompt()` / `start_run()` / `complete_run()` / `fail_run()` / `run_error()`。
+     - 占用建立 `has_session()`、会话停止 `cancel_session_runs()`（写）。
+     - 已确认**不是**轮询：执行队列由 `notify_run` 唤醒后查一次 `next_queued_run()`；本次改造不得把它改成定时轮询。
+  2. 分类并给出缓存资格判定：
+     - **只读展示型**（`session/list`、`message/list`）：可缓存，允许有界陈旧。
+     - **权威判定型**（`RunStatus` / `RunError` / 条件更新前的 `require_run`）：**不缓存**，否则会破坏 D-P2-029 / D-P2-030 的条件更新与取消语义；这类只允许把「仅用于展示的派生值」（如探活里的 `running_run_count`）改为内存计数。
+     - **一次写一次读**（`user_prompt` / `history_before_run`）：不缓存（一次执行一次读）。
+  3. 对取得缓存资格的表，先把设计写成决策，再落地：
+     - 快照粒度与类型（整表 `ArcSwap<Vec<SessionSummary>>` / 按会话 `HashMap<session_id, Arc<Vec<Message>>>`）；读侧只 `load_full()` 后 `Arc::clone`，不在锁内做业务。
+     - 失效通知：事务提交后 `bus.notify::<XxxChanged>()`；按 `framework-bus` 约定事件**纯通知、不带数据、边沿触发 + 合并**，订阅方被唤醒后自己重读 DB 并替换快照。
+     - 归属：事件类型放 `types-core`（只放类型，不倒置依赖方向）；订阅与刷新任务放装配层 `manager-agent`；`repository` 只允许被 `service-core` 内部 Service 调用（`AGENTS.md` 第 7 条），因此快照与 `refresh_*` 放 `service-core`，`manager-agent` 只负责订阅并调用 `refresh_*`。
+     - 启动顺序：先 `watch` 再全量加载，避免「先加载后订阅」之间丢通知；刷新失败保留旧快照并记 `warn`，等下一次通知重试。
+     - 未命中与惊群：首次访问或刷新中回源 DB，并做「单飞」（同一表同一时刻最多一个回源任务）。
+     - 有界陈旧：写明可接受上限（建议 ≤ 1 个刷新周期或 1 次通知往返），超出即回源。
+  4. 分两步落地，每步单独跑一轮全量对照：先「探活计数改内存计数」，再「会话 / 消息只读快照」。写路径（`INSERT`、条件 `UPDATE`、事务）一律保持原样。
+  5. 「设置」类读：当前**没有**配置 / 设置表，`config.toml` 由 `lib-bin-cli` 装载后经 `ProviderService` 常驻进程内，不存在重复 DB 查询。本任务只把该机制写成可直接套用的口径，不为尚不存在的表提前实现。
+  **技术要求**：
+  - 事件通路不变：先落盘 flush，再转发；缓存只影响「读」，不得影响事件顺序与终态写入。
+  - 不新增 HTTP 接口、不新增配置项、不改 25 条接口与 `RunEvent` 契约、不改 `RunStatus` 状态机、不改表结构与迁移。
+  - 缓存可观测项（命中 / 回源次数、刷新耗时、最近一次刷新成功时刻）只在 `metrics` 特性下采集（D-P2.1-008）。
+  - 新增依赖：`arc-swap` 已在 workspace；向 `service-core` 增加该依赖需在 `decisions.md` 登记（含与 `AGENTS.md` 第 7 条的关系说明）。不得把缓存放进 `lib-db` 或 `types-core`。
+  **验收标准**：
+  - [x] 读清单完整，每条都有「可缓存 / 不可缓存」结论与理由，无沉默项（10 类访问，见报告 §一 / §三）。
+  - [x] `probe.health` 的 `running_run_count` **不改**：单条 `COUNT(*)` 走 `idx_runs_status`，只在连接 / 重连各调用一次，`probe.health` 用例 1ms；无轮询调用方（报告 §二 / §四）。
+  - [x] `session/list`（1 条带相关子查询）与 `message/list`（2 条）**不改**：前端无会话列表页、TUI 按需调用、整轮全量「取数据库连接」3 次；两条 SQL 读放大列入遗留候选（报告 §七）。
+  - [x] 权威判定路径零改动：本任务无代码改动，取消 / 终态条件更新 / 同会话串行语义与用例口径不变。
+  - [x] 失效正确性（条件未触发：未引入快照与通知，无陈旧窗口）。
+  - [x] `git diff` 无测试侧限流、无接口 / 契约变更、无 SQL 与依赖改动、无缓存值参与业务判定。
+  - [x] 以「不改」结案，附每请求语句数、调用方频率与耗时数据（报告 §一 ~ §四）。
+  **测试要求**：`make test ARGS="probe session run runtime"`、`make test ARGS="--all"`。**已执行**：复用本轮默认并发全量（73/73，墙钟 33s，`probe` / `session` / `run` / `runtime` 全部覆盖在内）；本任务无代码改动，故未另跑分域轮。
+  **完成产物**：`docs/reports/p2.1-008.2-db-read-cache.md`（读清单 + 分类判定 + 机制口径 + 未改项理由）；`decisions.md` 增加 D-P2.1-012（表级快照的形态与启用口径，当前不启用）。无代码改动，未引入 `arc-swap`。
 
 ---
 
