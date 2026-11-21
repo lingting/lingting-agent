@@ -24,18 +24,23 @@ const CHAIN_WARN_MS: u128 = 500;
 const STOP_WARN_MS: u128 = 500;
 /// 单帧事件落盘达到这个阈值记 `warn`：磁盘或写锁出了状况。
 #[cfg(feature = "metrics")]
+/// 单帧事件落盘达到这个阈值记 `warn`：磁盘或写锁出了状况。
+#[cfg(feature = "metrics")]
 const APPEND_WARN_MS: u128 = 50;
+/// 会话锁持有达到这个阈值记 `warn`：锁内出现收尾等待或 IO 了（P2.1-006）。
+#[cfg(feature = "metrics")]
+const LOCK_WARN_MS: u128 = 200;
 
 /// 断连清理链指标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChainMetrics {
-    /// 处理链被唤醒执行的次数。
+    /// 按客户端执行的清理次数（P2.1-005 收窄串行单位后，每个客户端记一次）。
     pub runs: u64,
     /// 累计耗时（毫秒），含等 `CHAIN` 锁的时间。
     pub total_millis: u64,
     /// 单次最长耗时（毫秒）。
     pub max_millis: u64,
-    /// 观察到的同时进入处理链最大值（全局串行时为 1，收窄为按客户端并行后会大于 1）。
+    /// 观察到的同时进入处理链最大值（全局串行时恒为 1，收窄为按客户端并行后会出现大于 1）。
     pub concurrent_max: i64,
     /// 累计清理的客户端数。
     pub clients: u64,
@@ -78,6 +83,17 @@ pub struct SessionLockMetrics {
     pub entries_max: i64,
 }
 
+/// 会话锁持有时间指标（P2.1-006）：只覆盖临界区，不含锁外的收尾等待。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionLockHold {
+    /// 进入临界区的次数。
+    pub calls: u64,
+    /// 累计持有时间（毫秒）。
+    pub total_millis: u64,
+    /// 单次最长持有时间（毫秒）。
+    pub max_millis: u64,
+}
+
 /// 运行时指标的全量快照。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
@@ -91,6 +107,8 @@ pub struct MetricsSnapshot {
     pub downlink_dropped: u64,
     /// 会话锁表。
     pub session_locks: SessionLockMetrics,
+    /// 会话锁持有时间（P2.1-006）。
+    pub session_lock_hold: SessionLockHold,
     /// 数据库取连接等待。
     pub database: DatabaseAcquire,
 }
@@ -146,6 +164,12 @@ static DOWNLINK_DROPPED: AtomicU64 = AtomicU64::new(0);
 static SESSION_LOCKS: AtomicI64 = AtomicI64::new(0);
 #[cfg(feature = "metrics")]
 static SESSION_LOCKS_MAX: AtomicI64 = AtomicI64::new(0);
+#[cfg(feature = "metrics")]
+static LOCK_CALLS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static LOCK_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static LOCK_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// 只读快照：调用方取一次即可，不重置。未启用采集时全部为 0。
 pub fn snapshot() -> MetricsSnapshot {
@@ -177,6 +201,11 @@ pub fn snapshot() -> MetricsSnapshot {
             session_locks: SessionLockMetrics {
                 entries: SESSION_LOCKS.load(Ordering::Relaxed),
                 entries_max: SESSION_LOCKS_MAX.load(Ordering::Relaxed),
+            },
+            session_lock_hold: SessionLockHold {
+                calls: LOCK_CALLS.load(Ordering::Relaxed),
+                total_millis: millis(LOCK_NANOS.load(Ordering::Relaxed)),
+                max_millis: millis(LOCK_MAX_NANOS.load(Ordering::Relaxed)),
             },
             database: DatabaseAcquire {
                 calls: database.calls,
@@ -306,6 +335,21 @@ pub(crate) fn record_session_locks(entries: usize) {
         let entries = entries as i64;
         SESSION_LOCKS.store(entries, Ordering::Relaxed);
         SESSION_LOCKS_MAX.fetch_max(entries, Ordering::Relaxed);
+    }
+}
+
+/// 记一次会话锁持有时间（P2.1-006）：锁内只做状态切换，超过阈值说明临界区又变长了。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
+pub(crate) fn record_session_lock_hold(elapsed: Duration) {
+    #[cfg(feature = "metrics")]
+    {
+        let nanos = to_nanos(elapsed);
+        LOCK_CALLS.fetch_add(1, Ordering::Relaxed);
+        LOCK_NANOS.fetch_add(nanos, Ordering::Relaxed);
+        LOCK_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        if elapsed.as_millis() >= LOCK_WARN_MS {
+            warn!(elapsed_ms = elapsed.as_millis(), "会话锁持有时间过长");
+        }
     }
 }
 

@@ -23,30 +23,48 @@ pub use ratatui::layout::Position;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// 同步轮询等待的累计统计（`wait_until`）。
+/// 同步轮询等待的累计统计（`wait_until`）。
 static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
 /// 同步轮询等待的累计耗时（纳秒）。
 static WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
+/// 异步轮询等待的累计统计（`wait_until_async`）：不阻塞 worker，只作对照数据。
+static ASYNC_WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
+/// 异步轮询等待的累计耗时（纳秒）。
+static ASYNC_WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
 /// 收尾等待（等工作线程退出）的累计统计。
 static SHUTDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
 /// 收尾等待的累计耗时（纳秒）。
 static SHUTDOWN_NANOS: AtomicU64 = AtomicU64::new(0);
-
-/// 同步阻塞的只读快照：调用次数与累计耗时。
+/// 异步收尾等待（`close`）的累计统计：join 在阻塞线程池里，不占 worker。
+static ASYNC_SHUTDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
+/// 异步收尾等待的累计耗时（纳秒）。
+static ASYNC_SHUTDOWN_NANOS: AtomicU64 = AtomicU64::new(0);
+/// 等待与阻塞的只读快照：调用次数与累计耗时。
 ///
-/// [`Harness::wait_until`] 与 [`Harness`] 的收尾都在**调用线程**上同步阻塞，
-/// 在 `async` 上下文里调用等于占住一个 Tokio worker。这里的数字就是「占住了多久」。
+/// [`Harness::wait_until`] 与 [`Harness`] 的 `Drop` 都在**调用线程**上同步阻塞，在 `async`
+/// 上下文里调用等于占住一个 Tokio worker，`total_millis` 就是「占住了多久」（P2.1-002）。
+/// P2.1-004 之后 `async` 用例改走 [`Harness::wait_until_async`] 与 [`Harness::close`]：
+/// 同一动作记进 `async_*` 字段，只作对照数据，不构成 worker 占用。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BlockingSnapshot {
-    /// 轮询等待的次数。
+    /// 同步轮询等待的次数。
     pub wait_calls: u64,
-    /// 轮询等待的累计耗时（毫秒）。
+    /// 同步轮询等待的累计耗时（毫秒）。
     pub wait_millis: u64,
-    /// 收尾等待的次数。
+    /// 同步收尾等待的次数。
     pub shutdown_calls: u64,
-    /// 收尾等待的累计耗时（毫秒）。
+    /// 同步收尾等待的累计耗时（毫秒）。
     pub shutdown_millis: u64,
     /// 两者合计：单次运行累计占住的 worker 时间（毫秒）。
     pub total_millis: u64,
+    /// 异步轮询等待的次数（`wait_until_async`，不占 worker）。
+    pub async_wait_calls: u64,
+    /// 异步轮询等待的累计耗时（毫秒）。
+    pub async_wait_millis: u64,
+    /// 异步收尾等待的次数（`close`，join 在阻塞线程池里）。
+    pub async_shutdown_calls: u64,
+    /// 异步收尾等待的累计耗时（毫秒）。
+    pub async_shutdown_millis: u64,
 }
 
 /// 读数入口：用例运行结束后取一次，用于判断同步等待的量级（P2.1-002）。
@@ -61,6 +79,10 @@ pub fn blocking_snapshot() -> BlockingSnapshot {
         shutdown_calls: SHUTDOWN_CALLS.load(Ordering::Relaxed),
         shutdown_millis,
         total_millis: wait_millis + shutdown_millis,
+        async_wait_calls: ASYNC_WAIT_CALLS.load(Ordering::Relaxed),
+        async_wait_millis: millis(ASYNC_WAIT_NANOS.load(Ordering::Relaxed)),
+        async_shutdown_calls: ASYNC_SHUTDOWN_CALLS.load(Ordering::Relaxed),
+        async_shutdown_millis: millis(ASYNC_SHUTDOWN_NANOS.load(Ordering::Relaxed)),
     }
 }
 
@@ -164,8 +186,8 @@ impl Harness {
     /// 轮询更新直到界面满足条件；超时返回 `false`。
     ///
     /// **同步阻塞**：内部用 `std::thread::sleep` 轮询，占住调用线程直到条件成立或超时。
-    /// 禁止在 `async` 上下文里调用（会占住一个 Tokio worker）；`async` 用例改用
-    /// `tokio::time::sleep` 自行轮询 [`Harness::pump`]，改造见 P2.1-004。
+    /// 禁止在 `async` 上下文里调用（会占住一个 Tokio worker）：`async` 用例一律用
+    /// [`Harness::wait_until_async`]（P2.1-004）。
     pub fn wait_until(&mut self, timeout: Duration, mut done: impl FnMut(&App) -> bool) -> bool {
         let started = Instant::now();
         let deadline = started + timeout;
@@ -181,6 +203,40 @@ impl Harness {
         };
         record(&WAIT_CALLS, &WAIT_NANOS, started.elapsed());
         finished
+    }
+
+    /// 轮询更新直到界面满足条件；超时返回 `false`。
+    ///
+    /// **异步等待**：`pump()` + `tokio::time::sleep`，等待期间不占住 Tokio worker，
+    /// 是 `async` 用例的唯一入口（P2.1-004）。
+    pub async fn wait_until_async(&mut self, timeout: Duration, mut done: impl FnMut(&App) -> bool) -> bool {
+        let started = Instant::now();
+        let deadline = started + timeout;
+        let finished = loop {
+            self.pump();
+            if done(&self.app) {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        };
+        record(&ASYNC_WAIT_CALLS, &ASYNC_WAIT_NANOS, started.elapsed());
+        finished
+    }
+
+    /// 异步收尾：把「等工作线程退出」的 join 交给阻塞线程池，不占住 Tokio worker（P2.1-004）。
+    ///
+    /// 与 [`Drop`] 走同一条收尾路径（`Worker::shutdown`）：先关下行通道，工作线程在收尾窗口里
+    /// 送出退出时的取消请求。`async` 用例在末尾显式调用它，就不再靠 `Drop` 同步阻塞；
+    /// 之后 `Drop` 没有工作线程可 join，是空操作。
+    pub async fn close(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            let started = Instant::now();
+            let _ = tokio::task::spawn_blocking(move || worker.shutdown()).await;
+            record(&ASYNC_SHUTDOWN_CALLS, &ASYNC_SHUTDOWN_NANOS, started.elapsed());
+        }
     }
 
     /// 按给定尺寸渲染一帧：文本用于断言界面内容，光标用于断言输入框定位。

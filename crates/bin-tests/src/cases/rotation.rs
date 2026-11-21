@@ -63,7 +63,7 @@ pub(crate) fn cases() -> Vec<Case> {
 fn count_limit(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let root = temp_directory("rotation-count")?;
-        create_sessions(&root, 5)?;
+        create_sessions(&root, 5).await?;
 
         let config = JournalConfig {
             max_sessions: 2,
@@ -102,7 +102,7 @@ fn count_limit(_context: &TestContext) -> CaseFuture<'_> {
 fn byte_limit(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let root = temp_directory("rotation-bytes")?;
-        create_sessions(&root, 5)?;
+        create_sessions(&root, 5).await?;
 
         let config = JournalConfig {
             max_sessions: 0,
@@ -137,7 +137,7 @@ fn byte_limit(_context: &TestContext) -> CaseFuture<'_> {
 fn both_limits(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let root = temp_directory("rotation-both")?;
-        create_sessions(&root, 5)?;
+        create_sessions(&root, 5).await?;
 
         let config = JournalConfig {
             max_sessions: 4,
@@ -173,7 +173,7 @@ async fn protect_occupied_body() -> Result<CaseOutcome> {
     let state = runtime_state(&root).await?;
     // 先建立占用：占用中的会话目录成为最旧的那个，必然排在删除候选队首。
     let fixture = Fixture::new(&state, "rotation-protect").await?;
-    create_sessions(&root, 3)?;
+    create_sessions(&root, 3).await?;
 
     let protected = state.occupied_sessions();
     ensure!(
@@ -239,7 +239,7 @@ fn defaults(_context: &TestContext) -> CaseFuture<'_> {
 
         // 两个维度都为 0：目录原样保留，不做任何统计之外的动作。
         let root = temp_directory("rotation-unlimited")?;
-        create_sessions(&root, 3)?;
+        create_sessions(&root, 3).await?;
         let before = remaining(&root);
         let summary =
             journal::rotate(&root, JournalConfig::resolve(Some(0), Some(0)), &HashSet::new()).context("轮转失败")?;
@@ -309,13 +309,13 @@ fn total_bytes(count: usize) -> u64 {
 }
 
 /// 按顺序造 `count` 个会话目录：每个目录一个事件文件，修改时间依次递增。
-fn create_sessions(root: &Path, count: usize) -> Result<()> {
+async fn create_sessions(root: &Path, count: usize) -> Result<()> {
     for index in 0..count {
         let directory = journal::session_directory(root, &session_name(index));
         std::fs::create_dir_all(&directory).with_context(|| format!("创建目录失败：{}", directory.display()))?;
         std::fs::write(directory.join("runtime.jsonl"), vec![b'e'; FILE_BYTES])
             .with_context(|| format!("写事件文件失败：{}", directory.display()))?;
-        std::thread::sleep(CREATE_GAP);
+        tokio::time::sleep(CREATE_GAP).await;
     }
     Ok(())
 }

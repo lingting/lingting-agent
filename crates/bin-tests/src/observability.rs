@@ -22,29 +22,37 @@ pub(crate) fn section(started_at_ms: i64) -> String {
     text
 }
 
-/// TUI 同步阻塞一节（P2.1-002）。
+/// TUI 等待一节（P2.1-002 / 004）：同步阻塞与异步等待分开，前者才是 worker 占用。
 fn blocking_section(wall: u64) -> String {
     let blocking = lib_bin_tui::testing::blocking_snapshot();
     let average = blocking.wait_millis.checked_div(blocking.wait_calls).unwrap_or(0);
     let share = blocking.total_millis * 100 / wall;
-    let mut text = String::from("### TUI 同步阻塞（P2.1-002）\n\n");
+    let mut text = String::from("### TUI 等待与阻塞（P2.1-002 / 004）\n\n");
     text.push_str("| 项 | 次数 | 累计耗时 | 说明 |\n|---|---|---|---|\n");
     text.push_str(&format!(
-        "| 轮询等待 | {} | {}ms | 平均每次 {}ms，`Harness::wait_until` 的同步轮询 |\n",
+        "| 同步轮询等待 | {} | {}ms | 平均每次 {}ms，`Harness::wait_until` 的同步轮询 |\n",
         blocking.wait_calls, blocking.wait_millis, average
     ));
     text.push_str(&format!(
-        "| 收尾等待 | {} | {}ms | `Worker::shutdown` 里 join 工作线程 |\n",
+        "| 同步收尾等待 | {} | {}ms | `Drop` 里 join 工作线程 |\n",
         blocking.shutdown_calls, blocking.shutdown_millis
     ));
     text.push_str(&format!(
-        "| 合计 | — | {}ms | 占墙钟 {}s 的 {share}%，摊到 worker 数后更小 |\n\n",
+        "| 同步合计 | — | {}ms | 占墙钟 {}s 的 {share}%，这部分才占住 worker |\n",
         blocking.total_millis,
         wall / 1000
     ));
+    text.push_str(&format!(
+        "| 异步轮询等待 | {} | {}ms | `Harness::wait_until_async`，不占 worker（P2.1-004） |\n",
+        blocking.async_wait_calls, blocking.async_wait_millis
+    ));
+    text.push_str(&format!(
+        "| 异步收尾等待 | {} | {}ms | `Harness::close`，join 在阻塞线程池里（P2.1-004） |\n\n",
+        blocking.async_shutdown_calls, blocking.async_shutdown_millis
+    ));
     text.push_str(
-        "> 这个数字只在「所有 worker 同时被占住」时才会变成故障；单次运行量级远低于此即说明\
-         同步等待不是超时原因。\n\n",
+        "> 同步合计只在「所有 worker 同时被占住」时才会变成故障；单次运行量级远低于此即说明\
+         同步等待不是超时原因。P2.1-004 之后 `tui.*` 用例的等待全部记在异步两行。\n\n",
     );
     text
 }
@@ -76,12 +84,17 @@ fn runtime_section() -> String {
         metrics.session_locks.entries, metrics.session_locks.entries_max
     ));
     text.push_str(&format!(
+        "| 会话锁持有 | {} 次，最长 {}ms（累计 {}ms） |\n",
+        metrics.session_lock_hold.calls, metrics.session_lock_hold.max_millis, metrics.session_lock_hold.total_millis
+    ));
+    text.push_str(&format!(
         "| 取数据库连接 | {} 次，最长 {}ms |\n\n",
         metrics.database.calls, metrics.database.max_millis
     ));
     text.push_str(
-        "> 「并发水位」大于 1 表示有任务在等 `CHAIN` 锁；「会话锁表」随历史会话数增长，\
-         回收见 P2.1-007。\n",
+        "> 「并发水位」大于 1 表示多个客户端在并行清理（P2.1-005 之前是等同一把全局锁）；\
+         「会话锁表」在会话停止 / 占用释放后回收（P2.1-007），不再随历史会话数增长；\
+         「会话锁持有」只覆盖临界区，收尾在锁外（P2.1-006）。\n",
     );
     text
 }

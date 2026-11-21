@@ -17,7 +17,7 @@ pub(super) fn cases() -> Vec<Case> {
 
 fn send(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
 
         // 提交：内容去首尾空白，输入框清空。
         harness.paste("  你好  \n世界  ");
@@ -41,9 +41,11 @@ fn send(context: &TestContext) -> CaseFuture<'_> {
 
         // 这一轮回复结束：只有用户与助手两条消息，排队中的内容没有发出去。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
-                && app.messages.len() == 2
-                && !app.messages[1].content.is_empty()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
+                    && app.messages.len() == 2
+                    && !app.messages[1].content.is_empty())
+                .await,
             "回复未在 {} 秒内结束",
             STREAM_TIMEOUT.as_secs()
         );
@@ -55,9 +57,11 @@ fn send(context: &TestContext) -> CaseFuture<'_> {
         );
         ensure!(harness.app().run_id.is_none(), "结束后不应留下进行中的 Run");
 
-        Ok(vec![
+        let result = vec![
             "提交时清空输入框，内容按去首尾空白的规则保存".to_string(),
             "回复未结束时 Enter 不发送，输入保留并给出提示".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }

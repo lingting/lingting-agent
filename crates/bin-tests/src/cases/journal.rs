@@ -70,7 +70,12 @@ async fn journal_order_body() -> Result<CaseOutcome> {
     );
 
     // 释放占用：写者追加终态事件并 flush，文件不再增长。
+    // 收尾在后台进行（P2.1-006）：释放返回时终态事件可能还没落盘，这里等它出现。
     state.release_occupancy(&quiet.client_id).await?;
+    ensure!(
+        wait_until(|| read_events(&path).len() == 4).await,
+        "释放占用后应追加一条终态事件"
+    );
     let written = read_events(&path);
     let terminal = written.last().context("释放后应有一条终态事件")?;
     ensure!(
@@ -118,6 +123,12 @@ async fn journal_order_body() -> Result<CaseOutcome> {
     // 接收端仍然存活：标记只来自 `try_send` 失败，而不是对端断开。
     drop(receiver);
     state.release_occupancy(&slow.client_id).await?;
+    // 收尾在后台进行（P2.1-006）：等终态事件落盘后再断言只追加了一条。
+    ensure!(
+        wait_until(|| read_events(&path).len() == total as usize + 1).await,
+        "释放占用后应只追加一条终态事件，实际 {} 行",
+        read_events(&path).len()
+    );
     let written = read_events(&path);
     ensure!(
         written.len() == total as usize + 1,

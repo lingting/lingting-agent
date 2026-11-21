@@ -371,10 +371,4 @@ impl RuntimeState {
         super::timer::wake_rotation();
         Ok(())
     }
-
-    /// 停止指定会话的运行时会话，返回是否真的存在会话。
-    pub(crate) async fn stop_session(&self, session_id: &str, reason: SessionStop) -> Option<io::Result<()>> {
-        let session = self.take_session(session_id)?;
-        Some(session.stop(reason).await)
-    }
 }

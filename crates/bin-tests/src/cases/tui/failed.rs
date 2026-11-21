@@ -37,13 +37,15 @@ fn run_failed(context: &TestContext) -> CaseFuture<'_> {
             "run_started 之前状态栏应给出等待提示：\n{screen}"
         );
 
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
         let content = format!("mock:auth TUI 失败 {}", context.token());
         harness.type_text(&content);
         harness.press(KeyCode::Enter, KeyModifiers::NONE);
 
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle && app.notice.is_some()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle && app.notice.is_some())
+                .await,
             "失败在 {} 秒内未收尾",
             STREAM_TIMEOUT.as_secs()
         );
@@ -68,10 +70,12 @@ fn run_failed(context: &TestContext) -> CaseFuture<'_> {
             draft(&harness)
         );
 
-        Ok(vec![
+        let result = vec![
             format!("提示行：{notice}"),
             format!("消息末尾：{note}"),
             "失败后界面回到空闲且可继续输入".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }

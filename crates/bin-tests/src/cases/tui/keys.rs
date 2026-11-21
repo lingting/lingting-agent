@@ -69,13 +69,15 @@ fn ctrl_c_ignored(context: &TestContext) -> CaseFuture<'_> {
 
 fn ctrl_d_cancel(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
         harness.type_text(&format!("Ctrl+D 取消 {}", context.token()));
         harness.press(KeyCode::Enter, KeyModifiers::NONE);
 
         // 等到真的开始收增量：此时服务端的 Run 正在执行。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming)
+                .await,
             "回复在 {} 秒内未进入流式输出",
             STREAM_TIMEOUT.as_secs()
         );
@@ -91,7 +93,7 @@ fn ctrl_d_cancel(context: &TestContext) -> CaseFuture<'_> {
             harness.app().phase
         );
         // 退出后由工作线程在收尾窗口里把取消请求送到服务端。
-        drop(harness);
+        harness.close().await;
 
         wait_run_cancelled(context, &run_id).await?;
 
@@ -104,12 +106,14 @@ fn ctrl_d_cancel(context: &TestContext) -> CaseFuture<'_> {
 
 fn esc_cancel(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
         harness.type_text(&format!("Esc 中断 {}", context.token()));
         harness.press(KeyCode::Enter, KeyModifiers::NONE);
 
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming)
+                .await,
             "回复在 {} 秒内未进入流式输出",
             STREAM_TIMEOUT.as_secs()
         );
@@ -127,7 +131,9 @@ fn esc_cancel(context: &TestContext) -> CaseFuture<'_> {
 
         // 事件流收尾后回到可输入状态：有内容时标注中断，内容为空则整条丢弃，不留半条消息。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle && app.run_id.is_none()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle && app.run_id.is_none())
+                .await,
             "中断未在 {} 秒内收尾",
             STREAM_TIMEOUT.as_secs()
         );
@@ -145,10 +151,12 @@ fn esc_cancel(context: &TestContext) -> CaseFuture<'_> {
 
         wait_run_cancelled(context, &run_id).await?;
 
-        Ok(vec![
+        let result = vec![
             format!("Esc 中断 Run：{run_id}"),
             "服务端 Run 终态：已取消".to_string(),
             "界面回到可输入状态，回复标注中断".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }

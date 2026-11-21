@@ -86,13 +86,17 @@ async fn wait_run_cancelled(context: &TestContext, run_id: &str) -> Result<()> {
 }
 
 /// 起工作线程并等到探活成功。
-fn open(context: &TestContext) -> Result<Harness> {
+///
+/// `async` 用例一律用它：等待走异步入口，不占住 Tokio worker（P2.1-004）。
+async fn open(context: &TestContext) -> Result<Harness> {
     let mut harness = Harness::start(context.base_url().to_string())?;
     ensure!(
-        harness.wait_until(CONNECT_TIMEOUT, |app| matches!(
-            app.connection,
-            Connection::Online { .. }
-        )),
+        harness
+            .wait_until_async(CONNECT_TIMEOUT, |app| matches!(
+                app.connection,
+                Connection::Online { .. }
+            ))
+            .await,
         "界面在 {} 秒内未连上服务端",
         CONNECT_TIMEOUT.as_secs()
     );

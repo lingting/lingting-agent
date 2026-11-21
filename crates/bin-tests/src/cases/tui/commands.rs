@@ -17,12 +17,14 @@ pub(super) fn cases() -> Vec<Case> {
 
 fn commands(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
 
         // Ctrl+N 新建会话：不会被输入组件当成“下移”，也不会写入字母。
         harness.press_ctrl(KeyCode::Char('n'));
         ensure!(
-            harness.wait_until(STEP_TIMEOUT, |app| app.current.is_some()),
+            harness
+                .wait_until_async(STEP_TIMEOUT, |app| app.current.is_some())
+                .await,
             "Ctrl+N 未能新建会话"
         );
         let first = harness.app().current.clone();
@@ -39,7 +41,9 @@ fn commands(context: &TestContext) -> CaseFuture<'_> {
         // 再建一个：列表里至少两条，后面的 Ctrl+J 断言才有意义。
         harness.press_ctrl(KeyCode::Char('n'));
         ensure!(
-            harness.wait_until(STEP_TIMEOUT, |app| app.current != first && app.current.is_some()),
+            harness
+                .wait_until_async(STEP_TIMEOUT, |app| app.current != first && app.current.is_some())
+                .await,
             "Ctrl+N 未能切换到第二个会话"
         );
 
@@ -51,17 +55,21 @@ fn commands(context: &TestContext) -> CaseFuture<'_> {
             harness.app().connection
         );
         ensure!(
-            harness.wait_until(STEP_TIMEOUT, |app| matches!(app.connection, Connection::Online { .. })),
+            harness
+                .wait_until_async(STEP_TIMEOUT, |app| matches!(app.connection, Connection::Online { .. }))
+                .await,
             "重连未在 {} 秒内完成",
             STEP_TIMEOUT.as_secs()
         );
 
         // 重连会重新拉会话列表：当前会话应重新出现在列表里。
         ensure!(
-            harness.wait_until(STEP_TIMEOUT, |app| app
-                .current
-                .as_deref()
-                .is_some_and(|id| app.sessions.iter().any(|session| session.id == id))),
+            harness
+                .wait_until_async(STEP_TIMEOUT, |app| app
+                    .current
+                    .as_deref()
+                    .is_some_and(|id| app.sessions.iter().any(|session| session.id == id)))
+                .await,
             "重连后当前会话应重新出现在会话列表"
         );
 
@@ -77,10 +85,12 @@ fn commands(context: &TestContext) -> CaseFuture<'_> {
             harness.app().selected
         );
 
-        Ok(vec![
+        let result = vec![
             format!("Ctrl+N 新建会话后列表共 {} 条", harness.app().sessions.len()),
             "Ctrl+R 重连后连接与会话列表恢复".to_string(),
             format!("会话列表选中项 {selected}，Ctrl+J 未移动"),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }

@@ -30,8 +30,14 @@ impl RuntimeState {
         }
 
         // 同一会话的建立与释放串行：避免两个请求同时判定“空闲”后各建一份事件文件。
-        let lock = self.session_lock(&params.session_id);
-        let _guard = lock.lock().await;
+        // 上一次的后台收尾若还没结束，先等它完成（P2.1-006）：同一会话不并存两份运行时会话。
+        let _guard = loop {
+            self.await_previous_stop(&params.session_id).await;
+            let guard = self.lock_session(&params.session_id).await;
+            if !self.has_pending_stop(&params.session_id) {
+                break guard;
+            }
+        };
 
         if let Some(current) = self.occupancy_of_session(&params.session_id) {
             return if current.client_id == params.client_id {
@@ -76,16 +82,14 @@ impl RuntimeState {
             return Ok(());
         };
 
-        let lock = self.session_lock(&occupancy.session_id);
-        let _guard = lock.lock().await;
-        if let Some(result) = self
-            .stop_session(&occupancy.session_id, SessionStop::OccupancyReleased)
-            .await
-            && let Err(error) = result
+        // 会话锁内只做状态切换（P2.1-006）：摘下运行时会话交给后台收尾，不再等它收尾。
         {
-            warn!(%error, session_id = %occupancy.session_id, "停止运行时会话失败，继续撤回占用登记");
+            let _guard = self.lock_session(&occupancy.session_id).await;
+            self.stop_session_in_background(&occupancy.session_id, SessionStop::OccupancyReleased);
+            self.release(client_id);
         }
-        self.release(client_id);
+        // 锁外回收：这把锁没有持有者了就从表里摘掉，会话锁表不随历史会话数增长（P2.1-007）。
+        self.reclaim_session_lock(&occupancy.session_id);
         Ok(())
     }
 

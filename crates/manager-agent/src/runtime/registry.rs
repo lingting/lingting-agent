@@ -9,19 +9,22 @@ use lib_core::time::now_millis;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tokio::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Instant;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc};
 use types_core::runtime::{ClientCloseReason, ClientEvent, ClientEventKind, ClientUpdateKind, OccupancyVO};
 
 use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
 use super::journal::{self, JournalConfig};
 use super::metrics;
-use super::session::RuntimeSession;
-use service_core::session::{RunDriver, RunStop, SessionService};
-
+use super::session::{RuntimeSession, SessionStop};
 use crate::runner::cancel::RunCancels;
+use service_core::session::{RunDriver, RunStop, SessionService};
+use tracing::{debug, warn};
 
+/// 后台收尾的上限：执行队列自带 5s 上限，这里再给写库取消与写者 flush 留出余量。
+const FINALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// 进程内运行时状态：由装配层在启动时构造并持有。
 pub struct RuntimeState {
     /// 会话业务服务：占用校验、执行队列与停止时的 Run 取消都经它访问存储。
@@ -36,6 +39,8 @@ pub struct RuntimeState {
     driver: OnceLock<Arc<dyn RunDriver>>,
     /// 在跑 Run 的取消信号表：`api/run/cancel` 与会话停止都经它触发（D-P2-010）。
     cancels: Arc<RunCancels>,
+    /// 后台收尾登记（P2.1-006）：同一会话的新占用先等上一次收尾完成，关闭流程等全部收尾完成。
+    finalizing: Arc<Finalizer>,
 }
 
 /// 注册表的全部内存数据，读写都走 `RuntimeState::inner` 这一把锁。
@@ -56,7 +61,7 @@ struct Registry {
     /// 运行中的运行时会话，按会话 ID 索引（一个会话同时最多一个）。
     sessions: HashMap<String, RuntimeSession>,
     /// 会话级锁：占用登记与运行时会话的建立 / 停止共用同一粒度（`README.md` 第五节规则 4）。
-    session_locks: HashMap<String, Arc<Mutex<()>>>,
+    session_locks: HashMap<String, Arc<AsyncMutex<()>>>,
 }
 
 impl RuntimeState {
@@ -69,6 +74,7 @@ impl RuntimeState {
             journal: JournalConfig::default(),
             driver: OnceLock::new(),
             cancels: Arc::new(RunCancels::default()),
+            finalizing: Arc::new(Finalizer::default()),
         }
     }
 
@@ -129,11 +135,102 @@ impl RuntimeState {
     }
 
     /// 会话级锁：同一会话的建立、停止与占用登记串行化。
-    pub(crate) fn session_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
+    ///
+    /// 先走读锁快路径（命中直接 clone），未命中再降级到写锁插入（P2.1-007）：
+    /// 已有会话的取锁不再与所有读操作争同一把写锁。
+    pub(crate) fn session_lock(&self, session_id: &str) -> Arc<AsyncMutex<()>> {
+        if let Some(lock) = read(&self.inner).session_locks.get(session_id) {
+            return Arc::clone(lock);
+        }
         let mut inner = write(&self.inner);
         let lock = Arc::clone(inner.session_locks.entry(session_id.to_string()).or_default());
         metrics::record_session_locks(inner.session_locks.len());
         lock
+    }
+
+    /// 回收无人在用的会话锁：会话停止与占用释放后调用，返回是否真的移除了条目（P2.1-007）。
+    ///
+    /// 只有表自己还持有时才移除；仍有其它持有者（正在建立 / 停止）就留给下一次调用。
+    /// 回收失败不是错误，也不允许阻塞调用路径。
+    pub(crate) fn reclaim_session_lock(&self, session_id: &str) -> bool {
+        let mut inner = write(&self.inner);
+        if !inner
+            .session_locks
+            .get(session_id)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            return false;
+        }
+        inner.session_locks.remove(session_id);
+        metrics::record_session_locks(inner.session_locks.len());
+        debug!(session_id, "回收无人持有的会话锁");
+        true
+    }
+
+    /// 取同一会话的锁并计时（P2.1-006）：临界区只做状态切换，收尾一律在锁外。
+    ///
+    /// 持有时间由守卫的 `Drop` 记进指标：它与收尾时长是否解耦由这个数字证明。
+    pub(crate) async fn lock_session(&self, session_id: &str) -> SessionLock {
+        let guard = self.session_lock(session_id).lock_owned().await;
+        SessionLock {
+            started: Instant::now(),
+            _guard: guard,
+        }
+    }
+
+    /// 等同一会话上一次的后台收尾完成：新占用不得与旧运行时会话并行（P2.1-006）。
+    ///
+    /// 通常没有待收尾的会话（返回立即完成），只有「刚释放就重新占用」这条路径会真等。
+    pub(crate) async fn await_previous_stop(&self, session_id: &str) {
+        if let Some(gate) = self.finalizing.gate(session_id) {
+            gate.lock_owned().await;
+        }
+    }
+
+    /// 该会话是否还有未完成的后台收尾。
+    pub(crate) fn has_pending_stop(&self, session_id: &str) -> bool {
+        self.finalizing.pending(session_id)
+    }
+
+    /// 登记一次后台收尾，返回放行信号：任务结束时先摘掉条目、再放行等待方。
+    pub(crate) fn register_finalization(&self, session_id: &str) -> (Arc<AsyncMutex<()>>, OwnedMutexGuard<()>) {
+        self.finalizing.register(session_id)
+    }
+
+    /// 等全部后台收尾完成：只有关闭流程需要。
+    pub(crate) async fn drain_finalizations(&self) {
+        for gate in self.finalizing.drain() {
+            gate.lock_owned().await;
+        }
+    }
+
+    /// 把运行时会话从注册表摘下并交给后台收尾，返回是否真的存在会话（P2.1-006）。
+    ///
+    /// 调用方必须持有该会话的会话锁：摘下会话是状态切换，收尾（写库取消、执行队列等待、
+    /// 写者 flush）由后台任务完成，因此占用与释放不会被收尾时长拖住。
+    pub(crate) fn stop_session_in_background(&self, session_id: &str, reason: SessionStop) -> bool {
+        let Some(session) = self.take_session(session_id) else {
+            return false;
+        };
+        let (gate, held) = self.register_finalization(session_id);
+        let finalizing = Arc::clone(&self.finalizing);
+        let owned = session_id.to_string();
+        tokio::spawn(async move {
+            match tokio::time::timeout(FINALIZE_TIMEOUT, session.stop(reason)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(session_id = %owned, %error, "运行时会话收尾失败"),
+                Err(_) => warn!(
+                    session_id = %owned,
+                    timeout_secs = FINALIZE_TIMEOUT.as_secs(),
+                    "运行时会话收尾超时，放弃等待"
+                ),
+            }
+            // 先摘登记、再放行等待方：等待方拿到闸门时该会话已经收尾完成。
+            finalizing.finish(&owned);
+            drop(held);
+            drop(gate);
+        });
+        true
     }
 
     /// 登记一个运行时会话。
@@ -480,6 +577,70 @@ impl Downlink {
 /// 取读锁；锁中毒时沿用内部数据，避免单次 panic 让注册表永久失效。
 fn read(inner: &RwLock<Registry>) -> RwLockReadGuard<'_, Registry> {
     inner.read().unwrap_or_else(|error| error.into_inner())
+}
+
+/// 会话锁的持有守卫：离开作用域时把持有时间记进指标（P2.1-006）。
+///
+/// 会话锁内只允许状态切换；这个数字与收尾耗时是否解耦，就是「收尾已移出临界区」的证据。
+pub(crate) struct SessionLock {
+    /// 进入临界区的时刻。
+    started: Instant,
+    /// 会话锁的所有权守卫：先记时长，字段随后释放（`Drop` 结束时才真正解锁）。
+    _guard: OwnedMutexGuard<()>,
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        metrics::record_session_lock_hold(self.started.elapsed());
+    }
+}
+
+/// 后台收尾登记表（P2.1-006）：每个会话一把「在途」闸门，任务结束即摘除。
+///
+/// 用闸门而不是信号量：等待方 `lock_owned` 就能等到收尾结束，不需要额外的通知原语；
+/// 条目由后台任务结束时摘掉，表不随历史会话单调增长。
+#[derive(Default)]
+struct Finalizer {
+    /// 会话 ID → 在途闸门（已被后台任务持有）。
+    pending: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+}
+
+impl Finalizer {
+    /// 登记一次收尾并占住闸门：返回的守卫必须交给后台任务持有，任务结束才放行等待方。
+    fn register(&self, session_id: &str) -> (Arc<AsyncMutex<()>>, OwnedMutexGuard<()>) {
+        let gate = Arc::new(AsyncMutex::new(()));
+        // 新建的闸门必然空闲；这里先占住，登记之后的等待方才会真的排队。
+        let held = Arc::clone(&gate).try_lock_owned().expect("新建的收尾闸门必然空闲");
+        lock(&self.pending).insert(session_id.to_string(), Arc::clone(&gate));
+        (gate, held)
+    }
+
+    /// 该会话的在途闸门；没有收尾在进行时为空。
+    fn gate(&self, session_id: &str) -> Option<Arc<AsyncMutex<()>>> {
+        lock(&self.pending).get(session_id).cloned()
+    }
+
+    /// 该会话是否还有未完成的收尾。
+    fn pending(&self, session_id: &str) -> bool {
+        lock(&self.pending).contains_key(session_id)
+    }
+
+    /// 摘掉登记：后台任务在放行等待方之前调用。
+    fn finish(&self, session_id: &str) {
+        lock(&self.pending).remove(session_id);
+    }
+
+    /// 取走全部在途闸门：关闭流程据此等所有收尾完成。
+    fn drain(&self) -> Vec<Arc<AsyncMutex<()>>> {
+        std::mem::take(&mut *lock(&self.pending)).into_values().collect()
+    }
+}
+
+/// 取登记表的锁；中毒时沿用内部数据（登记表里只有闸门句柄，中毒不影响正确性）。
+fn lock(
+    table: &Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AsyncMutex<()>>>> {
+    table.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// 取写锁，中毒处理同 [`read`]。

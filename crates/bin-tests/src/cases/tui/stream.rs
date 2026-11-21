@@ -30,7 +30,7 @@ pub(super) fn cases() -> Vec<Case> {
 
 fn stream(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
 
         // 首屏：状态栏已连接、消息区给出引导文案、底部提示带退出键。
         let screen = harness.screen(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -49,8 +49,10 @@ fn stream(context: &TestContext) -> CaseFuture<'_> {
 
         // 流式增长：先等第一段增量，再等它继续变长。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming
-                && app.messages.last().is_some_and(|message| !message.content.is_empty())),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming
+                    && app.messages.last().is_some_and(|message| !message.content.is_empty()))
+                .await,
             "回复在 {} 秒内未开始推送增量",
             STREAM_TIMEOUT.as_secs()
         );
@@ -70,20 +72,24 @@ fn stream(context: &TestContext) -> CaseFuture<'_> {
         );
 
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.messages.last().is_some_and(|message| message
-                .content
-                .chars()
-                .count()
-                > first_chars)),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.messages.last().is_some_and(|message| message
+                    .content
+                    .chars()
+                    .count()
+                    > first_chars))
+                .await,
             "回复在 {} 秒内未见增量增长",
             STREAM_TIMEOUT.as_secs()
         );
 
         // 收完这一轮回复：仍是用户 + 助手两条消息。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
-                && app.messages.len() == 2
-                && !app.messages[1].content.is_empty()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
+                    && app.messages.len() == 2
+                    && !app.messages[1].content.is_empty())
+                .await,
             "界面在 {} 秒内未完成一次回复",
             STREAM_TIMEOUT.as_secs()
         );
@@ -107,12 +113,14 @@ fn stream(context: &TestContext) -> CaseFuture<'_> {
         ensure!(screen.contains("助手"), "渲染结果缺少助手消息：\n{screen}");
         ensure!(screen.contains("Mock 回复："), "渲染结果缺少回复正文：\n{screen}");
 
-        Ok(vec![
+        let result = vec![
             format!("会话：{}", harness.app().current.as_deref().unwrap_or("-")),
             format!("用户消息：{}", messages[0].content),
             format!("助手回复：{reply_chars} 字符"),
             format!("渲染帧：{SCREEN_WIDTH}x{SCREEN_HEIGHT}"),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }
 
@@ -120,14 +128,16 @@ fn stream(context: &TestContext) -> CaseFuture<'_> {
 #[cfg(debug_assertions)]
 fn interrupted(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
         harness.type_text(&format!("断线 {}", context.token()));
         harness.press(KeyCode::Enter, KeyModifiers::NONE);
 
         // 等到已经收到增量：确认有内容需要保留。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming
-                && app.messages.last().is_some_and(|message| !message.content.is_empty())),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Streaming
+                    && app.messages.last().is_some_and(|message| !message.content.is_empty()))
+                .await,
             "回复在 {} 秒内未开始推送增量",
             STREAM_TIMEOUT.as_secs()
         );
@@ -147,7 +157,9 @@ fn interrupted(context: &TestContext) -> CaseFuture<'_> {
             .map_err(ClientError::from_call)?;
 
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle)
+                .await,
             "断线后界面应回到空闲"
         );
         let last = harness.app().messages.last().expect("应有助手消息");
@@ -169,10 +181,12 @@ fn interrupted(context: &TestContext) -> CaseFuture<'_> {
         harness.type_text("断线后继续");
         ensure!(draft(&harness) == "断线后继续", "断线后输入框应可用");
 
-        Ok(vec![
+        let result = vec![
             format!("断线前已收到 {} 字符", partial.chars().count()),
             format!("提示行：{notice}"),
             "断线后保留内容、标注中断，渲染与输入仍可用".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }

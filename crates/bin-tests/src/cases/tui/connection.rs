@@ -43,7 +43,9 @@ fn offline_server(_context: &TestContext) -> CaseFuture<'_> {
         let mut harness = Harness::start(base_url.clone())?;
 
         ensure!(
-            harness.wait_until(CONNECT_TIMEOUT, |app| matches!(app.connection, Connection::Offline)),
+            harness
+                .wait_until_async(CONNECT_TIMEOUT, |app| matches!(app.connection, Connection::Offline))
+                .await,
             "服务端不可达时应显示未连接"
         );
         let notice = harness.app().notice.clone().expect("未连接时应给出原因");
@@ -59,7 +61,9 @@ fn offline_server(_context: &TestContext) -> CaseFuture<'_> {
             "Ctrl+R 后应进入连接中"
         );
         ensure!(
-            harness.wait_until(CONNECT_TIMEOUT, |app| matches!(app.connection, Connection::Offline)),
+            harness
+                .wait_until_async(CONNECT_TIMEOUT, |app| matches!(app.connection, Connection::Offline))
+                .await,
             "重试失败后仍应显示未连接"
         );
 
@@ -69,18 +73,20 @@ fn offline_server(_context: &TestContext) -> CaseFuture<'_> {
         ensure!(screen.contains(&base_url), "渲染应显示服务地址：\n{screen}");
         ensure!(screen.contains("Ctrl+R 重试"), "渲染应显示重试提示：\n{screen}");
 
-        Ok(vec![
+        let result = vec![
             format!("不可达地址：{base_url}"),
             format!("提示行：{notice}"),
             "重试失败后仍显示未连接，界面可正常渲染".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }
 
 /// 心跳：注册后立刻有一拍 ping，空闲期心跳持续，连接不被判超时（D-P1.1-006）。
 fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
         let client_id = harness.snapshot().client_id.expect("注册成功后应有 clientId");
 
         // 注册响应里的首个 pong 之外，心跳任务的第一拍 ping 也会立刻拿到 pong。
@@ -98,26 +104,30 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
             "心跳不应改变 clientId"
         );
 
-        Ok(vec![
+        let result = vec![
             format!("clientId：{client_id}"),
             format!("已收 pong 次数：{}", harness.snapshot().pongs),
             "空闲期心跳持续，连接保持已连接".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }
 
 /// 服务端反注册：界面按「客户端未注册」整体重连，换新 `clientId` 后按服务端消息整体重载。
 fn reconnect(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
-        let mut harness = open(context)?;
+        let mut harness = open(context).await?;
 
         // 先跑完一轮对话：重连后要按服务端消息整体重载，而不是拼接半条消息。
         harness.type_text(&format!("重连用例 {}", context.token()));
         harness.press(KeyCode::Enter, KeyModifiers::NONE);
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
-                && app.messages.len() == 2
-                && !app.messages[1].content.is_empty()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.phase == Phase::Idle
+                    && app.messages.len() == 2
+                    && !app.messages[1].content.is_empty())
+                .await,
             "首轮回复未在 {} 秒内结束",
             STREAM_TIMEOUT.as_secs()
         );
@@ -151,8 +161,10 @@ fn reconnect(context: &TestContext) -> CaseFuture<'_> {
 
         // 整体重载：消息条数与服务端一致，且没有残留的中断标记。
         ensure!(
-            harness.wait_until(STREAM_TIMEOUT, |app| app.messages.len() == 2
-                && !app.messages[1].content.is_empty()),
+            harness
+                .wait_until_async(STREAM_TIMEOUT, |app| app.messages.len() == 2
+                    && !app.messages[1].content.is_empty())
+                .await,
             "重连后未按服务端消息整体重载"
         );
         ensure!(
@@ -160,11 +172,13 @@ fn reconnect(context: &TestContext) -> CaseFuture<'_> {
             "整体重载后不应留下中断标记"
         );
 
-        Ok(vec![
+        let result = vec![
             format!("旧 clientId：{first}"),
             format!("新 clientId：{current}"),
             "反注册后心跳收到固定 message，界面整体重连并重载消息".to_string(),
-        ])
+        ];
+        harness.close().await;
+        Ok(result)
     })
 }
 
