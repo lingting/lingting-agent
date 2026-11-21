@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# 透传运行时的进程内指标（P2.1-003）：`make test` 用它构建带观测的服务端。
+metrics = ["agent-runtime/metrics", "manager-agent/metrics"]
+
 [dependencies]
 lib-core = { workspace = true }
 lib-web = { workspace = true }

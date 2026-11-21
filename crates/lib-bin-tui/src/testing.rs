@@ -10,6 +10,7 @@ use crate::ui;
 use crate::worker::Worker;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -21,6 +22,58 @@ pub use ratatui::layout::Position;
 /// 轮询更新的间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+/// 同步轮询等待的累计统计（`wait_until`）。
+static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
+/// 同步轮询等待的累计耗时（纳秒）。
+static WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
+/// 收尾等待（等工作线程退出）的累计统计。
+static SHUTDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
+/// 收尾等待的累计耗时（纳秒）。
+static SHUTDOWN_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// 同步阻塞的只读快照：调用次数与累计耗时。
+///
+/// [`Harness::wait_until`] 与 [`Harness`] 的收尾都在**调用线程**上同步阻塞，
+/// 在 `async` 上下文里调用等于占住一个 Tokio worker。这里的数字就是「占住了多久」。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BlockingSnapshot {
+    /// 轮询等待的次数。
+    pub wait_calls: u64,
+    /// 轮询等待的累计耗时（毫秒）。
+    pub wait_millis: u64,
+    /// 收尾等待的次数。
+    pub shutdown_calls: u64,
+    /// 收尾等待的累计耗时（毫秒）。
+    pub shutdown_millis: u64,
+    /// 两者合计：单次运行累计占住的 worker 时间（毫秒）。
+    pub total_millis: u64,
+}
+
+/// 读数入口：用例运行结束后取一次，用于判断同步等待的量级（P2.1-002）。
+///
+/// 只读，不重置：同一进程内的多次运行会累加。
+pub fn blocking_snapshot() -> BlockingSnapshot {
+    let wait_millis = millis(WAIT_NANOS.load(Ordering::Relaxed));
+    let shutdown_millis = millis(SHUTDOWN_NANOS.load(Ordering::Relaxed));
+    BlockingSnapshot {
+        wait_calls: WAIT_CALLS.load(Ordering::Relaxed),
+        wait_millis,
+        shutdown_calls: SHUTDOWN_CALLS.load(Ordering::Relaxed),
+        shutdown_millis,
+        total_millis: wait_millis + shutdown_millis,
+    }
+}
+
+/// 记一次同步阻塞：只做两次原子加，不做格式化。
+fn record(calls: &AtomicU64, nanos: &AtomicU64, elapsed: Duration) {
+    calls.fetch_add(1, Ordering::Relaxed);
+    nanos.fetch_add(elapsed.as_nanos().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+}
+
+/// 纳秒转毫秒。
+fn millis(nanos: u64) -> u64 {
+    nanos / 1_000_000
+}
 /// 一帧渲染结果。
 pub struct Screen {
     /// 整屏文本，行尾空白已裁掉。
@@ -109,18 +162,25 @@ impl Harness {
     }
 
     /// 轮询更新直到界面满足条件；超时返回 `false`。
+    ///
+    /// **同步阻塞**：内部用 `std::thread::sleep` 轮询，占住调用线程直到条件成立或超时。
+    /// 禁止在 `async` 上下文里调用（会占住一个 Tokio worker）；`async` 用例改用
+    /// `tokio::time::sleep` 自行轮询 [`Harness::pump`]，改造见 P2.1-004。
     pub fn wait_until(&mut self, timeout: Duration, mut done: impl FnMut(&App) -> bool) -> bool {
-        let deadline = Instant::now() + timeout;
-        loop {
+        let started = Instant::now();
+        let deadline = started + timeout;
+        let finished = loop {
             self.pump();
             if done(&self.app) {
-                return true;
+                break true;
             }
             if Instant::now() >= deadline {
-                return false;
+                break false;
             }
             std::thread::sleep(POLL_INTERVAL);
-        }
+        };
+        record(&WAIT_CALLS, &WAIT_NANOS, started.elapsed());
+        finished
     }
 
     /// 按给定尺寸渲染一帧：文本用于断言界面内容，光标用于断言输入框定位。
@@ -155,7 +215,10 @@ impl Drop for Harness {
     fn drop(&mut self) {
         // 与真实退出走同一条路径：关掉下行通道后，工作线程在收尾窗口内送出退出时的取消请求。
         if let Some(worker) = self.worker.take() {
+            // 收尾同样阻塞调用线程（`Worker::shutdown` 会 join 工作线程），一并计入同步阻塞。
+            let started = Instant::now();
             worker.shutdown();
+            record(&SHUTDOWN_CALLS, &SHUTDOWN_NANOS, started.elapsed());
         }
     }
 }

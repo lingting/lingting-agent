@@ -67,7 +67,9 @@ fmt:
 # 本目标只是入口：`gen` 必须在构建之前完成（`lib-bin-cli` 用 `#[path]` 引入生成物，缺生成物
 # 连 bin-tests 都编译不出来），其余运行期准备（如 ui-build）由 bin-tests 按选中用例自行执行。
 test: gen
-	cargo build --quiet -p bin-agent
+	# `metrics` 只在测试构建打开：服务端采集进程内指标并按阈值打日志（P2.1-003），
+	# 正式构建（make build / make release）不带该特性，不付采集代价。
+	cargo build --quiet -p bin-agent --features metrics
 	cargo run --quiet -p bin-tests -- $(ARGS)
 
 clean-gen:

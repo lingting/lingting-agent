@@ -14,6 +14,8 @@
 mod client;
 pub mod handler;
 pub mod journal;
+/// 运行时的进程内指标：清理链、会话停止、事件落盘与锁表。
+pub mod metrics;
 mod occupancy;
 mod registry;
 pub mod session;

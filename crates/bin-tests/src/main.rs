@@ -9,6 +9,7 @@ mod cli;
 mod context;
 mod flow;
 mod frontend;
+mod observability;
 mod paths;
 mod prepare;
 mod report;

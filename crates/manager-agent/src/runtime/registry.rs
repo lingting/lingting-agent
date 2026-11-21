@@ -16,6 +16,7 @@ use types_core::runtime::{ClientCloseReason, ClientEvent, ClientEventKind, Clien
 use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
 use super::journal::{self, JournalConfig};
+use super::metrics;
 use super::session::RuntimeSession;
 use service_core::session::{RunDriver, RunStop, SessionService};
 
@@ -130,8 +131,9 @@ impl RuntimeState {
     /// 会话级锁：同一会话的建立、停止与占用登记串行化。
     pub(crate) fn session_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
         let mut inner = write(&self.inner);
-        let lock = inner.session_locks.entry(session_id.to_string()).or_default();
-        Arc::clone(lock)
+        let lock = Arc::clone(inner.session_locks.entry(session_id.to_string()).or_default());
+        metrics::record_session_locks(inner.session_locks.len());
+        lock
     }
 
     /// 登记一个运行时会话。
@@ -443,6 +445,7 @@ impl Registry {
             return false;
         }
         // 通道已断或队列已满：丢弃这条流，清理交给断连处理链。
+        metrics::record_downlink_dropped();
         self.channels.remove(client_id);
         self.mark(client_id, ClientCloseReason::StreamClosed)
     }

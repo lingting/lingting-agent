@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Run 排队与执行并发度的进程内指标（P2.1-003）：测试构建启用，正式构建是空实现。
+metrics = []
+
 [dependencies]
 lib-core = { workspace = true }
 # Run / 消息 / 事件契约类型。

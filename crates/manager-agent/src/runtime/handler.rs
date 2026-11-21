@@ -10,6 +10,7 @@
 use std::sync::OnceLock;
 
 use super::RuntimeState;
+use super::metrics;
 use super::session::SessionStop;
 use framework_bus::{Bus, Watcher};
 use tracing::{info, warn};
@@ -54,8 +55,11 @@ pub(crate) fn notify() {
 ///
 /// 通知按“自上次处理以来至少发生过一次”合并，因此取到的标记为空是正常路径，不是错误。
 pub async fn process(state: &RuntimeState) -> usize {
+    let _span = metrics::chain_enter();
     let _guard = CHAIN.lock().await;
-    handle(state).await
+    let handled = handle(state).await;
+    metrics::record_chain_clients(handled);
+    handled
 }
 
 /// 监听断连通知：每次唤醒都完整执行一遍处理链，链内取走全部标记。

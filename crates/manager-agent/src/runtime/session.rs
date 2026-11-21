@@ -10,6 +10,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use agent_core::session::{RunEvent, RunEventKind, RunStatus};
 use lib_core::time::now_millis;
@@ -25,6 +26,7 @@ use crate::runner::queue::RunExecutor;
 
 use super::RuntimeState;
 use super::journal::Journal;
+use super::metrics;
 use super::registry::Downlink;
 
 /// 生产方 → 写者的事件通道容量：够放下一个 Run 的增量，生产方不必为背压提前阻塞。
@@ -148,7 +150,10 @@ impl RuntimeSession {
             executor,
             ..
         } = self;
+        // 四个阶段分别计时：会话锁持有时间必须与收尾时长解耦，指标是唯一证据（P2.1-003）。
+        let started = Instant::now();
         // 一、数据库先落终态：条件更新影响 0 行说明 Run 已终态，属正常路径。
+        let database_started = Instant::now();
         let cancelled = match session.cancel_session_runs(&session_id, reason.text()).await {
             Ok(cancelled) => cancelled,
             Err(error) => {
@@ -156,20 +161,33 @@ impl RuntimeSession {
                 0
             }
         };
+        let database_elapsed = database_started.elapsed();
         if cancelled > 0 {
             debug!(session_id, cancelled, "停止运行时会话，已取消未结束的 Run");
         }
         // 二、执行队列收取消信号并退出：在跑 Run 中断模型流后自己发终态事件。
+        let executor_started = Instant::now();
         executor.stop(reason.run_stop()).await;
+        let executor_elapsed = executor_started.elapsed();
         // 三、先丢弃生产方写入端：写者把队列里剩下的事件写完再收尾，顺序不会乱。
         drop(producer);
-        if control.send(reason).await.is_err() {
+        let writer_started = Instant::now();
+        let written: io::Result<()> = if control.send(reason).await.is_err() {
             let _ = task.await;
-            return Ok(());
-        }
-        drop(control);
-        task.await
-            .map_err(|error| io::Error::other(format!("写者任务异常退出：{error}")))
+            Ok(())
+        } else {
+            drop(control);
+            task.await
+                .map_err(|error| io::Error::other(format!("写者任务异常退出：{error}")))
+        };
+        metrics::record_stop(
+            &session_id,
+            started.elapsed(),
+            database_elapsed,
+            executor_elapsed,
+            writer_started.elapsed(),
+        );
+        written
     }
 }
 

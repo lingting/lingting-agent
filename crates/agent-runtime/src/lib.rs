@@ -15,6 +15,8 @@ mod error;
 mod feed;
 mod limit;
 mod loop_;
+/// Run 排队与执行并发度的进程内指标。
+pub mod metrics;
 mod port;
 
 pub use port::AgentRuntime;

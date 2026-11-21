@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use agent_core::session::RunEvent;
 use tracing::warn;
@@ -64,12 +64,15 @@ impl Journal {
 
     /// 追加一条事件：补 `seq`、写一行并 flush，返回带上 `seq` 的事件（转发与文件保持一致）。
     pub fn append(&mut self, mut event: RunEvent) -> io::Result<RunEvent> {
+        // 单帧写入耗时进指标（P2.1-003）：是否打日志由指标模块按阈值决定，正常帧只多一次计时。
+        let started = Instant::now();
         event.seq = self.next_seq;
         let mut line = serde_json::to_vec(&event).map_err(io::Error::other)?;
         line.push(b'\n');
         self.writer.write_all(&line)?;
         self.writer.flush()?;
         self.next_seq += 1;
+        super::metrics::record_append(started.elapsed(), &self.path);
         Ok(event)
     }
 

@@ -14,6 +14,7 @@
 mod config;
 mod error;
 mod migrate;
+pub mod observability;
 mod pool;
 mod transaction;
 

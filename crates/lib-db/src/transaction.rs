@@ -18,7 +18,11 @@ pub struct Transaction {
 impl Database {
     /// 开启事务：**事务边界只在这里产生**，业务代码不得直接调用 `sqlx` 的 `begin`。
     pub async fn begin(&self) -> Result<Transaction, DbError> {
+        // 取连接等待是「数据库是不是瓶颈」的唯一直接证据（P2.1-003）：
+        // 计时把手在未启用 `metrics` 特性时是零成本占位。
+        let timer = crate::observability::AcquireTimer::start();
         let transaction = self.pool().begin().await.map_err(DbError::Transaction)?;
+        timer.finish();
         Ok(Transaction {
             inner: Some(transaction),
         })
