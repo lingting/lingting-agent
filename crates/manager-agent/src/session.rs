@@ -76,9 +76,17 @@ pub async fn get_run(po: RunGetParams) -> Result<Run, SessionError> {
     session()?.get_run(po).await
 }
 
-/// 取消未结束的 Run。
+/// 取消未结束的 Run：数据库先落终态，再让执行方中断模型调用（D-P2-010 第 2 条）。
 pub async fn cancel_run(po: RunCancelPO) -> Result<Run, SessionError> {
-    session()?.cancel_run(po).await
+    let run = session()?.cancel_run(po).await?;
+    // 条件更新已成功：Run 若还在执行中，触发取消信号让它 drop 模型流并发出 `run_cancelled`
+    // （原因文本由执行方从数据库读回，因此顺序不能交换）。
+    if let Some(runtime) = runtime()
+        && !runtime.cancel_run(&run.id)
+    {
+        tracing::debug!(run_id = %run.id, "Run 不在执行中，无需中断模型调用");
+    }
+    Ok(run)
 }
 
 /// 未结束的 Run 数量：探活接口用。

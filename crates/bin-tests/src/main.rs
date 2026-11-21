@@ -7,6 +7,7 @@ mod case;
 mod cases;
 mod cli;
 mod context;
+mod flow;
 mod frontend;
 mod paths;
 mod prepare;

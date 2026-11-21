@@ -9,14 +9,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::client::{ClientError, EventStream};
 use lib_bin_cli::sdk::{
-    ApiClient, ClientCreatePO, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole, MessageSendPO,
-    OccupancyCreatePO, OccupancyGetParams, Run, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
+    ApiClient, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole, MessageSendPO, OccupancyGetParams,
+    Run, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
 };
 
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::context::TestContext;
+use crate::flow::{occupy, register};
 use crate::server::Server;
-
 /// 等待 Run 抵终态的上限：Mock 生产方按固定间隔吐增量，留足余量。
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -285,30 +285,6 @@ async fn create_session(context: &TestContext, title: &str) -> Result<SessionSum
         .await
         .map_err(ClientError::from_call)
         .map_err(anyhow::Error::from)
-}
-
-/// 注册客户端，返回 `clientId`。
-async fn register(context: &TestContext) -> Result<String> {
-    let registered = context
-        .client()
-        .client_create(ClientCreatePO {})
-        .await
-        .map_err(ClientError::from_call)?;
-    ensure!(!registered.client_id.is_empty(), "注册返回的 clientId 为空");
-    Ok(registered.client_id)
-}
-
-/// 建立占用。
-async fn occupy(context: &TestContext, client_id: &str, session_id: &str) -> Result<()> {
-    context
-        .client()
-        .occupancy_create(OccupancyCreatePO {
-            client_id: client_id.to_string(),
-            session_id: session_id.to_string(),
-        })
-        .await
-        .map_err(ClientError::from_call)?;
-    Ok(())
 }
 
 /// 建立客户端下行流。

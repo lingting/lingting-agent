@@ -35,12 +35,27 @@ pub struct AssemblyOptions {
     pub agent: AgentConfig,
     /// 数据库连接参数。
     pub database: DbConfig,
+    /// 应用根目录；`None` 时按应用目录推导（用例传自己的临时目录）。
+    pub home: Option<PathBuf>,
 }
 
 /// 按应用目录装配：`<应用根>/data/agent.db`，事件文件在同级的 `data/events/`（D-P2-004）。
 pub async fn assemble(options: AssemblyOptions) -> Result<AgentHolder> {
     let directories = lib_core::directorys::directorys().context("获取应用目录失败")?;
+    let options = AssemblyOptions {
+        home: Some(directory_root(&directories)),
+        ..options
+    };
     assemble_with(directories.data.join(DATABASE_FILE), options).await
+}
+
+/// 应用根目录：`config.toml` 所在目录（`AGENTS.md` 与配置都在这一层）。
+fn directory_root(directories: &lib_core::directorys::AppDirectories) -> PathBuf {
+    directories
+        .config_file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| directories.data.clone())
 }
 
 /// 指定数据库文件装配：生产路径由 [`assemble`] 传入应用目录下的 `agent.db`，
@@ -73,5 +88,12 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         Some(root) => runtime.with_events_root(root),
         None => runtime,
     };
-    Ok(AgentHolder::new(session, runtime, provider, options.agent))
+    let home = match options.home {
+        Some(home) => home,
+        None => {
+            let directories = lib_core::directorys::directorys().context("获取应用目录失败")?;
+            directory_root(&directories)
+        }
+    };
+    Ok(AgentHolder::new(session, runtime, provider, options.agent, home))
 }

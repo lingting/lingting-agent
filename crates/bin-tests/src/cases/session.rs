@@ -8,12 +8,12 @@ use crate::context::TestContext;
 use anyhow::{Context, bail, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
-    ApiClient, ClientCreatePO, ClientDeletePO, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole,
-    MessageSendPO, OccupancyCreatePO, OccupancyDeletePO, OccupancyVO, RunEvent, RunEventKind, RunGetParams, RunStatus,
-    SessionCreatePO,
+    ApiClient, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole, MessageSendPO, RunEventKind,
+    RunGetParams, RunStatus, SessionCreatePO,
 };
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::flow::{journal_path, occupy, read_journal, register, release, run_event_of};
 
 /// 会话领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -539,93 +539,7 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
     })
 }
 
-/// 注册一个客户端，返回 `clientId`。
-async fn register(context: &TestContext) -> anyhow::Result<String> {
-    let registered = context
-        .client()
-        .client_create(ClientCreatePO {})
-        .await
-        .map_err(ClientError::from_call)?;
-    ensure!(!registered.client_id.is_empty(), "注册返回的 clientId 为空");
-    Ok(registered.client_id)
-}
-
-/// 建立占用：成功即启动该会话的运行时会话并打开事件文件。
-async fn occupy(context: &TestContext, client_id: &str, session_id: &str) -> anyhow::Result<OccupancyVO> {
-    Ok(context
-        .client()
-        .occupancy_create(OccupancyCreatePO {
-            client_id: client_id.to_string(),
-            session_id: session_id.to_string(),
-        })
-        .await
-        .map_err(ClientError::from_call)?)
-}
-
-/// 收尾：先交还占用、再反注册，避免影响同一服务端的其他用例。
-async fn release(context: &TestContext, client_id: &str) -> anyhow::Result<()> {
-    context
-        .client()
-        .occupancy_delete(OccupancyDeletePO {
-            client_id: client_id.to_string(),
-        })
-        .await
-        .map_err(ClientError::from_call)?;
-    context
-        .client()
-        .client_delete(ClientDeletePO {
-            client_id: client_id.to_string(),
-        })
-        .await
-        .map_err(ClientError::from_call)?;
-    Ok(())
-}
-
-/// 从下行事件里取出属于指定 Run 的那条 `RunEvent`；其他事件（问询、别的 Run）返回空。
-fn run_event_of(event: &lib_bin_cli::sdk::ClientEvent, run_id: &str) -> Option<RunEvent> {
-    if event.event != ClientEventKind::SessionEvent {
-        return None;
-    }
-    let run_event = event.session_event.clone()?;
-    (run_event.run_id == run_id).then_some(run_event)
-}
-
 /// 轮询直到 Run 抵终态，返回是否正常完成。
 async fn wait_run_done(client: &lib_bin_cli::client::Client, run_id: &str) -> anyhow::Result<bool> {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let run = client
-            .run_get(RunGetParams {
-                run_id: run_id.to_string(),
-            })
-            .await
-            .map_err(ClientError::from_call)?;
-        match run.status {
-            RunStatus::Completed => return Ok(true),
-            RunStatus::Cancelled | RunStatus::Failed => return Ok(false),
-            RunStatus::Queued | RunStatus::Running => {}
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-/// 本次占用的事件文件路径：`<应用根目录>/data/events/<sessionId>/<runtimeSessionId>.jsonl`。
-fn journal_path(context: &TestContext, session_id: &str, runtime_session_id: &str) -> std::path::PathBuf {
-    context
-        .home()
-        .join("data")
-        .join("events")
-        .join(session_id)
-        .join(format!("{runtime_session_id}.jsonl"))
-}
-
-/// 逐行读事件文件。
-fn read_journal(path: &Path) -> anyhow::Result<Vec<RunEvent>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("读取事件文件失败：{}", path.display()))?;
-    text.lines()
-        .map(|line| serde_json::from_str::<RunEvent>(line).context("事件文件里有一行不是有效的 RunEvent"))
-        .collect()
+    Ok(crate::flow::wait_run(client, run_id).await?.status == RunStatus::Completed)
 }

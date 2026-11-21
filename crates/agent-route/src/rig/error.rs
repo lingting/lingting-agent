@@ -13,8 +13,16 @@ use crate::LlmError;
 pub(super) fn map(error: ProviderError) -> LlmError {
     let source = |error: ProviderError| -> Box<dyn Error + Send + Sync> { Box::new(error) };
     match error {
-        // 401 / 403：密钥缺失、无效或被上游拒绝。
+        // 401 / 403：密钥缺失、无效或被上游拒绝。普通补全调用给出的是 `ProviderResponse`
+        // （Rig 只在 `verify` 里改写成 `InvalidAuthentication`），因此状态码两条路都要认。
         error @ ProviderError::InvalidAuthentication(_) => LlmError::Authentication { source: source(error) },
+        ProviderError::ProviderResponse(response)
+            if matches!(response.status.map(|status| status.as_u16()), Some(401 | 403)) =>
+        {
+            LlmError::Authentication {
+                source: source(ProviderError::ProviderResponse(response)),
+            }
+        }
         // 传输层失败：建连失败、连接重置、读取中断。
         error @ ProviderError::Http(_) => LlmError::Network { source: source(error) },
         // 非法 JSON：解码失败或协议不符。

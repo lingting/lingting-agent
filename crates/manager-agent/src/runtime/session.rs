@@ -18,8 +18,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 use types_core::runtime::OccupancyVO;
 
-use service_core::session::SessionService;
+use service_core::session::{RunDriver, RunStop, SessionService};
 
+use crate::runner::cancel::RunCancels;
 use crate::runner::queue::RunExecutor;
 
 use super::RuntimeState;
@@ -77,6 +78,8 @@ impl RuntimeSession {
         root: &Path,
         downlink: Downlink,
         session: Arc<SessionService>,
+        driver: Option<Arc<dyn RunDriver>>,
+        cancels: Arc<RunCancels>,
     ) -> io::Result<Self> {
         let journal = Journal::open(root, &occupancy.session_id, &occupancy.runtime_session_id)?;
         let path = journal.path().to_path_buf();
@@ -84,7 +87,13 @@ impl RuntimeSession {
         let (control, controls) = mpsc::channel(CONTROL_CAPACITY);
         let task = tokio::spawn(writer(Arc::new(Mutex::new(journal)), events, controls, downlink));
         // 执行队列随运行时会话启动：占用一建立就跑存量 QUEUED Run（D-P1.1-004）。
-        let executor = RunExecutor::spawn(occupancy.session_id.clone(), producer.clone(), Arc::clone(&session));
+        let executor = RunExecutor::spawn(
+            occupancy.session_id.clone(),
+            producer.clone(),
+            Arc::clone(&session),
+            driver,
+            cancels,
+        );
         Ok(Self {
             session_id: occupancy.session_id.clone(),
             runtime_session_id: occupancy.runtime_session_id.clone(),
@@ -122,7 +131,11 @@ impl RuntimeSession {
         self.executor.notify();
     }
 
-    /// 停止会话：先停 Run 执行队列并取消未结束的 Run，再追加终态事件、flush 并关闭文件。
+    /// 停止会话：先把未结束的 Run 落成终态，再让执行队列收取消信号，最后追加终态事件并 flush。
+    ///
+    /// 顺序与 P1.1 不同（P2-024）：数据库先落终态，取消原因才能作为权威文本被执行方取到，
+    /// 由执行方发出 `run_cancelled` / `server_shutdown`；写者的兜底补写只在执行方没来得及
+    /// 发终态事件时生效（D-P2-029 第 3 条）。
     ///
     /// 写者已经自行退出（生产方先收尾）时返回成功：文件已 flush，没有需要补写的终态事件。
     pub async fn stop(self, reason: SessionStop) -> io::Result<()> {
@@ -135,12 +148,8 @@ impl RuntimeSession {
             executor,
             ..
         } = self;
-        // 顺序不可交换（D-P1.1-002）：先停执行队列，再取消 Run，最后才让写者补终态事件。
-        executor.stop().await;
-        let cancelled = match session
-            .cancel_session_runs(&session_id, REASON_OCCUPANCY_RELEASED)
-            .await
-        {
+        // 一、数据库先落终态：条件更新影响 0 行说明 Run 已终态，属正常路径。
+        let cancelled = match session.cancel_session_runs(&session_id, reason.text()).await {
             Ok(cancelled) => cancelled,
             Err(error) => {
                 warn!(session_id, %error, "停止运行时会话时取消未结束的 Run 失败");
@@ -150,7 +159,9 @@ impl RuntimeSession {
         if cancelled > 0 {
             debug!(session_id, cancelled, "停止运行时会话，已取消未结束的 Run");
         }
-        // 先丢弃生产方写入端：写者把队列里剩下的事件写完再收尾，顺序不会乱。
+        // 二、执行队列收取消信号并退出：在跑 Run 中断模型流后自己发终态事件。
+        executor.stop(reason.run_stop()).await;
+        // 三、先丢弃生产方写入端：写者把队列里剩下的事件写完再收尾，顺序不会乱。
         drop(producer);
         if control.send(reason).await.is_err() {
             let _ = task.await;
@@ -159,6 +170,25 @@ impl RuntimeSession {
         drop(control);
         task.await
             .map_err(|error| io::Error::other(format!("写者任务异常退出：{error}")))
+    }
+}
+
+impl SessionStop {
+    /// 本次停止在数据库里的原因文本：写进 `runs.error`，也是执行方事件里的原因（D-P2-029）。
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::OccupancyReleased => REASON_OCCUPANCY_RELEASED,
+            Self::ClientDisconnected => REASON_CLIENT_DISCONNECTED,
+            Self::ServerShutdown => REASON_SERVER_SHUTDOWN,
+        }
+    }
+
+    /// 本次停止对应的执行方停止类别：只有服务关闭落 `server_shutdown`。
+    pub fn run_stop(self) -> RunStop {
+        match self {
+            Self::ServerShutdown => RunStop::Shutdown,
+            Self::OccupancyReleased | Self::ClientDisconnected => RunStop::Cancelled,
+        }
     }
 }
 
@@ -303,8 +333,15 @@ impl RuntimeState {
     /// 启动并登记一条运行时会话；已有同会话的会话时先停止它（不应发生，防御性处理）。
     pub(crate) async fn start_session(&self, occupancy: &OccupancyVO) -> Result<(), io::Error> {
         let downlink = self.downlink(&occupancy.client_id);
-        let runtime_session =
-            RuntimeSession::start(occupancy, self.events_root()?, downlink, Arc::clone(self.session()))?;
+        let driver = self.driver();
+        let runtime_session = RuntimeSession::start(
+            occupancy,
+            self.events_root()?,
+            downlink,
+            Arc::clone(self.session()),
+            driver,
+            Arc::clone(self.cancels()),
+        )?;
         if let Some(previous) = self.take_session(&occupancy.session_id) {
             warn!(session_id = %occupancy.session_id, "同一会话存在未停止的运行时会话，先停止旧会话");
             if let Err(error) = previous.stop(SessionStop::OccupancyReleased).await {

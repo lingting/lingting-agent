@@ -60,52 +60,45 @@ impl Repository {
         transaction.commit().await
     }
 
-    /// 取该会话最早的 `QUEUED` Run 并推进到 `RUNNING`（同一个事务）。
+    /// 取该会话最早的 `QUEUED` Run（只读，不推进状态）。
     ///
-    /// 选取与推进都在事务内完成，且推进是条件更新：同一 Run 只会被一个执行者取走（D-P1.1-004）。
-    /// 没有 `QUEUED` 的 Run 时返回空。
-    pub async fn with_next_run(&self, session_id: &str, now_ms: i64) -> Result<Option<Run>, DbError> {
-        let queued = RunStatus::Queued.to_string();
-        let running = RunStatus::Running.to_string();
+    /// 推进放到执行方拿到全局并发许可之后（P2-025）：`RUNNING` 才代表「正在执行」，
+    /// 排队等许可的 Run 仍停在 `QUEUED`，因此「同时 RUNNING 的数量不超过上限」可观测。
+    pub async fn queued_run(&self, session_id: &str) -> Result<Option<Run>, DbError> {
         let sql = format!("{SELECT_RUN} WHERE session_id = ? AND status = ? ORDER BY created_at_ms, id LIMIT 1");
-        let mut transaction = self.begin().await?;
         let row = sqlx::query(&sql)
             .bind(session_id)
-            .bind(&queued)
-            .fetch_optional(transaction.connection())
+            .bind(RunStatus::Queued.to_string())
+            .fetch_optional(self.pool())
             .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let mut run = run_from_row(&row)?;
+        row.as_ref().map(run_from_row).transpose()
+    }
+
+    /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；返回是否真的推进（0 行表示已被取消或已终态）。
+    pub async fn start_run(&self, run_id: &str, now_ms: i64) -> Result<bool, DbError> {
         let affected = sqlx::query("UPDATE runs SET status = ?, updated_at_ms = ? WHERE id = ? AND status = ?")
-            .bind(&running)
+            .bind(RunStatus::Running.to_string())
             .bind(now_ms)
-            .bind(&run.id)
-            .bind(&queued)
-            .execute(transaction.connection())
+            .bind(run_id)
+            .bind(RunStatus::Queued.to_string())
+            .execute(self.pool())
             .await?
             .rows_affected();
-        if affected == 0 {
-            return Ok(None);
-        }
-        transaction.commit().await?;
-
-        run.status = RunStatus::Running;
-        run.updated_at_ms = now_ms;
-        Ok(Some(run))
+        Ok(affected > 0)
     }
 
     /// 完成 Run：写入助手消息、刷新会话，并把 Run 落成 `COMPLETED`（同一个事务）。
     ///
     /// 条件更新先把状态推进到终态：影响 0 行说明 Run 已经不在 `RUNNING`（被取消或已终态），
     /// 此时事务整体回滚，**不写助手消息**，返回 `false`（P2 验收 S-6）。
+    ///
+    /// token 用量取 Provider 的真实 usage：缺一项就留空（`NULL`），不构造估算值（D-P2-014 第 4 条）。
     pub async fn with_run_completion(
         &self,
         run_id: &str,
         assistant: &Message,
-        input_tokens: i64,
-        output_tokens: i64,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
         now_ms: i64,
     ) -> Result<bool, DbError> {
         let status = RunStatus::Completed.to_string();
@@ -201,10 +194,12 @@ impl Repository {
         Ok(usize::try_from(affected).unwrap_or(usize::MAX))
     }
 
-    /// 统计未结束的 Run 数量（`QUEUED` / `RUNNING`），供探活接口报告运行状态。
-    pub async fn open_run_count(&self) -> Result<i64, DbError> {
-        let sql = format!("SELECT COUNT(*) FROM runs WHERE status IN ({})", Self::open_statuses());
-        sqlx::query_scalar(&sql)
+    /// 统计执行中的 Run 数量（只数 `RUNNING`），供探活接口报告运行状态（P2-025 第 3 条）。
+    ///
+    /// 排队中的 `QUEUED` 不计入：它没有占用模型连接，把它算进「运行中」会让并发上限的观测失真。
+    pub async fn running_run_count(&self) -> Result<i64, DbError> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = ?")
+            .bind(RunStatus::Running.to_string())
             .fetch_one(self.pool())
             .await
             .map_err(DbError::Query)

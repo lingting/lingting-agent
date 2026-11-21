@@ -1,0 +1,32 @@
+[package]
+name = "agent-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Agent Runtime：执行端口实现（单轮 Agent Loop）"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+# Run / 消息 / 事件契约类型。
+agent-core = { workspace = true }
+# Context 组装与预算：系统提示词、历史裁剪都在这里（P2-020）。
+agent-context = { workspace = true }
+agent-context-core = { workspace = true }
+# LLM 调用抽象与 Provider 配置：Rig 的类型不出现在本 Crate（D-P2-001）。
+agent-route = { workspace = true }
+# 执行端口、会话业务与数据库访问入口（落库都经 Service）。
+service-core = { workspace = true }
+# `[agent]` 运行参数与模型预算来源。
+types-core = { workspace = true }
+
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

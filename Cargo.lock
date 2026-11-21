@@ -57,6 +57,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-runtime"
+version = "26.11.0"
+dependencies = [
+ "agent-context",
+ "agent-context-core",
+ "agent-core",
+ "agent-route",
+ "async-trait",
+ "lib-core",
+ "service-core",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types-core",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1983,6 +2000,7 @@ dependencies = [
 name = "lib-bin-web"
 version = "26.11.0"
 dependencies = [
+ "agent-runtime",
  "anyhow",
  "async-trait",
  "bytes",
@@ -3421,9 +3439,12 @@ name = "service-core"
 version = "26.11.0"
 dependencies = [
  "agent-core",
+ "async-trait",
  "lib-core",
  "lib-db",
  "sqlx",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@
 //! holder 归装配层：业务 Crate 不再持有进程级单例，装配顺序与单例生命周期都由启动方
 //! 与本模块负责（D-P2-032）。
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use agent_route::ProviderService;
@@ -24,6 +25,8 @@ pub struct AgentHolder {
     provider: ProviderService,
     /// Agent 运行参数。
     agent: AgentConfig,
+    /// 应用根目录：系统提示词（`AGENTS.md`）与 `config.toml` 都在这里。
+    home: PathBuf,
 }
 
 impl AgentHolder {
@@ -33,12 +36,14 @@ impl AgentHolder {
         runtime: RuntimeState,
         provider: ProviderService,
         agent: AgentConfig,
+        home: PathBuf,
     ) -> Self {
         Self {
             session,
             runtime,
             provider,
             agent,
+            home,
         }
     }
 
@@ -60,6 +65,11 @@ impl AgentHolder {
     /// Agent 运行参数（并发、超时与 Context 预算）。
     pub fn agent(&self) -> &AgentConfig {
         &self.agent
+    }
+
+    /// 应用根目录：执行方用它找系统提示词（`AGENTS.md`）。
+    pub fn home(&self) -> &Path {
+        &self.home
     }
 }
 

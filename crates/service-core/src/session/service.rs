@@ -24,8 +24,8 @@ use crate::session::SessionError;
 const DEFAULT_TITLE: &str = "新会话";
 /// 未指定模型时的默认模型标识；P2 后续由 Provider / Model 配置决定。
 const DEFAULT_MODEL: &str = "mock-model";
-/// 结束 Run 时的取消原因：由业务主动取消（`api/run/cancel`）。
-pub const REASON_CANCELLED: &str = "已被取消";
+/// 结束 Run 时的取消原因：由业务主动取消（`api/run/cancel`，D-P2-029 的固定文本）。
+pub const REASON_CANCELLED: &str = "用户取消执行";
 
 /// 会话业务服务。
 pub struct SessionService {
@@ -67,9 +67,9 @@ impl SessionService {
         Ok(sessions)
     }
 
-    /// 统计未结束的 Run 数量，供探活接口报告运行状态。
+    /// 统计执行中（`RUNNING`）的 Run 数量，供探活接口报告运行状态（P2-025 第 3 条）。
     pub async fn running_run_count(&self) -> Result<i64, SessionError> {
-        self.repository.open_run_count().await.map_err(internal)
+        self.repository.running_run_count().await.map_err(internal)
     }
 
     /// 会话是否存在：占用建立前的校验，避免为不存在的会话开事件文件。
@@ -151,13 +151,21 @@ impl SessionService {
         self.require_run(&params.run_id).await
     }
 
-    /// 取该会话最早的 `QUEUED` Run 并推进到 `RUNNING`（执行队列专用）。
-    pub async fn start_next_run(&self, session_id: &str) -> Result<Option<Run>, SessionError> {
+    /// 取该会话最早的 `QUEUED` Run（执行队列专用，不推进状态）。
+    ///
+    /// 推进到 `RUNNING` 由执行方在拿到全局并发许可后调用 [`Self::start_run`] 完成（P2-025）：
+    /// 排队等许可的 Run 停在 `QUEUED`，客户端看到的是「等待执行」。
+    pub async fn next_queued_run(&self, session_id: &str) -> Result<Option<Run>, SessionError> {
         // 先把引用收敛成局部值：执行队列在 `tokio::spawn` 的任务里调用本方法，future 必须是
         // `Send`，而「跨 await 持有 `&str`」在当前 rustc 上会让 `Send` 推导失败（D-P2-033）。
         let session_id = session_id.to_string();
+        self.repository.queued_run(&session_id).await.map_err(internal)
+    }
+
+    /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；返回是否真的推进（0 行表示已被取消或已终态）。
+    pub async fn start_run(&self, run_id: &str) -> Result<bool, SessionError> {
         self.repository
-            .with_next_run(&session_id, time::now_millis())
+            .start_run(run_id, time::now_millis())
             .await
             .map_err(internal)
     }
@@ -167,9 +175,35 @@ impl SessionService {
         self.repository.user_prompt(session_id, run_id).await.map_err(internal)
     }
 
-    /// Run 的当前状态；Run 不存在时为空（Mock 生产方在每段增量前确认 Run 仍在执行）。
+    /// Run 的当前状态；Run 不存在时为空（执行方在每段增量前确认 Run 仍在执行）。
     pub async fn run_status(&self, run_id: &str) -> Result<Option<RunStatus>, SessionError> {
         Ok(self.run(run_id).await?.map(|run| run.status))
+    }
+
+    /// Run 当前的错误文本：取消时事件里的原因取数据库里的权威值（D-P2-029）。
+    pub async fn run_error(&self, run_id: &str) -> Result<Option<String>, SessionError> {
+        Ok(self.run(run_id).await?.and_then(|run| run.error))
+    }
+
+    /// 本次 Run 之前的历史消息（按 `seq` 升序，不含本次输入）：Context 组装的历史来源。
+    pub async fn history_before_run(&self, session_id: &str, run_id: &str) -> Result<Vec<Message>, SessionError> {
+        self.repository
+            .history_before_run(session_id, run_id)
+            .await
+            .map_err(internal)
+    }
+
+    /// 取会话摘要：Context 组装需要会话标识，装配层也用它补齐缺省模型。
+    pub async fn session_summary(&self, session_id: &str) -> Result<SessionSummary, SessionError> {
+        self.require_session(session_id).await
+    }
+
+    /// 把未结束的 Run 落成 `FAILED`；返回是否真的推进（0 行表示已终态）。
+    pub async fn fail_run(&self, run_id: &str, error: &str) -> Result<bool, SessionError> {
+        self.repository
+            .fail_run(run_id, Some(error), time::now_millis())
+            .await
+            .map_err(internal)
     }
 
     /// 完成 Run：条件推进到 `COMPLETED` 并写入助手消息；返回是否为本次推进。
@@ -177,8 +211,8 @@ impl SessionService {
         &self,
         run_id: &str,
         message: &Message,
-        input_tokens: i64,
-        output_tokens: i64,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
     ) -> Result<bool, SessionError> {
         self.repository
             .with_run_completion(run_id, message, input_tokens, output_tokens, time::now_millis())

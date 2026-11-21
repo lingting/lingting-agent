@@ -59,6 +59,25 @@ impl Repository {
             .await?;
         Ok(row.map(|row| row.get::<String, _>("content")))
     }
+
+    /// 某个 Run 之前的历史消息：按 `seq` 升序，**不含**本次输入（D-P2-013 的历史来源）。
+    ///
+    /// `seq` 由子查询定位本次输入，因此「同一会话里更早的消息」与「本次输入之前」是同一件事；
+    /// 找不到对应的用户消息时子查询为空，结果同样为空（调用方按无历史处理）。
+    pub async fn history_before_run(&self, session_id: &str, run_id: &str) -> Result<Vec<Message>, DbError> {
+        let sql = format!(
+            "{SELECT_MESSAGE} WHERE session_id = ? AND seq < \
+             (SELECT seq FROM messages WHERE run_id = ? AND role = ? ORDER BY seq LIMIT 1) \
+             ORDER BY seq"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(run_id)
+            .bind(MessageRole::User.to_string())
+            .fetch_all(self.pool())
+            .await?;
+        rows.iter().map(message_from_row).collect()
+    }
 }
 
 /// 行 → 消息。

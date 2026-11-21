@@ -14,6 +14,7 @@ members = [
     "crates/agent-context-core",
     "crates/agent-context",
     "crates/agent-route",
+    "crates/agent-runtime",
     "crates/lib-db",
     "crates/manager-agent",
     "crates/bin-tests",
@@ -44,6 +45,7 @@ agent-core = { path = "crates/agent-core" }
 agent-context-core = { path = "crates/agent-context-core" }
 agent-context = { path = "crates/agent-context" }
 agent-route = { path = "crates/agent-route" }
+agent-runtime = { path = "crates/agent-runtime" }
 lib-db = { path = "crates/lib-db" }
 manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
@@ -105,6 +107,8 @@ wreq-util = { version = "0.2" }
 rsntp = { version = "4.1", default-features = false }
 sha2 = { version = "0.10" }
 async-trait = { version = "0.1" }
+# Run 取消信号（`CancellationToken`）：每 Run 一个，取消即 drop 模型流（D-P2-010）。
+tokio-util = { version = "0.7" }
 arc-swap = { version = "1.8" }
 dashmap = { version = "6.1" }
 cef = { version = "149.3.0" }

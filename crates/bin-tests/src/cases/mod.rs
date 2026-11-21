@@ -1,13 +1,15 @@
 //! 用例注册：新增领域时在这里汇总。
 
+pub(crate) mod chat;
 mod client;
 mod disconnect;
 mod journal;
-mod llm;
+pub(crate) mod llm;
 mod occupancy;
 mod persist;
 mod probe;
 mod rotation;
+pub(crate) mod run;
 mod runtime;
 mod sdk;
 mod session;
@@ -20,6 +22,7 @@ use crate::case::Case;
 /// 全部用例，按名称排序。
 pub fn all() -> Vec<Case> {
     let mut cases = Vec::new();
+    cases.extend(chat::cases());
     cases.extend(client::cases());
     cases.extend(disconnect::cases());
     cases.extend(journal::cases());
@@ -28,6 +31,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(persist::cases());
     cases.extend(probe::cases());
     cases.extend(rotation::cases());
+    cases.extend(run::cases());
     cases.extend(shutdown::cases());
     cases.extend(runtime::cases());
     cases.extend(sdk::cases());

@@ -16,6 +16,10 @@ agent-core = { workspace = true }
 # 持久化：连接池、事务入口与错误来自 `lib-db`，SQL 全部写在 `repository`（P2-010 ~ P2-012）。
 lib-db = { workspace = true }
 sqlx = { workspace = true }
+# 执行端口（`session/driver.rs`）：事件通道、取消信号与 dyn 兼容的 async trait。
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
 
 [lints]
 workspace = true

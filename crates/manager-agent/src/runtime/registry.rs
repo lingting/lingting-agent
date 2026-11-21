@@ -17,7 +17,9 @@ use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
 use super::journal::{self, JournalConfig};
 use super::session::RuntimeSession;
-use service_core::session::SessionService;
+use service_core::session::{RunDriver, RunStop, SessionService};
+
+use crate::runner::cancel::RunCancels;
 
 /// 进程内运行时状态：由装配层在启动时构造并持有。
 pub struct RuntimeState {
@@ -29,6 +31,10 @@ pub struct RuntimeState {
     events_root: OnceLock<PathBuf>,
     /// 事件文件轮转配置：启动时注入一次，运行期不变（不做热更新）。
     journal: JournalConfig,
+    /// Run 执行端口：由启动方注入一次（D-P2-028 第 3 条），未注入时 Run 直接落 `FAILED`。
+    driver: OnceLock<Arc<dyn RunDriver>>,
+    /// 在跑 Run 的取消信号表：`api/run/cancel` 与会话停止都经它触发（D-P2-010）。
+    cancels: Arc<RunCancels>,
 }
 
 /// 注册表的全部内存数据，读写都走 `RuntimeState::inner` 这一把锁。
@@ -60,6 +66,8 @@ impl RuntimeState {
             inner: Arc::new(RwLock::new(Registry::default())),
             events_root: OnceLock::new(),
             journal: JournalConfig::default(),
+            driver: OnceLock::new(),
+            cancels: Arc::new(RunCancels::default()),
         }
     }
 
@@ -83,6 +91,31 @@ impl RuntimeState {
     /// 事件文件轮转配置：轮转任务与用例读它。
     pub fn journal_config(&self) -> JournalConfig {
         self.journal
+    }
+
+    /// 注入 Run 执行端口：只允许注入一次，返回本次是否真正注入（D-P2-028 第 3 条）。
+    ///
+    /// 注入点固定在启动装配（`lib-bin-web`）；未注入的进程（`api_probe_server`、部分进程内用例）
+    /// 里 Run 会直接落 `FAILED`「执行器未装配」。
+    pub fn install_driver(&self, driver: Arc<dyn RunDriver>) -> bool {
+        self.driver.set(driver).is_ok()
+    }
+
+    /// Run 执行端口；未注入时为空。
+    pub(crate) fn driver(&self) -> Option<Arc<dyn RunDriver>> {
+        self.driver.get().cloned()
+    }
+
+    /// 在跑 Run 的取消信号表：会话停止时批量触发，`api/run/cancel` 时按 Run 触发。
+    pub(crate) fn cancels(&self) -> &Arc<RunCancels> {
+        &self.cancels
+    }
+
+    /// 触发某个 Run 的取消信号；返回是否真的触发了（未登记说明不在执行中）。
+    ///
+    /// 数据库里的条件更新由调用方先完成：这里只负责让执行方中断模型流（D-P2-010 第 2 条）。
+    pub fn cancel_run(&self, run_id: &str) -> bool {
+        self.cancels.cancel(run_id, RunStop::Cancelled)
     }
 
     /// 事件文件根目录：首次使用时按应用目录推导并缓存。

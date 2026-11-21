@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿），结论见 `decisions.md`；Batch D 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿）、Batch D（P2-015 ~ P2-018）完成、Batch E（P2-019 ~ P2-020）完成、Batch F（P2-021 ~ P2-026）已完成并验收（`chat` / `run` / `session` / `runtime` / `tui` / `web` 用例、`make check`、`make ui-check` 全绿），结论见 `decisions.md`；Batch G 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -459,7 +459,7 @@
   - 本次输入单条超预算 → `ContextError::PromptTooLarge`（`Display` =「上下文超出模型预算」），不发请求；系统提示词文件存在但读不出来（权限 / 编码）→ `ContextError::SystemPrompt`，目录不存在视为「没有提示词文件」。
   - 估算：`HeuristicEstimator::estimate` = `ceil(ascii/4) + 非 ASCII 字符数`，每条消息另加 `MESSAGE_TOKEN_OVERHEAD`（D-P2-012 第 2 条）。
   - **测试交接**：本任务的验收标准可由源码核对，`chat.truncate` 随 P2-021 交到 Batch F（服务端此时仍是 Mock 生产方，断言无从产生）。
-- [ ] **P2-021 Context 用例与可替换性核对**
+- [x] **P2-021 Context 用例与可替换性核对**
 
   **目标**：证明「历史按序进入请求、系统提示在最前、超预算被裁剪、最新消息保留、估算器可替换」。
   **前置依赖**：P2-020、P2-018。
@@ -469,11 +469,17 @@
   2. `chat.truncate`：在 `config.toml` 里把 `[agent] context_max_messages` 压到 2、`context_safety_tokens` 调大，断言请求体只含被保留的消息且包含本次输入。
   3. 源码核对：`TokenEstimator` 为 trait，构造点唯一。
   **验收标准**：
-  - [ ] 两条用例通过，报告落 `target/tests/<运行 ID>/chat.md`。
-  - [ ] 裁剪行为有可复现的配置组合。
+  - [x] 两条用例通过，报告落 `target/tests/<运行 ID>/chat.md`。
+  - [x] 裁剪行为有可复现的配置组合。
   **完成产物**：`chat.*` 用例（Context 部分）。
 
-  **交接说明（2026-11-21）**：本任务在 Batch E **未开工**，交到 Batch F 与 P2-026 一起落地。原因：两条用例都断言 Mock LLM 侧的 `/mock/last-request`，而服务端的执行通路此时仍是 P1.1 的 Mock 生产方（真实调用要等 P2-022 / P2-023）；在 Batch F 之前写出来必然失败，无法勾选验收标准。Batch E 的出口因此按「Context 可组装、可裁剪、可替换估算」判定，由 P2-019 / P2-020 的落地记录承担。
+  **落地记录（2026-11-21）**：
+  - 用例落在 `crates/bin-tests/src/cases/chat.rs`：`chat.context` / `chat.truncate` / `chat.multiturn` 三条，均为 `SelfServed`（自己起服务端 + 自己的 Mock LLM）。
+  - 为什么自起 Mock：两条 Context 用例都断言 `/mock/last-request` 的完整 `messages`，共享 Mock 的观测记录会被并发用例互相覆盖。
+  - 为什么自起服务端：`chat.truncate` 需要 `[agent] context_max_messages = 2` 与 `context_safety_tokens = 7000`（拿掉 6882 的可用预算后仍只命中条数裁剪，不触发预算裁剪），`chat.context` 需要在用例目录写 `AGENTS.md` 作为系统提示词。
+  - 断言口径：请求体首条 `role=system` 且正文逐字等于 `AGENTS.md`；末条为本次输入；`chat.truncate` 第三次请求只保留最近两条历史 + 本次输入（最旧的一条不再出现）。
+  - 一个实现细节：Rig 把 `system` 消息的 `content` 发成「分段数组」（`[{"type":"text","text":"…"}]`），用户 / 助手仍是纯字符串；用例的正文读取 helper 因此两种形态都认（否则 `chat.context` 会误判）。
+  - 报告：`make test ARGS="chat"` 三条通过，报告落 `target/tests/<运行 ID>/chat.md`。`TokenEstimator` 为 trait、构造点唯一（`ContextBuilder::new`）已按源码核对。
 
 ---
 
@@ -481,7 +487,7 @@
 
 > 依赖：Batch C + Batch D + Batch E。022 → 023 → 024；025 在 022 之后可并行；026 依赖 023 ~ 025。
 
-- [ ] **P2-022 新建 `agent-runtime`：Agent Loop（单轮）与执行端口实现**
+- [x] **P2-022 新建 `agent-runtime`：Agent Loop（单轮）与执行端口实现**
 
   **目标**：实现 `service-core` 定义的执行端口：取出 Run → 组装 Context → 调 LLM → 流式产出事件 → 收尾（落库 + 终态事件）。
   **前置依赖**：P2-004、P2-016、P2-020、P2-012。
@@ -493,12 +499,20 @@
   4. 不实现 Tool Calling：请求体不含 tools，代码中无 tool loop。
   **技术要求**：`agent-runtime` 可依赖 `agent-core`、`agent-context`、`agent-route`、`service-core`、`lib-core`；不依赖 `lib-web*` / `bin-*`；事件只能经 `Sender<RunEvent>` 产出。
   **验收标准**：
-  - [ ] `cargo tree -p agent-runtime` 无 `lib-web` / `lib-bin-*` / `bin-*`；`service-core` 不依赖 `agent-runtime`。
-  - [ ] 一次成功 Run 产出 `run_started` → `message_delta`+ → `run_completed`，`seq` 连续。
+  - [x] `cargo tree -p agent-runtime` 无 `lib-web` / `lib-bin-*` / `bin-*`；`service-core` 不依赖 `agent-runtime`。
+  - [x] 一次成功 Run 产出 `run_started` → `message_delta`+ → `run_completed`，`seq` 连续。
   **测试要求**：由 P2-026 覆盖。
   **完成产物**：`agent-runtime` 与端口 trait。
 
-- [ ] **P2-023 执行端口接入 `service-core`（替换 Mock 生产方）**
+  **落地记录（2026-11-21）**：
+  - 文件：`crates/agent-runtime/src/{lib,port,loop_,limit,feed,error}.rs`。比任务书多 `limit.rs`（全局并发许可）与 `feed.rs`（事件生产者），少了 `registry.rs`：取消信号登记表落在装配层 `manager-agent/src/runner/cancel.rs`，因为三条取消触发路径（`api/run/cancel`、占用释放、断连 / 关闭）都在装配层，而 `manager-agent` 不依赖 `agent-runtime`（见 D-P2-038 第 4 条）。
+  - 端口定义在 `service-core/src/session/driver.rs`：`RunDriver::drive(RunInput) -> RunOutcome`，`RunInput { run, prompt, events, cancel }`；`cancel` 是 `RunCancel`（token + 停止类别），不是裸 `CancellationToken`（D-P2-038 第 1 条）。
+  - 执行时序：取全局许可 → `QUEUED → RUNNING` 条件更新 → 组装 Context → `run_started` → 流式增量 → 成功收尾（助手消息 + `COMPLETED` 同事务）→ `run_completed`。推进到 `RUNNING` 放在许可之后（D-P2-038 第 2 条），因此排队期间 Run 仍显示 `QUEUED`。
+  - 收尾口径：失败先 `fail_run`（条件更新）再发 `run_failed`；取消 / 关闭从数据库读回原因文本后发 `run_cancelled` / `server_shutdown`；条件更新影响 0 行一律静默退出，不补第二条终态事件。
+  - 事件生产者 `feed.rs` 与 P1.1 的 Mock 生产方同一形态（`seq` 占位、写者覆写），没有引入第二套事件编码。
+  - 依赖：`agent-runtime -> service-core / agent-context / agent-context-core / agent-route / agent-core / types-core / lib-core` + `tokio` / `tokio-util` / `async-trait` / `tracing`；`cargo tree -p agent-runtime` 无 `lib-web*` / `bin-*`，`service-core` 无 `agent-runtime` 边。
+  - 用例：`run.journal_consistency` 断言同一 Run 的下行事件与事件文件逐条一致（`event` + `seq`），`seq` 从 0 连续递增。
+- [x] **P2-023 执行端口接入 `service-core`（替换 Mock 生产方）**
 
   **目标**：删掉 Mock 生产方，执行队列改为调用已注入的端口实现；启动装配完成注册。
   **前置依赖**：P2-022、P2-013。
@@ -509,13 +523,21 @@
   3. 事件仍写进 `RuntimeSession::producer()`，写者先落盘再转发；`notify_run` 的行为不变。
   **技术要求**：`service-core` 不依赖 `agent-*`；执行队列的串行与停止语义不变（`RunExecutor::stop` 仍先中止再取消）。
   **验收标准**：
-  - [ ] 仓库中不再有 Mock 回复文本（`本段由 P1 的 Mock`）。
-  - [ ] 占用中的会话发消息后真实调用 LLM，事件按序落盘并转发到 `api/client/stream`。
-  - [ ] 未占用会话的 Run 仍停在 `QUEUED`（P1.1 语义不变）。
+  - [x] 仓库中不再有 Mock 回复文本（`本段由 P1 的 Mock`）。
+  - [x] 占用中的会话发消息后真实调用 LLM，事件按序落盘并转发到 `api/client/stream`。
+  - [x] 未占用会话的 Run 仍停在 `QUEUED`（P1.1 语义不变）。
   **测试要求**：`session.trigger`（既有）继续通过；`run.execute`（P2-026）覆盖真实执行。
   **完成产物**：执行端口接通，Mock 生产方下线。
+  **完成产物**：执行端口接通，Mock 生产方下线。
 
-- [ ] **P2-024 取消、断连与关闭联动（含终态事件归属）**
+  **落地记录（2026-11-21）**：
+  - Mock 生产方 `manager-agent/src/runner/mock.rs` 已删除，`runner` 现在只有 `queue.rs`（执行队列）与 `cancel.rs`（取消信号登记表）。仓库内不再有 `本段由 P1 的 Mock`。
+  - 注册点：`RuntimeState::install_driver(Arc<dyn RunDriver>)`（`OnceLock`），由 `lib-bin-web::server::run` 在装配之后、`install(holder)` 之前调用；未注入的进程（`api_probe_server`、进程内用例）里 `run_one` 直接 `fail_run("执行器未装配")` 并补一条 `run_failed`。
+  - 端口实现由 `agent-runtime::AgentRuntime::new(session, provider, agent, home)` 构造：`AgentHolder` 增加 `home()`（`AssemblyOptions.home`，缺省按 `config.toml` 所在目录推导），Provider 适配器在构造时一次成型。
+  - `RunExecutor` 新增停止通道：停止时先给该会话的在跑 Run 收取消信号，再让执行任务在跑完当前 Run 后退出；超时（5s）中止任务兜底。
+  - 任务书的文件清单（`service-core/src/session/run_trigger.rs`、`stream.rs`、`service-core/src/runtime/*`）已被 P2-013 / D-P2-035 的落位取代：执行队列在 `manager-agent/src/runner/queue.rs`，本任务按实际落位修改。
+  - 用例：`session.trigger` / `session.message` / `session.isolation` / `session.stream_terminal` 继续通过（共享服务端此时真实调用内置 Mock LLM）。
+- [x] **P2-024 取消、断连与关闭联动（含终态事件归属）**
 
   **目标**：三条终止路径都真正中断模型调用，且事件文件与数据库的终态一致。
   **前置依赖**：P2-023。
@@ -527,13 +549,21 @@
   4. 竞态：终态条件更新影响 0 行即静默退出，不发第二条终态事件。
   **技术要求**：取消必须在 `select!` 中 drop 流；`RunRegistry` 的清理随 Run 结束；不新增事件枚举值。
   **验收标准**：
-  - [ ] 取消后 `run/get` 为 `CANCELLED` + `finishedAtMs`，无助手消息，事件文件有 `run_cancelled`。
-  - [ ] 断连与关闭路径的事件文件终态分别正确，且不重复追加。
-  - [ ] Mock LLM 侧记录到连接关闭（O-1 结论决定断言强度）。
+  - [x] 取消后 `run/get` 为 `CANCELLED` + `finishedAtMs`，无助手消息，事件文件有 `run_cancelled`。
+  - [x] 断连与关闭路径的事件文件终态分别正确，且不重复追加。
+  - [x] Mock LLM 侧记录到连接关闭（O-1 结论决定断言强度）。
   **测试要求**：`run.cancel` / `run.disconnect` / `run.shutdown`（P2-026）。
   **完成产物**：三条终止路径闭环。
 
-- [ ] **P2-025 全局并发上限与排队超时**
+  **落地记录（2026-11-21）**：
+  - 取消信号：`service-core` 的 `RunCancel`（`CancellationToken` + 停止类别 `RunStop::{Cancelled, Shutdown}`），见 D-P2-038 第 1 条。触发顺序统一为「数据库条件更新 → 触发信号 → 执行方 drop 流并读回原因文本 → 发终态事件」。
+  - `api/run/cancel`：`manager_agent::cancel_run` 在 `service.cancel_run` 成功后调 `RuntimeState::cancel_run(run_id)` 触发信号；原因文本 `REASON_CANCELLED` 从「已被取消」改成 D-P2-029 的固定文本「用户取消执行」。
+  - 断连 / 占用释放 / 关闭：`RuntimeSession::stop` 顺序改为「先 `cancel_session_runs(原因)` → 再 `executor.stop(停止类别)` → 最后让写者收尾」（D-P2-038 第 3 条）。原因文本按 `SessionStop::text()` 取，关闭走 `server_shutdown`。
+  - 登记表：`manager-agent/src/runner/cancel.rs` 的 `RunCancels`（run_id → 会话 + 信号），Run 结束即 `finish`；`api/run/cancel` 与 `RunExecutor::stop` 都经它触发。
+  - 竞态：终态条件更新影响 0 行时不发终态事件，写者的兜底补写保留（`run.disconnect` / `run.shutdown` 断言事件文件里只有一条终态事件）。
+  - O-1 实测口径：`run.cancel` / `run.disconnect` 断言 Mock 侧 `streamsAborted` 增加（Mock 在写下一帧时才探测到对端关闭，因此用例轮询等待，而不是立刻读计数）。
+  - 用例：`run.cancel` / `run.disconnect` / `run.shutdown`（`#[cfg(debug_assertions)]`，依赖关闭探针）。
+- [x] **P2-025 全局并发上限与排队超时**
 
   **目标**：多会话并发受全局上限约束，等待超时落 `FAILED`。
   **前置依赖**：P2-022。
@@ -543,12 +573,18 @@
   2. 同会话串行继续由 P1.1 执行队列保证，不引入 Session 租约。
   3. 排队不产生事件；`probe/health` 的 `runningRunCount` 只统计 `RUNNING`。
   **验收标准**：
-  - [ ] `config.toml` 的 `[agent] max_concurrent_runs = 1` 时两个会话的 Run 不同时进入 `RUNNING`，且都最终落终态。
-  - [ ] 排队超时分支可被用例触发（把超时压到毫秒级）。
+  - [x] `config.toml` 的 `[agent] max_concurrent_runs = 1` 时两个会话的 Run 不同时进入 `RUNNING`，且都最终落终态。
+  - [x] 排队超时分支可被用例触发（把超时压到毫秒级）。
   **测试要求**：`run.concurrency` / `run.queue_timeout`（P2-026）。
   **完成产物**：并发与排队。
 
-- [ ] **P2-026 真实执行端到端用例（`chat.*` / `run.*`）**
+  **落地记录（2026-11-21）**：
+  - 许可在 `agent-runtime`（`limit.rs`）：`Semaphore::new(max_concurrent_runs.max(1))` 随 `AgentRuntime` 构造一次，许可持有到 `drive` 结束；等待同时受 `run_queue_timeout_ms` 与取消信号约束。
+  - 「不同时进入 RUNNING」靠把 `QUEUED → RUNNING` 的推进移到许可之后（D-P2-038 第 2 条）：`SessionService::next_queued_run`（只读）+ `start_run`（条件更新），执行队列不再自己推进状态。因此排队期间 `run/get` 显示 `QUEUED`，与 D-P2-007 的「客户端看到 Run 停在 QUEUED」一致。
+  - 排队超时的 Run 落 `FAILED`「执行排队超时」并发 `run_failed`，不发起上游请求、不产生 `run_started`。
+  - `probe/health` 的 `runningRunCount` 改成只统计 `RUNNING`（Repository 的 `open_run_count` 换成 `running_run_count`）。
+  - 用例：`run.concurrency`（两个会话同时发慢速消息，采样「同时 RUNNING 数」最大值为 1，两个都抵 `COMPLETED`）、`run.queue_timeout`（1 秒超时分支，占位 Run 正常完成）。
+- [x] **P2-026 真实执行端到端用例（`chat.*` / `run.*`）**
 
   **目标**：用用例证明真实执行、流式、失败、取消、并发、断连在 P1.1 通路上闭环。
   **前置依赖**：P2-023 ~ P2-025、P2-018、P2-021。
@@ -561,9 +597,18 @@
   5. `run.journal_consistency`：同一 Run 的下行事件序列与事件文件序列一致（`event` 与 `seq` 一一对应）。
   **技术要求**：全部经生成的 SDK；Mock LLM 由用例进程内的 Mock Server 提供（服务端 `config.toml` 的 `[provider] base_url` 指向它）。
   **验收标准**：
-  - [ ] `make test ARGS="chat"` 与 `make test ARGS="run"` 全绿，报告落 `target/tests/<运行 ID>/`。
-  - [ ] 每条用例的断言能区分「Mock 行为」与「真实执行」。
+  - [x] `make test ARGS="chat"` 与 `make test ARGS="run"` 全绿，报告落 `target/tests/<运行 ID>/`。
+  - [x] 每条用例的断言能区分「Mock 行为」与「真实执行」。
   **完成产物**：真实执行用例集。
+
+  **落地记录（2026-11-21）**：
+  - 用例：`cases/run.rs`（`run.cancel` / `run.concurrency` / `run.disconnect` / `run.failed_auth` / `run.failed_timeout` / `run.failed_upstream` / `run.journal_consistency` / `run.queue_timeout` / `run.shutdown`）与 `cases/chat.rs`（`chat.context` / `chat.multiturn` / `chat.truncate`）。
+  - 共用流程抽到 `src/flow.rs`：`Occupied`（注册 → 建会话 → 占用 → 订阅）、`drain_run`（收到终态）、`wait_run`、`wait_journal_terminal`、`get_json` / `wait_aborted`；`session.rs` / `persist.rs` 的重复 helper 一并收敛到这里。
+  - 服务端启动辅助：`server::config(base_url, extra)` 生成最小 `config.toml`，`server::serve_once` 起一次服务端并在用例结束后停止；`server::shared_mock()` 提供进程级共享 Mock LLM，共享服务端与隔离服务端都指向它（真实执行后既有用例需要）。
+  - 服务端形态按需求选：只按关键字选场景的用例（`run.failed_auth` / `run.failed_upstream` / `run.journal_consistency`）复用共享服务端；需要 `[agent]` 参数或独立 Mock 观测记录的用例自起服务端。
+  - 「区分 Mock 与真实执行」的判据：回复正文逐字等于 `Mock 回复：<最后一条消息>`（证明增量是 Provider 流出来的）；同一 Run 的下行事件与事件文件逐条一致；终态与数据库一致；取消 / 断连后 Mock 的 `streamsAborted` 增加（真的断了连接）。
+  - 既有用例调整（真实执行替换 Mock 生产方后必然变化）：`tui.stream` 的正文断言从 P1 Mock 文案改成 `Mock 回复：`；前端 `tests/e2e/chat.spec.ts` 的断言同步改写，并用 `mock:slow` 关键字让浏览器能看到「逐段变长」与可点击的停止按钮。
+  - 验证：`make test ARGS="run"`（9 条）、`ARGS="chat"`（3 条）、`ARGS="--all"`（69 条）全绿；`make check` 通过，前端 `pnpm exec vp test run`（28 条）与 Playwright（3 条）通过。
 
 ---
 

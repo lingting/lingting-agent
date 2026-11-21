@@ -60,6 +60,8 @@
 | D-P2-034 | 事务边界集中在 `lib-db`（`begin` + `Transaction` 句柄），Repository 用 `with_xxx` | DECIDED |
 | D-P2-035 | 进程内运行时从 `service-core` 迁到 `manager-agent`（holder 改名 `AgentHolder`） | DECIDED |
 | D-P2-036 | 内部异常不得被吞掉：`api/session/list` 改回 `Result`，禁止「降级为空」 | DECIDED |
+| D-P2-037 | 配置只走 `config.toml` 与命令行；Provider 配置服务归 `agent-route` | DECIDED |
+| D-P2-038 | Batch F 落地偏差：取消信号带停止类别、`RUNNING` 推进后置、停止顺序与端口注册 | DECIDED |
 
 ---
 
@@ -740,6 +742,24 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 - **理由**：配置只有文件与命令行两个来源，用例能给出确定输入；`service-core` 保持不感知配置类型；模型查找不与 `agent-route` 重复。
 - **状态**：`DECIDED`（用户确认的口径变更，修订 D-P2-016 第 1 条与 D-P2-017 第 1 条）。
 - **承接任务**：P2-017、P2-018、P2-020、P2-025、P2-031。
+---
+
+## D-P2-038 Batch F 落地偏差：取消信号带停止类别、`RUNNING` 推进后置、停止顺序与端口注册
+
+- **问题**：P2-022 ~ P2-026 把执行端口落到 `agent-runtime` 时，任务书 / D-P2-028 的草图与实际需求出现了 9 处不一致，需要定稿处置口径。
+- **决策**：
+  1. **取消信号带停止类别**：端口里的 `cancel` 不是裸 `CancellationToken`，而是 `RunCancel`（token + `RunStop::{Cancelled, Shutdown}`）。理由：终态事件类型（`run_cancelled` 还是 `server_shutdown`）只有停止方知道（P2-024 第 3 条），裸 token 无法表达；`RunCancel` 仍保持「命中即 drop 模型流」的语义，取消原因仍以数据库为权威来源。
+  2. **`QUEUED → RUNNING` 后置到全局许可之后**：P1.1 由执行队列直接推进，P2 改为「执行队列只读取出队（`next_queued_run`）→ 执行方拿到 `Semaphore` 许可后条件更新（`start_run`）」。理由：否则等许可的 Run 也显示 `RUNNING`，「同时 RUNNING 数 ≤ `max_concurrent_runs`」不可观测，P2-025 的验收标准无法成立；顺带让排队期间的语义与 D-P2-007「客户端看到 Run 停在 QUEUED」一致。
+  3. **会话停止顺序调整**：`RuntimeSession::stop` 由「先停执行队列 → 再取消 Run → 再让写者收尾」改为「先 `cancel_session_runs(原因)` → 再触发取消信号并等执行队列退出 → 最后让写者收尾」。理由：执行方要发带原因文本的终态事件，而原因只能来自数据库（D-P2-010 第 2 条的「先写库再触发」在会话停止路径上同样适用）；写者的兜底补写保留为安全网。
+  4. **取消信号登记表落在装配层**：`RunCancels`（run_id → 会话 + 信号）在 `manager-agent/src/runner/cancel.rs`，不在任务书写的 `agent-runtime/src/registry.rs`。理由：三条触发路径（`api/run/cancel`、占用释放、断连 / 关闭）都在装配层，而 `manager-agent` 不依赖 `agent-runtime`（保持单向：`agent-runtime -> service-core`）。
+  5. **端口注册方式**：`RuntimeState::install_driver(Arc<dyn RunDriver>)`（`OnceLock`）+ `AssemblyOptions.home`；`lib-bin-web` 在 `assemble` 之后、`install(holder)` 之前构造并注入 `AgentRuntime`。选 `OnceLock` 注入而不是构造参数，是因为端口实现需要装配产出的 `SessionService`（构造参数会形成鸡生蛋）。
+  6. **token 语义**：`SessionService::complete_run` 的 usage 参数改成 `Option<i64>`，Provider 未给出用量时留空（D-P2-014 第 4 条），不构造估算值；`run_started.inputTokens` 仍是 Context 的估算值。
+  7. **认证错误映射**：401 / 403 的 `ProviderError::ProviderResponse` 也归 `LlmError::Authentication`。Rig 0.46 只在 `verify()` 里把 401 改写成 `InvalidAuthentication`，普通补全调用给出的是 `ProviderResponse`（携带状态码），按原映射会落到「上游服务错误」，与 `llm.auth_error` / `run.failed_auth` 的期望文案冲突。
+  8. **新增依赖边**：`service-core -> tokio / tokio-util / async-trait`（端口 trait 需要事件通道、取消信号与 dyn 兼容的 async fn）；`agent-runtime -> types-core`（`[agent]` 参数与模型预算来源）；`lib-bin-web -> agent-runtime`（装配期构造端口）。
+  9. **`runningRunCount` 语义收紧**：只统计 `RUNNING`（P2-025 第 3 条），Repository 的 `open_run_count` 换成 `running_run_count`。
+- **代价**：`RUNNING` 的推进点从「执行队列」搬到「执行方」，执行队列与端口的职责边界需要在两处对齐；停止路径的顺序与 P1.1 不同，`README.md` 第七节的时序图需要 P2-030 一并更新。
+- **状态**：`DECIDED`。
+- **承接任务**：P2-022、P2-023、P2-024、P2-025、P2-026、P2-030（文档回填）。
 
 ---
 

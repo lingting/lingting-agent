@@ -7,11 +7,16 @@ use anyhow::{Context, Result, bail};
 use lib_bin_cli::client::Client;
 use lib_bin_cli::sdk::ApiClient;
 use lib_core::directorys::{CONFIG_FILE, ENV_HOME};
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
+
+use crate::cases::llm::mock::MockServer;
+use crate::context::TestContext;
 
 /// 共享服务端固定端口（见 `docs/develop.md` 端口表）。
 pub const SHARED_PORT: u16 = 20104;
@@ -22,14 +27,16 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// 子进程输出文件名。
 const LOG_FILE: &str = "server.log";
 
-/// 服务端的最小 `config.toml`：写一个能校验模型归属的 Provider（D-P2-015）。
+/// 服务端的 `config.toml` 模板：`[provider]` 指向内置 Mock LLM，`extra` 追加 `[agent]` 等段。
 ///
-/// `default_model` 与服务端原来的兜底值同名（`mock-model`），因此其余用例的可见行为不变；
-/// `base_url` 指向不可达地址——P2 在 Mock LLM Server 接入前不真正调用模型（P2-018 / P2-022）。
-const TEST_CONFIG: &str = r#"[provider]
+/// `default_model` 与服务端原来的兜底值同名（`mock-model`），因此其余用例的可见行为不变。
+/// Mock 的场景按最后一条消息里的 `mock:<场景>` 关键字选择（P2-018），因此异常场景不需要改配置。
+pub(crate) fn config(base_url: &str, extra: &str) -> String {
+    format!(
+        r#"[provider]
 id = "mock"
 kind = "openai-compatible"
-base_url = "http://127.0.0.1:1/v1"
+base_url = "{base_url}/v1"
 api_key = ""
 default_model = "mock-model"
 
@@ -37,7 +44,25 @@ default_model = "mock-model"
 id = "mock-model"
 context_window = 8192
 max_output_tokens = 1024
-"#;
+
+{extra}"#
+    )
+}
+
+/// 进程级共享的 Mock LLM：共享服务端与隔离服务端都指向它，用例按关键字选场景。
+///
+/// 自己启动 Mock 的用例（断言 `/mock/last-request` / `/mock/stats`）不走这里：
+/// 共享实例的观测记录会被并发用例互相覆盖。
+pub(crate) async fn shared_mock() -> Result<&'static MockServer> {
+    static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+    static SHARED: OnceLock<MockServer> = OnceLock::new();
+    let _guard = LOCK.lock().await;
+    if let Some(mock) = SHARED.get() {
+        return Ok(mock);
+    }
+    SHARED.set(MockServer::start().await?).ok();
+    SHARED.get().context("共享 Mock LLM 未启动")
+}
 
 /// 运行中的服务端子进程。
 pub struct Server {
@@ -47,13 +72,20 @@ pub struct Server {
 }
 
 impl Server {
-    /// 启动服务端并等待探活通过。
+    /// 启动服务端并等待探活通过：配置指向进程级共享 Mock LLM。
     ///
     /// `log_dir` 同时作为子进程的 `AGENT_HOME`，配置、数据与应用日志都落在该目录内。
     pub async fn start(port: u16, log_dir: PathBuf) -> Result<Self> {
+        let mock = shared_mock().await?;
+        let config = config(mock.base_url(), "");
+        Self::start_with(port, log_dir, &config).await
+    }
+
+    /// 用给定配置启动服务端：需要 `[agent]` 预算或指向独立 Mock 的用例走这里。
+    pub async fn start_with(port: u16, log_dir: PathBuf, config: &str) -> Result<Self> {
         std::fs::create_dir_all(&log_dir).with_context(|| format!("创建测试目录失败：{}", log_dir.display()))?;
         // 配置随应用根目录落地：`[provider]` 段存在时 `session/create` 会校验模型归属（D-P2-015）。
-        std::fs::write(log_dir.join(CONFIG_FILE), TEST_CONFIG)
+        std::fs::write(log_dir.join(CONFIG_FILE), config)
             .with_context(|| format!("写入测试配置失败：{}", log_dir.display()))?;
         // 追加写：同一 `AGENT_HOME` 重启时保留上一次运行的日志，便于排查启动失败。
         let output = std::fs::OpenOptions::new()
@@ -142,6 +174,25 @@ impl Server {
             }
             sleep(POLL_INTERVAL).await;
         }
+    }
+}
+
+/// 自管用例的启动辅助：按给定配置在用例目录与端口上起一次服务端，用例结束后无论成败都停止它。
+///
+/// `chat.*` / `run.*` 需要 `[agent]` 预算或独立 Mock 的用例走这里：配置写进用例自己的
+/// `AGENT_HOME`，事件文件与数据库不会影响其他用例。
+pub(crate) async fn serve_once<T>(
+    context: &TestContext,
+    config: &str,
+    body: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let server = Server::start_with(context.port()?, context.home().to_path_buf(), config).await?;
+    let result = body.await;
+    let stopped = server.stop().await;
+    match (result, stopped) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), _) => Err(error),
     }
 }
 

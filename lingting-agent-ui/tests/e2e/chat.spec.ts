@@ -19,22 +19,23 @@ const ASSISTANT_BUBBLE = ".ant-bubble-start";
 test("发送消息后逐段看到流式回复", async ({ page }) => {
   await page.goto("/");
 
+  // `mock:slow` 让内置 Mock LLM 每 200ms 吐一块：浏览器里能看到「逐段变长」。
+  const prompt = "mock:slow 端到端测试";
   const input = page.getByPlaceholder(PLACEHOLDER);
-  await input.fill("端到端测试");
+  await input.fill(prompt);
   await input.press("Enter");
 
   // 用户消息立刻上屏。
-  await expect(page.getByText("端到端测试", { exact: true })).toBeVisible();
+  await expect(page.getByText(prompt, { exact: true })).toBeVisible();
 
   const bubble = page.locator(ASSISTANT_BUBBLE).last();
   // 回复开头先到：此时正文还没写完。
-  await expect(bubble).toContainText("收到你的消息：端到端测试");
+  await expect(bubble).toContainText("Mock 回");
   const partial = await bubble.innerText();
 
-  // 等正文全部到齐，再比较长度，证明是「逐段变长」而不是一次性到位。
-  await expect(bubble).toContainText("P2 接入 Agent Runtime");
+  // 等正文全部到齐（Mock 回显最后一条消息），再比较长度，证明是「逐段变长」而不是一次性到位。
+  await expect(bubble).toContainText(`Mock 回复：${prompt}`);
   expect((await bubble.innerText()).length).toBeGreaterThan(partial.length);
-
   // 结束后回到可发送状态。
   await expect(page.locator(STOP_BUTTON)).toHaveCount(0);
 });
@@ -43,7 +44,7 @@ test("停止生成后保留已收内容并打标", async ({ page }) => {
   await page.goto("/");
 
   const input = page.getByPlaceholder(PLACEHOLDER);
-  await input.fill("停止测试");
+  await input.fill("mock:slow 停止测试");
   await input.press("Enter");
 
   const stop = page.locator(STOP_BUTTON);

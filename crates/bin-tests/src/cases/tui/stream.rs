@@ -102,10 +102,10 @@ fn stream(context: &TestContext) -> CaseFuture<'_> {
         ensure!(!messages[1].interrupted, "正常结束的回复不应带中断标记");
         let reply_chars = messages[1].content.chars().count();
 
-        // 增量落进消息区：助手角色标签与 Mock 回复正文都要真的渲染出来。
+        // 增量落进消息区：助手角色标签与模型回复正文都要真的渲染出来。
         let screen = harness.screen(SCREEN_WIDTH, SCREEN_HEIGHT);
         ensure!(screen.contains("助手"), "渲染结果缺少助手消息：\n{screen}");
-        ensure!(screen.contains("本段由 P1 的 Mock"), "渲染结果缺少回复正文：\n{screen}");
+        ensure!(screen.contains("Mock 回复："), "渲染结果缺少回复正文：\n{screen}");
 
         Ok(vec![
             format!("会话：{}", harness.app().current.as_deref().unwrap_or("-")),
