@@ -59,6 +59,8 @@ pub struct ChatMessage {
     pub content: String,
     /// 是否因断线/中断而不完整。
     pub interrupted: bool,
+    /// 附加说明（失败原因等），渲染在正文之后。
+    pub note: Option<String>,
 }
 
 impl ChatMessage {
@@ -238,9 +240,11 @@ impl App {
                 Vec::new()
             }
             Update::Failed { reason } => {
+                // 已经有助手占位就直接挂说明；还没开始执行就失败时补一条，界面不会只剩提示行。
+                let started = matches!(self.phase, Phase::Streaming | Phase::Cancelling);
                 self.phase = Phase::Idle;
                 self.run_id = None;
-                self.mark_interrupted();
+                self.fail_message(started, &reason);
                 self.notice = Some(format!("Run 执行失败：{reason}"));
                 Vec::new()
             }
@@ -485,6 +489,7 @@ impl App {
             role: MessageRole::Assistant,
             content: String::new(),
             interrupted: false,
+            note: None,
         });
     }
 
@@ -532,6 +537,23 @@ impl App {
             message.interrupted = true;
         }
     }
+
+    /// 把失败原因挂到本次回复的助手消息末尾。
+    ///
+    /// 已经开始出增量时占位消息就在末尾，直接挂说明；还没开始执行就失败（排队超时、上下文超预算）
+    /// 时末尾没有占位，补一条空消息承接原因，避免提示行成了唯一线索。
+    fn fail_message(&mut self, started: bool, reason: &str) {
+        let has_placeholder = self
+            .messages
+            .last()
+            .is_some_and(|message| message.role == MessageRole::Assistant);
+        if !started || !has_placeholder {
+            self.push_assistant();
+        }
+        if let Some(message) = self.messages.last_mut() {
+            message.note = Some(format!("（执行失败：{reason}）"));
+        }
+    }
 }
 
 /// 契约消息转界面消息：中断标记只属于本次会话的实时流。
@@ -540,5 +562,6 @@ fn chat_message(message: &Message) -> ChatMessage {
         role: message.role,
         content: message.content.clone(),
         interrupted: false,
+        note: None,
     }
 }

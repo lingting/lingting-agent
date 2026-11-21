@@ -373,6 +373,7 @@
 - **P1.1 修订（2026-11-20）**：本项**作废**。P1.1 把连接保活拆成两件事——客户端每 15s 上行 `api/client/update {PING}`（服务端 45s 无心跳即判超时）与下行流的 `: keepalive` 注释帧；两者都是常量（D-P1.1-006），且 `RunEventKind::Heartbeat` 不再产出。因此不需要新增 `stream_heartbeat_ms` 配置，E-3 的结论改为「契约保留值，无需验证」（P2-029）。
 - **状态**：`REJECTED`。
 - **承接任务**：P2-029（结案说明）。
+- **结案（P2-029，2026-11-21）**：E-3 按「契约保留值，无需验证」结案。证据：客户端心跳用例 `tui.heartbeat`（断言 `api/client/update {PING}` 的 pong 计数增长）与下行流的 `: keepalive` 注释帧（`web.stream` 覆盖）；`RunEventKind::Heartbeat` 保留枚举值、仍无产出方。
 
 ---
 
@@ -397,6 +398,7 @@
 - **理由**：判据在生成物不入库的前提下不可满足；继续追求会迫使生成物入库，与 D-006 冲突。
 - **状态**：`REJECTED`。
 - **承接任务**：P2-029、P2-030。
+- **结案（P2-029，2026-11-21）**：A-1 维持原判据的 `REJECTED`，等价门禁就是 `make gen-check`（清空重建 → 产物校验 → `cargo check --workspace --all-targets`）。P1 报告「五、偏差与遗留问题」第 1 条随之标注「已结案（P2-029）」。
 
 ---
 
@@ -629,6 +631,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages (session_id, seq
 | 25 | POST | `api/run/cancel` | `Json<RunCancelPO>` | `Run` | 不变（新增 `用户取消执行` 原因文本，见 D-P2-029） |
 
 `RunEventKind` 仍是 7 个取值（`run_started` / `message_delta` / `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` / `heartbeat`）；P2 只让 `run_failed` 从「无产出方」变为真实产出，`heartbeat` 保留不产出。
+- **结案（P2-029，2026-11-21）**：E-4（`run_failed` 真实产出）由 `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout` 结案——三类失败都断言终态 `FAILED`、固定脱敏 `error`、无助手消息、事件文件以 `run_failed` 收尾；TUI 侧由 `tui.run_failed` 断言展示（消息末尾 + 提示行）。
 
 ---
 

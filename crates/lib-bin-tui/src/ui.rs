@@ -125,6 +125,9 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
                 Line::from(format!("{:INDENT$}（连接中断，内容可能不完整）", "")).style(Style::new().fg(Color::Yellow)),
             );
         }
+        if let Some(note) = &message.note {
+            lines.push(Line::from(format!("{:INDENT$}{note}", "")).style(Style::new().fg(Color::Yellow)));
+        }
         lines.push(Line::from(""));
     }
     if lines.is_empty() {
@@ -189,7 +192,7 @@ fn connection_text(app: &App) -> (String, Color) {
 fn phase_text(app: &App) -> Option<&'static str> {
     match app.phase {
         Phase::Idle => None,
-        Phase::Waiting => Some("等待响应"),
+        Phase::Waiting => Some("等待执行…"),
         Phase::Streaming => Some("流式输出中"),
         Phase::Cancelling => Some("正在中断"),
     }

@@ -5,6 +5,7 @@
 
 mod commands;
 mod connection;
+mod failed;
 mod input;
 mod keys;
 mod paste;
@@ -43,6 +44,7 @@ pub(crate) fn cases() -> Vec<Case> {
     cases.extend(input::cases());
     cases.extend(paste::cases());
     cases.extend(render::cases());
+    cases.extend(failed::cases());
     cases.extend(commands::cases());
     cases.extend(send::cases());
     cases.extend(keys::cases());

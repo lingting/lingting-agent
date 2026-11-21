@@ -1,6 +1,6 @@
 # P2 任务清单
 
-**状态：已开工（2026-11-20）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿）、Batch D（P2-015 ~ P2-018）完成、Batch E（P2-019 ~ P2-020）完成、Batch F（P2-021 ~ P2-026）已完成并验收（`chat` / `run` / `session` / `runtime` / `tui` / `web` 用例、`make check`、`make ui-check` 全绿），结论见 `decisions.md`；Batch G 待开工。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
+**状态：代码任务全部完成（2026-11-21）：Batch A（P2-001 ~ P2-005）完成、Batch B（P2-006 ~ P2-009）完成、Batch C（P2-010 ~ P2-014）已完成并验收（`persist` / `runtime` / `session` / `web` 用例与 `make check`、`cargo build --workspace` 全绿）、Batch D（P2-015 ~ P2-018）完成、Batch E（P2-019 ~ P2-020）完成、Batch F（P2-021 ~ P2-026）已完成并验收（`chat` / `run` / `session` / `runtime` / `tui` / `web` 用例、`make check`、`make ui-check` 全绿）、Batch G（P2-027 ~ P2-030）已完成（TUI / WebUI 状态展示、W-1 与 P1 遗留项结案、文档回填），结论见 `decisions.md`；剩余 Batch H（P2-031 / P2-032，端到端验收与报告）。** 任务状态维护规则见 `.steps/README.md` 第六节；阶段边界、模块落位与配置面见本目录 [README.md](README.md)，判据见 [acceptance.md](acceptance.md)，结论见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行（每批开头给出依赖与并行关系）。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。
 
@@ -335,7 +335,7 @@
   3. 错误映射：`ProviderError` → `LlmError`（认证 / 上游 / 网络 / 截断 / 解析 / 空闲超时），`public_message()` 固定脱敏文案。
   4. 中断：取消时 drop 流；按 O-1 的实测结论记录连接是否随之关闭。
   **验收标准**：
-  - [ ] 流式增量拼接等于完整回复（由 P2-026 用例断言；本任务无 Mock Server，暂不勾选）。
+  - [x] 流式增量拼接等于完整回复（由 P2-026 的 `chat.multiturn` 与 `llm.mock` 断言）。
   - [x] 认证失败 / 上游 5xx / 非法 JSON / 中途断连各有 `LlmError` 变体，文案不含内部细节。
   **测试要求**：`llm.stream` / `llm.auth_error` / `llm.upstream_error` / `llm.invalid_json`（P2-018 提供 Mock 能力，P2-026 组装断言）。
   **完成产物**：Rig Adapter。
@@ -616,7 +616,7 @@
 
 > 依赖：Batch F。027 与 028 可并行；029 / 030 无代码依赖。
 
-- [ ] **P2-027 TUI 展示失败、取消与排队态**
+- [x] **P2-027 TUI 展示失败、取消与排队态**
 
   **目标**：真实执行后 TUI 能区分「排队中 / 运行中 / 失败 / 取消」，不重写连接管理（P1.1 形态不变）。
   **前置依赖**：P2-026。
@@ -626,12 +626,18 @@
   2. `run_cancelled` / `client_closed` 走既有收尾提示，不新增交互。
   3. 不新增接口调用，不改心跳与重连逻辑。
   **验收标准**：
-  - [ ] `run.failed_*` 的服务端行为在 TUI 上表现为可读错误，界面不卡在流式阶段。
-  - [ ] 排队中（未 `run_started`）有明确提示。
+  - [x] `run.failed_*` 的服务端行为在 TUI 上表现为可读错误，界面不卡在流式阶段。
+  - [x] 排队中（未 `run_started`）有明确提示。
   **测试要求**：`tui.*` 既有用例继续通过；新增 `tui.run_failed` 覆盖失败态展示。
   **完成产物**：TUI 状态展示。
 
-- [ ] **P2-028 WebUI 展示失败、取消与排队态 + W-1（console error 断言）**
+  **落地记录（2026-11-21）**：
+  - `Phase::Waiting` 的阶段文案由「等待响应」改为「等待执行…」：`run_started` 之前（排队或刚开始执行）状态栏就给出提示。
+  - `ChatMessage` 新增「附加说明」字段：`run_failed` 的脱敏原因挂在本次回复的助手消息末尾，提示行同步显示同一份文案；还没开始执行就失败（排队超时、上下文超预算）时补一条空助手消息承接，界面不会只剩一行提示。
+  - 失败不再复用「连接中断」的中断标记，避免把执行失败说成断线；`run_cancelled` / `client_closed` 沿用既有收尾提示，未改交互，也未新增接口调用。
+  - 用例：新增 `tui.run_failed`（等待提示 + 提示行 + 消息末尾 + 收尾后可继续输入）；`make test ARGS="tui"` 14 条全通过。
+
+- [x] **P2-028 WebUI 展示失败、取消与排队态 + W-1（console error 断言）**
 
   **目标**：WebUI 与 TUI 口径一致，并把 P1 遗留 W-1（浏览器 console error 断言）处置完毕。
   **前置依赖**：P2-026。
@@ -641,12 +647,19 @@
   2. W-1：Playwright 用例收集 `console.error` / `pageerror`，正常对话与关闭场景均断言为空（允许白名单中的已知网络错误文案，需在用例中显式列出）。
   3. 不做本地半条消息拼接（沿用 D-011 第 4 条口径）。
   **验收标准**：
-  - [ ] `web.e2e` 覆盖失败与取消场景，console 断言生效。
-  - [ ] `web.ui` 全绿，`make ui-check` 通过。
+  - [x] `web.e2e` 覆盖失败与取消场景，console 断言生效。
+  - [x] `web.ui` 全绿，`make ui-check` 通过。
   **测试要求**：`web.e2e` / `web.ui` / `web.sdk-only`。
   **完成产物**：WebUI 状态展示 + W-1 结案。
 
-- [ ] **P2-029 P1 遗留项处置（E-3 / E-4 / A-1）**
+  **落地记录（2026-11-21）**：
+  - 气泡在第一个增量到达前显示「等待执行…」：只在展示层替换内容，不往状态里拼正文（沿用 D-011 第 4 条口径），原来的空白气泡加载态随之去掉。
+  - `run_failed` 的气泡说明改为「（执行失败：<脱敏原因>）」，与提示条共用同一份文案，不再错标成「连接中断」；`run_cancelled` 的「已停止生成」/「连接中断」口径不变。
+  - W-1 结案：新增 `lingting-agent-ui/tests/e2e/console.ts` 收集 `console.error` 与 `pageerror`，三条对话用例与关服用例都断言为空，关服场景只放行浏览器自己上报的连接失败文案；新增「执行失败时气泡打标并给出可读错误」用例（`mock:auth`）。
+  - 单元用例：新增 `tests/message-list.test.tsx`（等待提示与正文切换），jsdom 侧补 `IntersectionObserver` 垫片。
+  - 用例：`make test ARGS="web"` 8 条全通过（含 `web.ui` 31 项、Playwright 4 条），`make ui-check` 通过。
+
+- [x] **P2-029 P1 遗留项处置（E-3 / E-4 / A-1）**
 
   **目标**：把 P1 报告里挂账的三条遗留项结案。
   **前置依赖**：P2-026。
@@ -657,12 +670,19 @@
   3. **A-1（生成物过期检测）**：维持 D-P2-022 的 `REJECTED` 与等价门禁（`make gen-check`）。
   4. 若发现遗留项与原判据表述冲突，写清「原判据 / 处置 / 归属」，不留无归属项。
   **验收标准**：
-  - [ ] 三项各有结论与证据（用例名或命令）。
-  - [ ] P1 报告中对应条目的标注在 P2-030 一并提交。
+  - [x] 三项各有结论与证据（用例名或命令）。
+  - [x] P1 报告中对应条目的标注在 P2-030 一并提交。
   **测试要求**：复用 `run.failed_*`，不新增用例。
   **完成产物**：遗留项结案记录。
 
-- [ ] **P2-030 文档回填（代码编辑完成后统一提交）**
+  **落地记录（2026-11-21）**：
+  - E-3（心跳）：结案为「契约保留值，无需验证」——保活由客户端 `api/client/update {PING}`（`tui.heartbeat` 断言 pong 计数）与下行流 `: keepalive`（`web.stream`）承担，`RunEventKind::Heartbeat` 保留但不产出；结案条写入 `decisions.md` 的 D-P2-020。
+  - E-4（`run_failed`）：由 `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout` 结案，TUI 展示由 `tui.run_failed` 覆盖；结案条写入 D-P2-014。
+  - A-1（生成物过期检测）：维持 D-P2-022 的 `REJECTED`，等价门禁是 `make gen-check`；结案条写入 D-P2-022。
+  - P1 报告「五、偏差与遗留问题」的第 1 / 2 / 4 条已标注结案（第 4 条即 W-1，归 P2-028）。
+  - 不新增用例（复用 `run.failed_*` 与既有 TUI/前端用例），与原判据无冲突。
+
+- [x] **P2-030 文档回填（代码编辑完成后统一提交）**
 
   **目标**：把 P2 落地后的架构、接口与阶段状态写回文档，保持单一事实来源。
   **前置依赖**：P2-005 的清单 + 各落地任务完成。
@@ -674,10 +694,17 @@
   4. `.steps/README.md`：P2 状态与 P3 输入清单；`p2/tasks.md` 状态。
   5. P1 报告遗留项结案标注。
   **验收标准**：
-  - [ ] 文档与代码一致，无第二份契约定义。
-  - [ ] `docs/workspace.md` 的依赖表与 `cargo tree` 实际一致。
+  - [x] 文档与代码一致，无第二份契约定义。
+  - [x] `docs/workspace.md` 的依赖表与 `cargo tree` 实际一致。
   **测试要求**：无。
   **完成产物**：文档回填。
+
+  **落地记录（2026-11-21）**：
+  - `docs/workspace.md`：`service-core` 的职责与内部组织按实际改写（Session / Message / Run 服务、`RunDriver` 端口、Provider 配置不归本 Crate）；`manager-agent` 的 `runner` 改为「执行队列 + 取消登记 + 端口安装」；5.1 的 `agent-context` / `agent-runtime` / `lib-web` / `bin-tests` 四处依赖列对齐 `cargo tree` 实测；5.2 的 Agent 领域图与服务端图删掉不存在的 `agent-route -> service-core`、`lib-web -> agent-runtime` 两条边，补上 `agent-runtime -> service-core` / `agent-context-core` / `types-core`、`lib-web -> manager-agent`、`lib-bin-web -> agent-runtime`；5.3 第 7 条改为「配置由 `lib-bin-cli` 装载、`agent-route` 只读承载」；8.1 改为当前实际范围（P1 / P1.1 / P2 全表）、8.1.1 改为「P2 落地的依赖边」并写明两条早期盘点的偏差、8.2 只保留 P3–P6。
+  - `docs/develop.md`：配置装载表补 `[provider]` / `[agent]` / 系统提示词三行；会话接口一节由「P1 Mock」改为「P2 起真实执行」并补 token 语义、`run_failed` 与排队口径；运行时接口的业务归属改到 `manager-agent`；前端工程表补控制台断言一行。
+  - `docs/api/session.md`：标题与导语、`run_failed` 的产出条件、全局并发与终态归属、token 语义、「执行行为边界」（原「Mock 行为边界」）全部按 P2 改写，样例里的 `mock-model` 换成 `gpt-4o-mini`；`docs/api/readme.md` 的 session 行同步。
+  - 未新增 `docs/api/provider.md`：P2 不新增 Provider 接口（D-P2-016 / D-P2-025），配置面已写进 `docs/develop.md` 的「配置装载」。
+  - 阶段状态：`p2/README.md`、`p2/tasks.md`、`.steps/README.md` 与本文件的勾选同步（P2 只剩 Batch H）。
 
 ---
 

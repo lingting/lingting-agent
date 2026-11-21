@@ -220,6 +220,24 @@ describe("useChat", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("执行失败：脱敏原因挂在回复末尾，同时作为提示条错误", async () => {
+    const { result } = renderHook(() => useChat());
+
+    await act(async () => {
+      await result.current.send("你好");
+    });
+    await emit(
+      event("run_started"),
+      event("message_delta", "半句"),
+      event("run_failed", null, "调用模型失败：认证失败"),
+    );
+
+    expect(result.current.messages[1].status).toBe("interrupted");
+    expect(result.current.messages[1].content).toBe("半句（执行失败：调用模型失败：认证失败）");
+    expect(result.current.error).toBe("调用模型失败：认证失败");
+    await waitFor(() => expect(result.current.streaming).toBe(false));
+  });
+
   it("服务关闭事件把回复标成中断并给出原因", async () => {
     const { result } = renderHook(() => useChat());
 
@@ -246,9 +264,7 @@ describe("useChat", () => {
     await emit(event("run_started"), event("message_delta", "半句"));
     await close("无法连接到服务端（同源），请确认服务已启动");
 
-    expect(result.current.error).toBe(
-      "连接中断：无法连接到服务端（同源），请确认服务已启动",
-    );
+    expect(result.current.error).toBe("连接中断：无法连接到服务端（同源），请确认服务已启动");
     expect(result.current.messages[1].status).toBe("interrupted");
     await waitFor(() => expect(result.current.streaming).toBe(false));
   });

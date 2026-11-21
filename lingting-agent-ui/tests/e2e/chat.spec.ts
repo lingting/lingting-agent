@@ -3,9 +3,13 @@
  *
  * 这个文件里的用例互不依赖（各自建会话），可以并行；会把服务端停掉的用例在
  * `shutdown.spec.ts`，由 Playwright 项目的依赖关系保证它在这些用例之后执行。
+ *
+ * 每条用例都收集浏览器控制台错误（W-1）：正常对话、停止生成与执行失败都必须一条不剩。
  */
 
 import { expect, test } from "@playwright/test";
+
+import { expectNoConsoleError, watchConsole } from "./console";
 
 /** 输入框的占位文案（与 Composer 保持一致）。 */
 const PLACEHOLDER = "输入消息，Enter 发送，Shift + Enter 换行";
@@ -17,6 +21,7 @@ const STOP_BUTTON = ".ant-sender-actions-btn-loading-button";
 const ASSISTANT_BUBBLE = ".ant-bubble-start";
 
 test("发送消息后逐段看到流式回复", async ({ page }) => {
+  const errors = watchConsole(page);
   await page.goto("/");
 
   // `mock:slow` 让内置 Mock LLM 每 200ms 吐一块：浏览器里能看到「逐段变长」。
@@ -38,9 +43,11 @@ test("发送消息后逐段看到流式回复", async ({ page }) => {
   expect((await bubble.innerText()).length).toBeGreaterThan(partial.length);
   // 结束后回到可发送状态。
   await expect(page.locator(STOP_BUTTON)).toHaveCount(0);
+  expectNoConsoleError(errors);
 });
 
 test("停止生成后保留已收内容并打标", async ({ page }) => {
+  const errors = watchConsole(page);
   await page.goto("/");
 
   const input = page.getByPlaceholder(PLACEHOLDER);
@@ -57,4 +64,25 @@ test("停止生成后保留已收内容并打标", async ({ page }) => {
 
   // 停止后仍可继续输入。
   await expect(input).toHaveValue("");
+  expectNoConsoleError(errors);
+});
+
+test("执行失败时气泡打标并给出可读错误", async ({ page }) => {
+  const errors = watchConsole(page);
+  await page.goto("/");
+
+  // `mock:auth` 让内置 Mock LLM 回 401：Run 落 `FAILED`，服务端只下发脱敏文案。
+  const input = page.getByPlaceholder(PLACEHOLDER);
+  await input.fill("mock:auth 失败测试");
+  await input.press("Enter");
+
+  // 提示条与气泡末尾用同一份脱敏文案，与 TUI 的口径一致。
+  await expect(page.locator(".ant-alert")).toContainText("调用模型失败：认证失败");
+  const bubble = page.locator(ASSISTANT_BUBBLE).last();
+  await expect(bubble).toContainText("（执行失败：调用模型失败：认证失败）");
+
+  // 界面不卡在流式阶段：停止按钮消失，输入框可用。
+  await expect(page.locator(STOP_BUTTON)).toHaveCount(0);
+  await expect(input).toBeEnabled();
+  expectNoConsoleError(errors);
 });

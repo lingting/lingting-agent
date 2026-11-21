@@ -139,26 +139,20 @@ A -> B
 
 职责：
 
-- Settings 管理。
-- Provider 管理。
-- Model 管理。
-- Provider 配置验证。
-- Model 配置验证。
-- 对应业务持久化。
-- 通用业务规则。
+- Session / Message / Run 业务服务与业务规则（P2 起，契约类型来自 `agent-core`）。
+- 执行端口定义：`RunDriver` trait（P2-022），由 `agent-runtime` 实现、装配层注册。
+- 对应业务持久化：`repository` 承载全部业务 SQL，事务边界经 `lib-db` 产生。
+- Provider / Model 的配置装载与校验**不在本 Crate**：装载与校验归启动方 `lib-bin-cli`，
+  只读的 `ProviderService` 与模型解析归 `agent-route`（D-P2-037）。
 
 内部组织：
 
 ```text
 service-core
     |
-    +-- service/        对外业务入口（`session/service.rs`）
+    +-- session/        会话业务入口（`service.rs`）、执行端口（`driver.rs`）与业务错误（`error.rs`）
     |
-    +-- manager/        同一 Crate 内跨 Service / Repository 的业务编排
-    |
-    +-- repository/     数据访问，仅由本 Crate 的 service 调用
-    |
-    +-- session/        会话业务入口与业务错误
+    +-- repository/     数据访问（SQL 与行映射），仅由本 Crate 的 service 调用
 ```
 
 进程内运行时（客户端注册表、会话占用、事件文件、断连处理链、Run 执行队列）**不在本 Crate**：
@@ -181,7 +175,7 @@ Agent 装配、进程内运行时与跨 Service 编排（P2-013 / P2-035 起）�
   `provider: ProviderService`（模型查找下沉在 `agent-route`）与 `agent: AgentConfig`，
   向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent`）。
 - 进程内运行时：客户端注册表、会话占用、事件文件与轮转、断连处理链、心跳扫描（`runtime/`）。
-- Run 执行：串行执行队列与事件生产（`runner/`，P2 后续由 `agent-runtime` 替换 Mock 生产方）。
+- Run 执行：串行执行队列、取消信号登记与执行端口安装；事件生产自 P2-023 起由 `agent-runtime` 提供。
 - 跨组件协调：发送消息后唤醒该会话的执行队列；停止运行时会话时取消未结束的 Run。
 - 关闭入口：把「停全部客户端与运行时会话」交给断连处理链。
 
@@ -203,7 +197,7 @@ manager-agent
     |
     +-- runtime    进程内运行时（注册表 / 占用 / 事件文件 / 断连链 / 定时任务）
     |
-    +-- runner     Run 执行队列与事件生产（Mock，P2 后续换 agent-runtime）
+    +-- runner     Run 执行队列、取消信号登记与执行端口安装（生产方来自 `agent-runtime`）
     |
     +-- session    会话业务对外入口与唤醒协调
 ```
@@ -680,11 +674,11 @@ manager-agent -> service-agent
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
 | `agent-tool` | `agent-context-core`、`lib-core` | JSON Schema 相关库 | `agent-runtime`、`agent-mcp` |
 | `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
-| `agent-context` | `agent-context-core`、`agent-skill`、`agent-mcp`、`agent-tool`、`agent-core`、`lib-core` | 无 LLM SDK | `agent-runtime`、`lib-web*` |
+| `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
-| `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-tool`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`lib-core` | Tokio | `lib-web*`、`lib-bin-*`、`bin-*` |
+| `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`types-core`、`lib-core`（`agent-tool` 于 P3 接入） | Tokio、`tokio-util`（取消信号）、`async-trait`（实现执行端口）、Tracing | `lib-web*`、`lib-bin-*`、`bin-*`；不直接写 SQL |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
-| `lib-web` | `lib-web-core`、`manager-agent`（会话业务入口、运行时状态与装配结果，P2-035 起）、`agent-core`（契约类型，P2 起）、`agent-runtime`、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体）、Tokio（下行流的保活定时器与通道接收端） | `lib-bin-*`、`bin-*`；不直接持有进程级单例（holder 归 `manager-agent`） |
+| `lib-web` | `lib-web-core`、`manager-agent`（会话业务入口、运行时状态与装配结果，P2-035 起）、`agent-core`（契约类型，P2 起）、`types-core`、`lib-core` | `framework-web-axum`、`framework-web`、`framework-proc-auto`、`framework-proc-core`（宏展开的绝对路径依赖，必须直接声明并开 `collect`；`framework-proc-core` 另开 `ts` / `rust` 供 SDK 生成器使用。注：`framework-proc-ts` 已被上游删除）、`bytes`、`futures-util`（组装 SSE 响应体）、Tokio（下行流的保活定时器与通道接收端） | `lib-bin-*`、`bin-*`；不直接持有进程级单例（holder 归 `manager-agent`）；不依赖 `agent-runtime`（事件流经 `manager-agent` 的运行时状态取得） |
 | `lib-bin-cli` | `lib-core`、`types-core`、`packages/sdk-rust` 生成的模块（经 `#[path]` 引入，**不是** Cargo 依赖） | `framework-http`（HTTP 收发，启用 `reqwest` 后端）、Clap、Serde、`serde_with`、`toml`、`anyhow`、`tracing-subscriber`、Tokio（客户端命令的运行时）、`url`（查询串编码） | Agent Runtime、服务端业务实现、`lib-web`（生成期的服务端 crate 不得成为客户端的编译/运行依赖）；也不得直接依赖 reqwest 发请求（HTTP 只经 `framework-http`） |
 | `lib-bin-tui` | `lib-bin-cli`、`lib-core` | Ratatui、Tokio（工作线程的异步运行时）、`unicode-width`（显示宽度与折行） | Agent Runtime、服务端业务实现 |
 | `lib-bin-web` | `lib-web`、`lib-web-core`、`manager-agent`（启动装配、注入与关闭，P2-035 起）、`agent-runtime`、`lib-core` | `framework-web`、`framework-web-axum`、`async-trait`（实现框架拦截器）、`framework-timer`（启动心跳扫描与事件文件轮转任务）、Tokio、Tracing、Anyhow、`rust-embed`（可选） | Agent Runtime 的业务方法调用（只做构造与注入）、业务逻辑 |
@@ -692,7 +686,7 @@ manager-agent -> service-agent
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
 | `bin-mock-server`（计划） | `lib-web-core`、`lib-core` | Axum / `framework-web-axum` | `agent-runtime`、`service-core`、`lib-web` |
-| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`manager-agent`、`service-core`、`types-core`、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-timer`（校对定时任务注册）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`（不得进程内启动服务端）；`manager-agent` 与 `service-core` 只用于进程内驱动运行时内核（注册表、事件文件、断连链、轮转）与会话业务，不得用它们装配 Web 服务；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
+| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`manager-agent`、`service-core`、`types-core`、`agent-core`、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-timer`（校对定时任务注册）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体与内置 Mock LLM 的请求体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`（不得进程内启动服务端）；`manager-agent` 与 `service-core` 只用于进程内驱动运行时内核（注册表、事件文件、断连链、轮转）与会话业务，不得用它们装配 Web 服务；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
 
 ### 5.2 依赖图
 
@@ -734,14 +728,17 @@ flowchart BT
     ctx --> mcp
     ctx --> tool
     ctx --> agentcore
-    route["agent-route"] --> servicecore["service-core"]
+    route["agent-route"] --> agentcore
     route --> typescore["types-core"]
     route --> libcore
     route --> rig["Rig"]
     runtime["agent-runtime"] --> agentcore
     runtime --> ctx
+    runtime --> ctxcore
     runtime --> tool
     runtime --> route
+    runtime --> servicecore["service-core"]
+    runtime --> typescore
     runtime --> libcore
 ```
 
@@ -755,12 +752,14 @@ flowchart BT
     webcore --> typescore
     agentruntime["agent-runtime"] --> libcore
     web["lib-web"] --> webcore
-    web --> servicecore
-    web --> agentruntime
+    web --> manager["manager-agent"]
+    web --> agentcore["agent-core"]
     web --> typescore
     web --> libcore
     binweb["lib-bin-web"] --> web
     binweb --> webcore
+    binweb --> manager
+    binweb --> agentruntime
     binweb --> libcore
     binagent["bin-agent"] --> binweb
     binagent --> bincli["lib-bin-cli"]
@@ -800,7 +799,7 @@ flowchart BT
 4. `agent-mcp` 使用 `agent-tool` 作为内部工具适配目标。
 5. `agent-context` 负责协调 Skill、MCP、Tool 对 Context 的贡献。
 6. `agent-runtime` 负责调用 `agent-context`、`agent-tool`、`agent-route`，并通过 `service-core` 的 Service 持久化 Session / Message / Run（P2 起）；Runtime 不直接写 SQL。
-7. `agent-route` 可以读取 `service-core` 提供的 Provider / Model 配置。
+7. Provider / Model 配置由启动方 `lib-bin-cli` 装载与校验，交给 `agent-route` 的 `ProviderService` 只读承载；`agent-route` 不依赖 `service-core`（D-P2-018 删除该边，D-P2-037 归位）。
 8. `service-core` 不反向依赖 `agent-runtime`、`agent-route`、`agent-context*`；自 P2 起允许依赖 `agent-core` **且仅限其类型层**（契约类型迁移后的必然结果）。
 9. 工具模块、MCP 模块不得反向依赖 `agent-runtime`。
 10. `lib-web-core` 不反向依赖 `lib-web`。
@@ -891,54 +890,64 @@ embed-ui = ["dep:rust-embed"]
 
 目标架构包含的 Crate **不要求一次性创建**。创建顺序严格跟随 `.steps/` 路线图。
 
-### 8.1 P1 实际实现范围
+### 8.1 当前实际实现范围（P1 / P1.1 / P2）
 
-| Crate | 说明 |
-|---|---|
-| `bin-agent` | 唯一 Binary |
-| `lib-bin-cli` | CLI 与客户端共享能力 |
-| `lib-bin-tui` | TUI |
-| `lib-bin-web` | Web Server 启动与资源 |
-| `lib-web` | 服务端 HTTP API |
-| `lib-web-core` | Web 基础能力 |
-| `types-core` | 通用领域类型 |
-| `service-core` | 通用核心业务服务 |
-| `lib-core` | 公共基础能力 |
-| `bin-tests` | 开发期测试入口（`crates/bin-tests`），不参与分发 |
+| Crate | 阶段 | 说明 |
+|---|---|---|
+| `bin-agent` | P1 | 唯一 Binary |
+| `lib-bin-cli` | P1 | CLI 与客户端共享能力（P2 起含 `[provider]` / `[agent]` 配置装载与校验） |
+| `lib-bin-tui` | P1 | TUI |
+| `lib-bin-web` | P1 | Web Server 启动、装配与资源（P2 起调 `manager-agent::assemble` 并注册执行端口） |
+| `lib-web` | P1 | 服务端 HTTP API |
+| `lib-web-core` | P1 | Web 基础能力 |
+| `types-core` | P1 | 通用领域类型（`session` 契约已于 P2 迁出） |
+| `service-core` | P1 / P2 | P1 为内存 Mock 存储；P2 起为 Service + Repository，并定义执行端口 |
+| `lib-core` | P1 | 公共基础能力 |
+| `manager-agent` | P2 | 装配、进程级 holder、进程内运行时与 Run 执行队列 |
+| `lib-db` | P2 | SQLite、迁移与事务 |
+| `agent-core` | P2 | Session / Message / Run 契约类型 |
+| `agent-route` | P2 | Provider / Model 解析、`ProviderService` 与 Rig Adapter |
+| `agent-context-core` | P2 | Context 抽象 |
+| `agent-context` | P2 | Context 组装与裁剪 |
+| `agent-runtime` | P2 | Agent Loop、执行端口实现与全局并发限制 |
+| `bin-tests` | P1 | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
 P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_sdk`；生成逻辑与其共用输出处理在 `examples/support/`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
 
-P1 的 `service-core` 使用内存 Mock 存储（P1 不引入 SQLite），因此 **P1 阶段不创建 `lib-db`**；`service-core -> lib-db` 是 P2 才成立的依赖。同理，P1 的 `lib-web` 尚不存在 `agent-runtime` 依赖，该依赖在 P2 加入。这些差异属于**阶段性依赖裁剪**，不改变目标依赖方向。
+阶段裁剪的历史与现状：
 
-P1 阶段不创建任何 `agent-*` Crate：`lib-web` 在 P1 只暴露 Mock 契约接口，Agent 领域 Crate 按第 8.2 节的阶段推进。
+- P1 的 `service-core` 用内存 Mock 存储，`lib-db` 于 P2 创建；P2-013 起 `service-core` 变成「Service + Repository」，进程内运行时与进程级 holder 迁入装配层 `manager-agent`。
+- Session / Message / Run 的契约类型在 P1 落在 `types-core` 的 `session` 模块，P2-006 整体迁入 `agent-core`（类型名与字段不变）。见 `.steps/p1/decisions.md` D-025。
+- P1.1 的运行时内核按领域落模块，不新增 Crate：客户端连接与占用契约在 `types-core` 的 `runtime` 模块，注册表、占用、事件文件、断连处理链与定时任务自 P2-013 起在 `manager-agent` 的 `runtime` 模块，`lib-web` 的 `runtime` 模块只做 Handler、帧合成与错误映射。见 `.steps/p1.1/decisions.md` D-P1.1-001 ~ D-P1.1-004。
+- `lib-web` 在 P1.1 与 P2 都不依赖 `agent-runtime`：事件流与执行状态经 `manager-agent` 的运行时状态取得。
 
-Session / Message / Run 的契约类型在 P1 是**阶段裁剪**：它们落在 `types-core` 的 `session` 模块（P2 建 `agent-core` 后按 6.2 整体迁移，类型名与字段不变），Mock 业务与内存存储落在 `service-core` 的 `session` 模块，`lib-web` 的 `session` 模块只做 Handler 与错误映射。详见 `.steps/p1/decisions.md` D-025。
+### 8.1.1 P2 落地的依赖边
 
-P1.1 的运行时内核同样按领域落模块，不新增 Crate：契约类型在 `types-core` 的 `runtime` 模块（客户端连接与占用），注册表、占用、事件文件、断连处理链与定时任务在 `service-core` 的 `runtime` 模块，`lib-web` 的 `runtime` 模块只做 Handler、帧合成与错误映射；`lib-web` 的 `session/stream.rs` 随 `api/run/stream` 一并删除，事件推送只剩 `api/client/stream`。详见 `.steps/p1.1/decisions.md` D-P1.1-001 ~ D-P1.1-004。
-
-### 8.1.1 P2 计划的依赖边（尚未实现）
-
-P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`、`manager-agent`，并新增以下**目标架构**依赖边（已写入 5.1 / 5.3，实施时按任务同步各小节与本节）：
+P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime`、`manager-agent`，落地后的实际依赖边（与 5.1 一致）：
 
 | 边 | 说明 |
 |---|---|
 | `service-core -> agent-core` | 仅类型层；契约类型从 `types-core::session` 迁入 `agent-core` 后成立 |
 | `agent-runtime -> service-core` | Runtime 经 Service 持久化 Run / Message，不直接写 SQL |
-| `lib-web -> agent-core`、`lib-web -> agent-runtime` | Handler 的契约类型与事件流来源 |
-| `manager-agent -> service-core` / `lib-db` | 启动装配、进程级 holder 与跨组件协调（P2-013 起） |
+| `manager-agent -> service-core` / `lib-db` / `agent-route` | 启动装配、进程级 holder、跨组件协调与 Provider 只读承载 |
 | `lib-web -> manager-agent`、`lib-bin-web -> manager-agent` | Handler 的会话业务入口与装配结果；启动方只调装配入口 |
+| `lib-bin-web -> agent-runtime` | 只构造 `AgentRuntime` 并注入执行端口，不调用其业务方法 |
+
+与早期盘点不同的两条：
+
+- `agent-route -> service-core` **不存在**：Provider / Model 配置由 `lib-bin-cli` 装载与校验，`agent-route` 只做只读承载（D-P2-018 / D-P2-037）。
+- `lib-web -> agent-runtime` **不存在**：事件仍按 P1.1 通路经 `manager-agent` 落盘再转发。
 
 `RunEventStream` 已被 P1.1 删除（事件下线只剩 `api/client/stream`）；进程级 `holder` 先由 `service-core` 迁出，P2-013 落在装配层 `manager-agent`（不在 `lib-web`），仍是启动期显式初始化。决策依据见 `.steps/p2/decisions.md` D-P2-018 / D-P2-019 / D-P2-032。
 
 ### 8.2 后续阶段创建范围
 
-| 阶段 | 新增 Crate |
-|---|---|
-| P2 | `lib-db`、`agent-core`、`agent-context-core`、`agent-context`、`agent-route`、`agent-runtime` |
-| P3 | `agent-tool` |
-| P4 | `agent-mcp` |
-| P5 | `agent-skill` |
-| P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` |
+| 阶段 | 新增 Crate | 状态 |
+|---|---|---|
+| P3 | `agent-tool` | 未创建 |
+| P4 | `agent-mcp` | 未创建 |
+| P5 | `agent-skill` | 未创建 |
+| P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
 
 ### 8.3 阶段实现与目标依赖的差异
 

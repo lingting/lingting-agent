@@ -1,4 +1,9 @@
-import type { ClientCloseReason, ClientEvent, ClientStreamParams, RunEvent } from "@lingting/agent-api";
+import type {
+  ClientCloseReason,
+  ClientEvent,
+  ClientStreamParams,
+  RunEvent,
+} from "@lingting/agent-api";
 
 import type { AgentApiClient } from "./client";
 import { subscribeClientEventStream } from "./clientStream";
@@ -11,9 +16,7 @@ const PING_INTERVAL_MS = 15_000;
 export const NOT_REGISTERED = "客户端未注册，请重新连接";
 
 /** 下行流推给界面的两类事件。 */
-export type LinkEvent =
-  | { type: "run"; event: RunEvent }
-  | { type: "closed"; reason: string };
+export type LinkEvent = { type: "run"; event: RunEvent } | { type: "closed"; reason: string };
 
 /** 事件监听器。 */
 export type LinkListener = (event: LinkEvent) => void;

@@ -16,6 +16,11 @@ const INTERRUPTED_NOTE = "（连接中断，内容可能不完整）";
 /** 用户主动停止生成时的说明。 */
 const STOPPED_NOTE = "（已停止生成）";
 
+/** 执行失败时追加在回复末尾的说明：与提示条共用同一份脱敏文案。 */
+function failedNote(reason: string): string {
+  return `（执行失败：${reason}）`;
+}
+
 /**
  * 对话状态机：注册连接、占用会话、发送消息、消费下行流、停止生成。
  *
@@ -98,11 +103,13 @@ export function useChat() {
           finishMessage(key, "done");
           clearRun();
           break;
-        case "run_failed":
-          finishMessage(key, "interrupted", INTERRUPTED_NOTE);
-          setError(event.error ?? "Run 执行失败");
+        case "run_failed": {
+          const reason = event.error ?? "Run 执行失败";
+          finishMessage(key, "interrupted", failedNote(reason));
+          setError(reason);
           clearRun();
           break;
+        }
         case "run_cancelled":
           finishMessage(key, "interrupted", stoppedRef.current ? STOPPED_NOTE : INTERRUPTED_NOTE);
           if (!stoppedRef.current) setError(event.error ?? "Run 已取消");

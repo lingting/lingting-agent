@@ -72,6 +72,9 @@
 | 项 | 说明 |
 |---|---|
 | 配置文件 | `<应用根目录>/config.toml`：`[server]` 的 `addr` / `port` / `log_level`、`[runtime.events]` 的事件文件轮转、`[provider]` / `[[provider.models]]` 的模型清单、`[agent]` 的运行参数；文件不存在时全部取默认值（`[provider]` 缺省即「Provider 未配置」，服务端照常启动） |
+| `[provider]` / `[[provider.models]]` | 只读 Provider 配置：`id` / `kind`（只接受 `openai-compatible`）/ `base_url` / `api_key` / `default_model`；每个模型有 `id` / `context_window`（缺省 8192）/ `max_output_tokens`（缺省 1024）。段一旦存在，缺字段、未知 `kind`、`default_model` 不在 `models` 中、`models` 为空或 id 重复、数值非正或 `max_output_tokens > context_window` 都是启动期硬错误（退出码 2） |
+| `[agent]` | 运行参数：`max_concurrent_runs`（缺省 4）、`run_queue_timeout_ms`（缺省 120000）、`llm_idle_timeout_ms`（缺省 60000）、`context_max_messages`（缺省 40）、`context_safety_tokens`（缺省 256） |
+| 系统提示词 | `<应用根目录>/AGENTS.md`：名称全大写优先，其次忽略大小写的 Markdown 文件；每次组装 Context 现场读取、不缓存；缺失或为空时不发 system 消息 |
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
 | 环境变量 | 只有 `AGENT_HOME`（应用根目录覆盖）；地址 / 端口 / 日志级别等配置项不再支持环境变量 |
 | 应用根目录覆盖 | 环境变量 `AGENT_HOME` 指向的目录；设置后 `data`、`config.toml`、`logs` / `logs-cli` / `logs-tui` 全部落在该目录，默认位置不再使用（测试用它隔离每个服务端实例） |
@@ -187,15 +190,21 @@
 
 `ApiError` 当前落在 `lib-web` 以便随 SDK 生成导出；将来 `lib-web-core` 落实 Error Mapping 时可整体迁入（见 D-024 与 `docs/workspace.md` 的 `lib-web-core` 职责）。
 
-### 会话业务接口（P1 Mock）
+### 会话业务接口（P2 起真实执行）
 
-P1-010 起的会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`，契约类型在 `types-core` 的 `session` 模块；P2 只替换实现、不改契约。接口清单、参数表、载荷字段与样例见 `docs/api/session.md`；Mock 行为边界、错误映射与 P2 替换点见 `.steps/p1/decisions.md` D-025。
+会话接口定义在 `crates/lib-web/src/session/api.rs`，业务实现在 `service-core`（P2 起为 Service + Repository，数据落 `<应用根目录>/data/agent.db`），契约类型在 `agent-core`。P2 只换掉了执行内容（Mock 事件 → 真实 Agent Loop），接口、DTO 与 `RunEventKind` 取值没有变化：执行端口 `RunDriver` 由 `service-core` 定义、`agent-runtime` 实现、`lib-bin-web` 装配时注册。接口清单、参数表、载荷字段与样例见 `docs/api/session.md`。
+
+P2 起的三处语义变化（字段与接口不变）：
+
+- `run_started.inputTokens` 是预算估算器的估算值，`run_completed` 的 `inputTokens` / `outputTokens` 用 Provider 的真实 usage；Provider 没给用量时留空，不构造假值。
+- `run_failed` 由执行层真实产出：`error` 是固定脱敏文案（如「调用模型失败：认证失败」），失败的 Run 不写助手消息。
+- 未被占用的会话里 Run 停在 `QUEUED`；`max_concurrent_runs` 已满时同样排队，排队超时落 `FAILED`「执行排队超时」。
 
 约定：会话与 Run 的 ID 走查询参数或请求体（无路径占位符）；`messageCount`、token 用量与 `*Ms` 时间戳按 D-018 以字符串传输；业务失败的 404（会话/Run 不存在）与 400（参数或状态不满足规则）由 `SessionError` 映射，错误体仍是统一的 `{code,message}`。
 
 ### 运行时接口（P1.1）
 
-客户端连接与会话占用的接口定义在 `crates/lib-web/src/runtime/{api,occupancy_api,stream}.rs`，业务实现在 `service-core` 的 `runtime` 模块，契约类型在 `types-core` 的 `runtime` 模块。接口清单、帧格式与样例见 `docs/api/runtime.md` 与 `docs/api/occupancy.md`；决策与参数见 `.steps/p1.1/decisions.md`。
+客户端连接与会话占用的接口定义在 `crates/lib-web/src/runtime/{api,occupancy_api,stream}.rs`，业务实现在 `manager-agent` 的 `runtime` 模块（P2-013 起；`service-core` 不再持有进程内运行时），契约类型在 `types-core` 的 `runtime` 模块。接口清单、帧格式与样例见 `docs/api/runtime.md` 与 `docs/api/occupancy.md`；决策与参数见 `.steps/p1.1/decisions.md`。
 
 约定：服务端推送只有 `api/client/stream` 一条通道（`api/run/stream` 已移除）；Run 的执行由「会话被占用 + 消息创建」触发，未被占用的会话里 Run 停在 `QUEUED`；未注册与占用冲突一律 400 + 固定 message（过渡方案，映射集中在 `crates/lib-web/src/runtime/mod.rs` 的一个函数），客户端按 message 识别而不是按 code 猜测。
 
@@ -222,6 +231,7 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 | 失败产物 | `tests/.artifacts/`（截图与追踪，已被 `.gitignore` 忽略） |
 | SDK 调用约束 | 所有请求经生成的 `ApiClient` 子类（`src/api/client.ts`）；下行流用 fetch 流式响应自行切帧（`src/api/clientStream.ts`），path 取自 `ApiDefinitions.clientStream`，页面代码不出现 `api/…` 字面量（由 `web.sdk-only` 用例守护） |
 | 缩进 | 2 空格（根 `.editorconfig` 的 `[*.{ts,tsx,js,jsx,mjs,cjs,css,html}]` 段；`[*]` 默认 4 空格只用于 Rust 等） |
+| 控制台断言 | 端到端用例收集 `console.error` 与 `pageerror` 并断言为空（W-1 结案），关服场景只放行浏览器自己上报的连接失败文案；断言工具在 `tests/e2e/console.ts` |
 
 ## 生成物门禁与 CI
 

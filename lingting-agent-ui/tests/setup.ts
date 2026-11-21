@@ -24,3 +24,15 @@ if (!globalThis.ResizeObserver) {
     disconnect() {}
   } as unknown as typeof ResizeObserver;
 }
+
+if (!globalThis.IntersectionObserver) {
+  // `@ant-design/x` 的自动滚动用它在挂载时观察消息区。
+  globalThis.IntersectionObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  } as unknown as typeof IntersectionObserver;
+}

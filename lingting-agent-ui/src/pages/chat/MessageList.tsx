@@ -9,16 +9,18 @@ const BUBBLE_STATUS: Record<ChatMessageStatus, BubbleItemType["status"]> = {
   streaming: "updating",
 };
 
+/** 第一个增量到达之前的提示文案：Run 已创建但还没有开始输出。 */
+const WAITING_TEXT = "等待执行…";
+
 /** 消息区：用户消息靠右实心，助手消息靠左描边，流式中显示光标。 */
 export function MessageList({ messages }: { messages: ChatMessage[] }) {
   const items: BubbleItemType[] = messages.map((message) => ({
     key: message.key,
     role: message.role === "USER" ? "user" : "ai",
-    content: message.content,
+    // 第一个增量到达前先给「等待执行…」，避免空白气泡；正文一到位就换成真实内容。
+    content: message.content || (message.status === "streaming" ? WAITING_TEXT : ""),
     status: BUBBLE_STATUS[message.status],
     streaming: message.status === "streaming",
-    // 第一个增量到达前先显示加载态，避免出现空白气泡。
-    loading: message.status === "streaming" && message.content.length === 0,
   }));
 
   return (

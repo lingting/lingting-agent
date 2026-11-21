@@ -151,10 +151,10 @@ debug 构建 `agent server --port 20102`（启动日志 `listening on 127.0.0.1:
 
 | # | 偏差 / 遗留 | 处置与归属 |
 |---|---|---|
-| 1 | A-1 原文要求「改定义后不重新生成，一致性检查非 0 退出」，与 D-031（生成物不入库、不做 diff 比对）冲突，实测确认门禁不会因此失败 | 判据按 D-031 修订为「缺生成物 / 生成失败 / 产物不完整 → 非 0」，记入 `decisions.md` D-032；「生成物过期」的自动化检测归属 P2（在 P2 任务细化时定方案） |
-| 2 | E-3 心跳、E-4 `run_failed` 在 P1 的 Mock 契约下不可触发 | 口径修订记入 D-032：P1 只保留代码路径，由 P2 的真实执行验证 |
+| 1 | A-1 原文要求「改定义后不重新生成，一致性检查非 0 退出」，与 D-031（生成物不入库、不做 diff 比对）冲突，实测确认门禁不会因此失败 | 判据按 D-031 修订为「缺生成物 / 生成失败 / 产物不完整 → 非 0」，记入 `decisions.md` D-032；**已结案（P2-029）**：原判据维持 `REJECTED`，等价门禁为 `make gen-check` |
+| 2 | E-3 心跳、E-4 `run_failed` 在 P1 的 Mock 契约下不可触发 | 口径修订记入 D-032：P1 只保留代码路径，由 P2 的真实执行验证。**已结案（P2-029）**：E-3 按「契约保留值，无需验证」结案（`tui.heartbeat` 覆盖 pong 计数、`web.stream` 覆盖 `: keepalive`），E-4 由 `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout` 结案 |
 | 3 | 第 9 类原缺 R-1 的 404、R-2 会话隔离、R-3 失败事件、R-4 生成器、R-5 超时 | 本轮补齐用例后通过（第四节），不再遗留 |
-| 4 | W-1 的 Playwright 用例未断言控制台 error 数量（只验证页面可用与交互闭环） | 前端工程遗留，归属 P2 |
+| 4 | W-1 的 Playwright 用例未断言控制台 error 数量（只验证页面可用与交互闭环） | **已结案（P2-028）**：前端端到端用例收集 `console.error` / `pageerror` 并断言为空，关服场景只放行浏览器上报的连接失败文案（`lingting-agent-ui/tests/e2e/console.ts`） |
 | 5 | T-1 / T-7（真实终端进入与退出恢复）只能人工验证，无法纳入自动化 | 保持人工；若 P6 引入终端快照测试再补 |
 | 6 | `tsconfig.json` 的 `skipLibCheck = true` | 已用独立 `tsc --strict --skipLibCheck false` 对生成物声明补证，不构成掩盖；无需改动 |
 

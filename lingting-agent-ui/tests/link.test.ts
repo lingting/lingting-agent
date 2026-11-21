@@ -13,7 +13,10 @@ function frame(event: ClientEvent): string {
 }
 
 /** 一条下线事件（只保留断言用到的字段）。 */
-function clientEvent(event: ClientEvent["event"], closeReason: ClientEvent["closeReason"] = null): ClientEvent {
+function clientEvent(
+  event: ClientEvent["event"],
+  closeReason: ClientEvent["closeReason"] = null,
+): ClientEvent {
   return {
     closeReason,
     createdAtMs: "1767225600000",
