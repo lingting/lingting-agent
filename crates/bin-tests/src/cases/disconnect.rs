@@ -97,6 +97,11 @@ async fn disconnect_body() -> Result<CaseOutcome> {
             state.occupancy_of_session(&fixture.session_id).is_none(),
             "{label}：会话侧索引应已清空"
         );
+        // 收尾在后台任务里（P2.1-006）：清理链返回后终态事件才落盘，先等它出现。
+        ensure!(
+            wait_until(|| read_events(&fixture.path()).len() == 2).await,
+            "{label}：终态事件应在超时内落盘"
+        );
         let events = read_events(&fixture.path());
         ensure!(events.len() == 2, "{label}：应有一条终态事件，实际 {} 条", events.len());
         let terminal = &events[1];
