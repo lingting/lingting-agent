@@ -14,6 +14,7 @@ mod runtime;
 mod sdk;
 mod session;
 mod shutdown;
+mod stress;
 mod tui;
 mod web;
 
@@ -33,6 +34,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(rotation::cases());
     cases.extend(run::cases());
     cases.extend(shutdown::cases());
+    cases.extend(stress::cases());
     cases.extend(runtime::cases());
     cases.extend(sdk::cases());
     cases.extend(session::cases());

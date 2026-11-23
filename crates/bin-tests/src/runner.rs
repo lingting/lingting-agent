@@ -18,7 +18,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 /// 单个用例的超时：Mock 事件流数秒内结束，超时只用于防止挂死。
-const CASE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const CASE_TIMEOUT: Duration = Duration::from_secs(60);
 /// 运行目录所在根目录名。
 const RUN_ROOT: &str = "lingting-agent-tests";
 /// 共享服务端的目录名。
