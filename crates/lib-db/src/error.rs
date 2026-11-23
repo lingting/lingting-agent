@@ -50,8 +50,17 @@ impl std::error::Error for DbError {
     }
 }
 
+impl DbError {
+    /// 事务开启 / 提交 / 回滚失败：顺带记一次底层错误，写锁争用计数由观测层判定。
+    pub(crate) fn transaction(source: sqlx::Error) -> Self {
+        crate::observability::record_error(&source);
+        Self::Transaction(source)
+    }
+}
+
 impl From<sqlx::Error> for DbError {
     fn from(error: sqlx::Error) -> Self {
+        crate::observability::record_error(&error);
         Self::Query(error)
     }
 }

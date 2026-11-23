@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# 日志审计与进程内计数（P2.2-003）：只在测试构建启用，正式构建不编译 `audit` 模块。
+metrics = []
+
 [dependencies]
 framework-bus.workspace = true
 framework-core.workspace = true

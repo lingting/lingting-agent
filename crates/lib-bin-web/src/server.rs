@@ -49,6 +49,12 @@ async fn run(host: &str, port: u16, options: AssemblyOptions) -> Result<()> {
     if !manager_agent::install(state) {
         tracing::warn!("装配结果已注入，跳过重复注入");
     }
+    // 快照聚合的限流来源（P2.2-001）：本 Crate 是唯一同时依赖 `agent-runtime` 与 `manager-agent`
+    // 的装配方，因此由它把执行侧的快照接进聚合层，`manager-agent` 不必反向依赖 `agent-runtime`。
+    #[cfg(feature = "metrics")]
+    if !manager_agent::runtime::metrics::install_limit_provider(limit_snapshot) {
+        tracing::warn!("限流快照来源已注册，跳过重复注册");
+    }
     // 运行时定时任务（心跳扫描 / 问询投递 / 超时标记 / 事件文件轮转）：运行时唯一，关闭后由任务自己停手。
     framework_timer::start(None, framework_timer::TimerOption::default());
     // 链接锚点：不引用路由收集函数时，inventory 注册项会被链接器丢弃，接口会全部 404。
@@ -86,6 +92,22 @@ async fn run(host: &str, port: u16, options: AssemblyOptions) -> Result<()> {
         info!(elapsed_ms = started.elapsed().as_millis(), "服务已停止");
     }
     result
+}
+
+/// 转写执行侧（`agent-runtime`）的限流快照：字段一一对应，不做换算。
+#[cfg(feature = "metrics")]
+fn limit_snapshot() -> manager_agent::runtime::metrics::LimitMetrics {
+    let limit = agent_runtime::metrics::snapshot();
+    manager_agent::runtime::metrics::LimitMetrics {
+        queued: limit.queued,
+        timeouts: limit.timeouts,
+        cancelled: limit.cancelled,
+        wait_total_millis: limit.wait_total_millis,
+        wait_max_millis: limit.wait_max_millis,
+        queued_max: limit.queued_max,
+        running_max: limit.running_max,
+        running_now: limit.running_now,
+    }
 }
 
 /// 路由包装器：为每次请求建立带 trace id 的日志作用域，并记录处理结果。

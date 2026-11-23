@@ -47,5 +47,13 @@ fn init(level: LevelFilter, directory: PathBuf, console: bool) -> Result<Logging
         retention_days: RETENTION_DAYS,
     });
 
-    framework_core::logging::init(&config).context("初始化日志失败")
+    // 审计层（P2.2-003）：只在 `metrics` 构建存在。它只加计数——按级别统计，并在事件构造时
+    // 比对已登记的敏感串；正式构建里这一整段不编译，初始化路径与改动前一致。
+    #[cfg(feature = "metrics")]
+    {
+        crate::audit::install_panic_hook();
+        config.push_layer(crate::audit::layer(level));
+    }
+
+    framework_core::logging::init(config).context("初始化日志失败")
 }

@@ -113,6 +113,17 @@ pub async fn probe_version() -> ProbeVersionVO {
     }
 }
 
+/// 导出进程内运行时指标快照：**仅 debug + `metrics` 构建注册**。
+///
+/// 服务端跑在子进程里，测试进程要拿它的指标只能走这条结构化出口（D-P2.2-001）：
+/// 返回的就是 `manager-agent` 的聚合 DTO，测试侧反序列化同一个类型，不复制字段。
+/// release 与普通 `make build` 不带 `metrics`，`make gen` 也不启用该特性，因此该路径不进发布产物与 SDK。
+#[cfg(all(debug_assertions, feature = "metrics"))]
+#[web_api_get(path = "api/probe/metrics", auth = AuthRule::anonymous())]
+pub async fn probe_metrics() -> manager_agent::runtime::metrics::MetricsSnapshot {
+    manager_agent::runtime::metrics::snapshot()
+}
+
 /// 触发优雅关闭：**仅 debug 构建注册**，用于验证关闭期间的行为（release 构建不含该接口）。
 ///
 /// 真正的关闭动作由 `lib-bin-web` 注册到 `lib_core::lifecycle` 的钩子完成，本接口只记录关闭请求；

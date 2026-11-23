@@ -77,6 +77,7 @@ async fn apply(database: &Database, migration: &Migration) -> Result<(), DbError
 
 /// 把底层错误收敛成「哪个迁移失败」。
 fn migrated(migration: &Migration, source: sqlx::Error) -> DbError {
+    crate::observability::record_error(&source);
     DbError::Migrate {
         version: migration.version,
         name: migration.name,

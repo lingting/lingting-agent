@@ -10,8 +10,9 @@ repository.workspace = true
 publish = false
 
 [features]
-# 运行时进程内指标（P2.1-003）：测试构建启用，正式构建是空实现。
-metrics = ["lib-db/metrics"]
+# 运行时进程内指标（P2.1-003 / P2.2-001）：测试构建启用，正式构建是空实现，
+# 也不编 `serde`（快照的序列化只服务于 debug + `metrics` 限定的探针）。
+metrics = ["lib-db/metrics", "lib-core/metrics", "dep:serde"]
 
 [dependencies]
 lib-core = { workspace = true }
@@ -29,6 +30,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 # 事件文件是一行一条 `RunEvent` 的 JSON（`runtime/journal.rs`）。
 serde_json = { workspace = true }
+# 快照的序列化：只在 `metrics` 特性下启用（P2.2-001）。
+serde = { workspace = true, optional = true }
 # 断连通知：纯通知总线，处理链订阅后串行执行（`runtime/handler.rs`）。
 framework-bus = { workspace = true }
 # 运行时定时任务：`#[timer]` 注册与心跳扫描（`runtime/timer.rs`）。

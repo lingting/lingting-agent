@@ -35,7 +35,7 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     let mut feed = Feed::new(&run, &events);
 
     // 一、全局并发上限：许可持有到本函数结束，代表「这个 Run 正在占用一个并发位」。
-    let _permit = match limit::acquire(&runtime.limit, runtime.agent.run_queue_timeout_ms, &cancel, &run.id).await {
+    let _permit = match limit::acquire(&runtime.limit, runtime.agent.run_queue_timeout_ms, &cancel).await {
         Acquired::Permit(permit) => permit,
         Acquired::Timeout => return fail(runtime, &run, feed, error::QUEUE_TIMEOUT).await,
         Acquired::Cancelled => return cancelled(runtime, &run, feed, cancel.stop()).await,

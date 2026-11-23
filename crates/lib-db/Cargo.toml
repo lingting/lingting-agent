@@ -10,8 +10,9 @@ repository.workspace = true
 publish = false
 
 [features]
-# 进程内指标采集（P2.1-003）：只在测试构建启用，正式构建不编 `tracing` 也不做累加。
-metrics = ["dep:tracing"]
+# 进程内指标采集（P2.1-003）：只在测试构建启用，正式构建只保留空实现。
+# 阈值日志已删除（P2.2-004），因此不再需要 `tracing` 依赖。
+metrics = []
 
 [dependencies]
 # 迁移账本时间戳与日志。
@@ -19,8 +20,6 @@ lib-core = { workspace = true }
 # SQLite 驱动与连接池（D-P2-002 / D-P2-003：不启用 `macros`）。
 sqlx = { workspace = true }
 tokio = { workspace = true }
-# 取连接等待的阈值日志：只在 `metrics` 特性下启用（P2.1-003）。
-tracing = { workspace = true, optional = true }
 
 [lints]
 workspace = true

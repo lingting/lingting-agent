@@ -1,41 +1,27 @@
-//! 运行时的进程内指标（P2.1-003）：断连清理链、会话停止、事件落盘、下行丢弃与会话锁表。
+//! 运行时的进程内指标（P2.1-003 / P2.2-001）：清理链、会话停止、事件落盘、下行丢弃、锁表、
+//! 限流与日志审计。
+//!
+//! 本模块是**唯一聚合 DTO**：各层各自在自己的 Crate 里累加原子量，这里只做转写与聚合，
+//! 子进程与测试进程读的是同一个 [`MetricsSnapshot`]（P2.2-001）。
 //!
 //! **只在 `metrics` 特性下采集**：正式构建里本模块的所有函数都是空实现，不占静态内存、
-//! 不做原子操作、不付日志判断的代价；`bin-tests` 与 `make test` 构建的 `bin-agent`
-//! 打开该特性，运行结束后由测试报告输出一份快照。
+//! 不做原子操作；`bin-tests` 与 `make test` 构建的 `bin-agent` 打开该特性，运行结束后由
+//! `GET api/probe/metrics` 输出一份快照（P2.2-002）。
 //!
-//! 阈值一律先比较再构造日志参数，热路径（每帧事件落盘、每次转发）只付几个原子加。
+//! **不打阈值日志**：数据只经快照读出去，采集型日志已按 D-P2.2-010 全部删除（P2.2-004）。
 
 use std::time::Duration;
 
 #[cfg(feature = "metrics")]
+use std::sync::OnceLock;
+#[cfg(feature = "metrics")]
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 #[cfg(feature = "metrics")]
 use std::time::Instant;
-#[cfg(feature = "metrics")]
-#[cfg(feature = "metrics")]
-use tracing::warn;
-
-/// 断连清理链单次耗时达到这个阈值记 `warn`：正常清理是毫秒级。
-#[cfg(feature = "metrics")]
-const CHAIN_WARN_MS: u128 = 500;
-/// 会话停止（四个阶段合计）达到这个阈值记 `warn`：收尾等待会把占用 / 释放拖住。
-#[cfg(feature = "metrics")]
-const STOP_WARN_MS: u128 = 500;
-/// 单帧事件落盘达到这个阈值记 `warn`：磁盘或写锁出了状况。
-#[cfg(feature = "metrics")]
-/// 单帧事件落盘达到这个阈值记 `warn`：磁盘或写锁出了状况。
-#[cfg(feature = "metrics")]
-const APPEND_WARN_MS: u128 = 50;
-/// 会话锁持有达到这个阈值记 `warn`：锁内出现收尾等待或 IO 了（P2.1-006）。
-#[cfg(feature = "metrics")]
-const LOCK_WARN_MS: u128 = 200;
-/// 注册表锁与会话锁的等待达到这个阈值记 `warn`：整表锁已经把请求串在同一处（P2.1-008.1）。
-#[cfg(feature = "metrics")]
-const LOCK_WAIT_WARN_MS: u128 = 100;
 
 /// 断连清理链指标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChainMetrics {
     /// 按客户端执行的清理次数（P2.1-005 收窄串行单位后，每个客户端记一次）。
     pub runs: u64,
@@ -51,6 +37,7 @@ pub struct ChainMetrics {
 
 /// 会话停止指标：四个阶段各自的累计耗时。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct StopMetrics {
     /// 停止次数。
     pub calls: u64,
@@ -68,6 +55,7 @@ pub struct StopMetrics {
 
 /// 事件落盘指标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct JournalMetrics {
     /// 落盘帧数。
     pub appends: u64,
@@ -79,6 +67,7 @@ pub struct JournalMetrics {
 
 /// 会话锁表指标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct SessionLockMetrics {
     /// 最近一次取锁时表内条目数。
     pub entries: i64,
@@ -88,6 +77,7 @@ pub struct SessionLockMetrics {
 
 /// 会话锁持有时间指标（P2.1-006）：只覆盖临界区，不含锁外的收尾等待。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct SessionLockHold {
     /// 进入临界区的次数。
     pub calls: u64,
@@ -99,6 +89,7 @@ pub struct SessionLockHold {
 
 /// 注册表整表锁指标（P2.1-008.1）：判断整表 `RwLock` 是否在热路径上制造排队。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct RegistryLockMetrics {
     /// 取读锁次数。
     pub reads: u64,
@@ -120,6 +111,7 @@ pub struct RegistryLockMetrics {
 
 /// 会话锁取锁等待指标（P2.1-008.1）：只覆盖等锁；锁内持有时间见 [`SessionLockHold`]。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct SessionLockWait {
     /// 取锁次数。
     pub calls: u64,
@@ -129,8 +121,61 @@ pub struct SessionLockWait {
     pub max_millis: u64,
 }
 
+/// 取连接等待与写锁争用的统计：转写 `lib-db` 的快照，避免本模块的公开类型依赖 `lib-db`。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
+pub struct DatabaseAcquire {
+    /// 取连接次数。
+    pub calls: u64,
+    /// 累计等待耗时（毫秒）。
+    pub total_millis: u64,
+    /// 单次最长等待耗时（毫秒）。
+    pub max_millis: u64,
+    /// 写锁争用类错误（`database is locked` / `SQLITE_BUSY`）次数。
+    pub errors: u64,
+}
+
+/// Run 排队与执行的统计：转写 `agent-runtime` 的快照，避免本模块的公开类型依赖 `agent-runtime`。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
+pub struct LimitMetrics {
+    /// 进入过排队的 Run 数（含排队超时与被取消）。
+    pub queued: u64,
+    /// 排队超时的 Run 数。
+    pub timeouts: u64,
+    /// 排队期间被取消的 Run 数。
+    pub cancelled: u64,
+    /// 排队成功后的累计等待耗时（毫秒）。
+    pub wait_total_millis: u64,
+    /// 单次最长排队耗时（毫秒）。
+    pub wait_max_millis: u64,
+    /// 观察到的同时在排队最大值。
+    pub queued_max: i64,
+    /// 观察到的同时在执行最大值。
+    pub running_max: i64,
+    /// 读取瞬间正在执行的 Run 数。
+    pub running_now: i64,
+}
+
+/// 日志审计的统计：转写 `lib-core` 的审计快照，把「日志里发生了什么」变成可断言的数据。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
+pub struct AuditMetrics {
+    /// 事件总数：`0` 说明日志根本没有产出。
+    pub total: u64,
+    /// `ERROR` 级事件数。
+    pub error: u64,
+    /// `WARN` 级事件数。
+    pub warn: u64,
+    /// 敏感串（如 `[provider] api_key`）在事件字段里出现的次数。
+    pub secret_hits: u64,
+    /// 进程内 panic 次数。
+    pub panics: u64,
+}
+
 /// 运行时指标的全量快照。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct MetricsSnapshot {
     /// 断连清理链。
     pub chain: ChainMetrics,
@@ -148,19 +193,12 @@ pub struct MetricsSnapshot {
     pub registry_lock: RegistryLockMetrics,
     /// 会话锁取锁等待（P2.1-008.1）。
     pub session_lock_wait: SessionLockWait,
-    /// 数据库取连接等待。
+    /// 数据库取连接等待与写锁争用。
     pub database: DatabaseAcquire,
-}
-
-/// 取连接等待的统计：转写 `lib-db` 的快照，避免本模块的公开类型依赖 `lib-db`。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DatabaseAcquire {
-    /// 取连接次数。
-    pub calls: u64,
-    /// 累计等待耗时（毫秒）。
-    pub total_millis: u64,
-    /// 单次最长等待耗时（毫秒）。
-    pub max_millis: u64,
+    /// Run 排队与执行（P2.2-001）。
+    pub limit: LimitMetrics,
+    /// 日志审计（P2.2-003）。
+    pub audit: AuditMetrics,
 }
 
 // 断连清理链。
@@ -233,11 +271,32 @@ static WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "metrics")]
 static WAIT_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
 
+/// 限流快照的来源：由装配层把 `agent-runtime` 的快照转写进来（本 Crate 不依赖 `agent-runtime`）。
+#[cfg(feature = "metrics")]
+static LIMIT_PROVIDER: OnceLock<fn() -> LimitMetrics> = OnceLock::new();
+
+/// 注册限流快照的来源（P2.2-001）：装配层启动时调用一次。
+///
+/// 重复注册返回 `false` 并保留第一次的来源；未启用采集时总是返回 `false`。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
+pub fn install_limit_provider(provider: fn() -> LimitMetrics) -> bool {
+    #[cfg(feature = "metrics")]
+    {
+        LIMIT_PROVIDER.set(provider).is_ok()
+    }
+    #[cfg(not(feature = "metrics"))]
+    {
+        false
+    }
+}
+
 /// 只读快照：调用方取一次即可，不重置。未启用采集时全部为 0。
 pub fn snapshot() -> MetricsSnapshot {
     #[cfg(feature = "metrics")]
     {
         let database = lib_db::observability::snapshot();
+        let audit = lib_core::audit::snapshot();
+        let limit = LIMIT_PROVIDER.get().map(|provider| provider()).unwrap_or_default();
         MetricsSnapshot {
             chain: ChainMetrics {
                 runs: CHAIN_RUNS.load(Ordering::Relaxed),
@@ -288,6 +347,15 @@ pub fn snapshot() -> MetricsSnapshot {
                 calls: database.calls,
                 total_millis: database.total_millis,
                 max_millis: database.max_millis,
+                errors: database.errors,
+            },
+            limit,
+            audit: AuditMetrics {
+                total: audit.total,
+                error: audit.error,
+                warn: audit.warn,
+                secret_hits: audit.secret_hits,
+                panics: audit.panics,
             },
         }
     }
@@ -304,8 +372,6 @@ pub fn snapshot() -> MetricsSnapshot {
 pub(crate) struct ChainSpan {
     /// 进入时刻：包含等 `CHAIN` 锁的时间。
     started: Instant,
-    /// 进入时的并发数：用于 `warn` 里判断是不是在排队。
-    concurrent: i64,
 }
 
 /// 未启用采集时的占位守卫：没有需要回落的水位。
@@ -316,18 +382,10 @@ pub(crate) struct ChainSpan;
 impl Drop for ChainSpan {
     fn drop(&mut self) {
         CHAIN_NOW.fetch_sub(1, Ordering::Relaxed);
-        let elapsed = self.started.elapsed();
-        let nanos = to_nanos(elapsed);
+        let nanos = to_nanos(self.started.elapsed());
         CHAIN_RUNS.fetch_add(1, Ordering::Relaxed);
         CHAIN_NANOS.fetch_add(nanos, Ordering::Relaxed);
         CHAIN_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if elapsed.as_millis() >= CHAIN_WARN_MS {
-            warn!(
-                elapsed_ms = elapsed.as_millis(),
-                concurrent = self.concurrent,
-                "断连清理链单次耗时过长"
-            );
-        }
     }
 }
 
@@ -339,7 +397,6 @@ pub(crate) fn chain_enter() -> ChainSpan {
         CHAIN_MAX.fetch_max(concurrent, Ordering::Relaxed);
         ChainSpan {
             started: Instant::now(),
-            concurrent,
         }
     }
     #[cfg(not(feature = "metrics"))]
@@ -353,9 +410,9 @@ pub(crate) fn record_chain_clients(clients: usize) {
     CHAIN_CLIENTS.fetch_add(clients as u64, Ordering::Relaxed);
 }
 
-/// 记一次会话停止：四个阶段分别累计，超过阈值打 `warn`。
+/// 记一次会话停止：四个阶段分别累计。
 #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-pub(crate) fn record_stop(session_id: &str, total: Duration, database: Duration, executor: Duration, writer: Duration) {
+pub(crate) fn record_stop(total: Duration, database: Duration, executor: Duration, writer: Duration) {
     #[cfg(feature = "metrics")]
     {
         let nanos = to_nanos(total);
@@ -365,36 +422,18 @@ pub(crate) fn record_stop(session_id: &str, total: Duration, database: Duration,
         STOP_DATABASE_NANOS.fetch_add(to_nanos(database), Ordering::Relaxed);
         STOP_EXECUTOR_NANOS.fetch_add(to_nanos(executor), Ordering::Relaxed);
         STOP_WRITER_NANOS.fetch_add(to_nanos(writer), Ordering::Relaxed);
-        if total.as_millis() >= STOP_WARN_MS {
-            warn!(
-                session_id,
-                total_ms = total.as_millis(),
-                database_ms = database.as_millis(),
-                executor_ms = executor.as_millis(),
-                writer_ms = writer.as_millis(),
-                "停止运行时会话耗时过长"
-            );
-        }
     }
 }
 
-/// 记一帧事件落盘：累计与最长写入耗时，超过阈值打 `warn`。
+/// 记一帧事件落盘：累计与最长写入耗时。
 #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-pub(crate) fn record_append(elapsed: Duration, path: &std::path::Path) {
+pub(crate) fn record_append(elapsed: Duration) {
     #[cfg(feature = "metrics")]
     {
         let nanos = to_nanos(elapsed);
         APPEND_CALLS.fetch_add(1, Ordering::Relaxed);
         APPEND_NANOS.fetch_add(nanos, Ordering::Relaxed);
         APPEND_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if elapsed.as_millis() >= APPEND_WARN_MS {
-            // 只有慢帧才构造路径文本，正常帧不付格式化开销。
-            warn!(
-                elapsed_ms = elapsed.as_millis(),
-                file = %path.display(),
-                "事件文件单帧写入过慢"
-            );
-        }
     }
 }
 
@@ -415,7 +454,7 @@ pub(crate) fn record_session_locks(entries: usize) {
     }
 }
 
-/// 记一次会话锁持有时间（P2.1-006）：锁内只做状态切换，超过阈值说明临界区又变长了。
+/// 记一次会话锁持有时间（P2.1-006）：锁内只做状态切换。
 #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
 pub(crate) fn record_session_lock_hold(elapsed: Duration) {
     #[cfg(feature = "metrics")]
@@ -424,9 +463,6 @@ pub(crate) fn record_session_lock_hold(elapsed: Duration) {
         LOCK_CALLS.fetch_add(1, Ordering::Relaxed);
         LOCK_NANOS.fetch_add(nanos, Ordering::Relaxed);
         LOCK_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if elapsed.as_millis() >= LOCK_WARN_MS {
-            warn!(elapsed_ms = elapsed.as_millis(), "会话锁持有时间过长");
-        }
     }
 }
 
@@ -439,9 +475,6 @@ pub(crate) fn record_registry_read(wait: Duration) {
         REG_READS.fetch_add(1, Ordering::Relaxed);
         REG_READ_NANOS.fetch_add(nanos, Ordering::Relaxed);
         REG_READ_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if wait.as_millis() >= LOCK_WAIT_WARN_MS {
-            warn!(wait_ms = wait.as_millis(), "注册表读锁等待时间过长");
-        }
     }
 }
 
@@ -454,9 +487,6 @@ pub(crate) fn record_registry_write(wait: Duration) {
         REG_WRITES.fetch_add(1, Ordering::Relaxed);
         REG_WRITE_NANOS.fetch_add(nanos, Ordering::Relaxed);
         REG_WRITE_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if wait.as_millis() >= LOCK_WAIT_WARN_MS {
-            warn!(wait_ms = wait.as_millis(), "注册表写锁等待时间过长");
-        }
     }
 }
 
@@ -468,9 +498,6 @@ pub(crate) fn record_downlink_forward(elapsed: Duration) {
         let nanos = to_nanos(elapsed);
         FORWARDS.fetch_add(1, Ordering::Relaxed);
         FORWARD_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if elapsed.as_millis() >= LOCK_WAIT_WARN_MS {
-            warn!(elapsed_ms = elapsed.as_millis(), "下行转发的临界区耗时过长");
-        }
     }
 }
 
@@ -483,9 +510,6 @@ pub(crate) fn record_session_lock_wait(elapsed: Duration) {
         WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
         WAIT_NANOS.fetch_add(nanos, Ordering::Relaxed);
         WAIT_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        if elapsed.as_millis() >= LOCK_WAIT_WARN_MS {
-            warn!(wait_ms = elapsed.as_millis(), "会话锁取锁等待时间过长");
-        }
     }
 }
 

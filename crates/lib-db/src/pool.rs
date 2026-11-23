@@ -34,9 +34,12 @@ impl Database {
             .acquire_timeout(config.acquire_timeout())
             .connect_with(options)
             .await
-            .map_err(|error| DbError::Open {
-                path: path.to_path_buf(),
-                source: error,
+            .map_err(|error| {
+                crate::observability::record_error(&error);
+                DbError::Open {
+                    path: path.to_path_buf(),
+                    source: error,
+                }
             })?;
 
         let database = Self { pool };

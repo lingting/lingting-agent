@@ -42,6 +42,13 @@ fn server(args: &ServerArgs) -> ExitCode {
         }
     };
 
+    // 日志审计（P2.2-003）：把本次配置的密钥登记为「不许进日志」，命中即计数。
+    // 必须在日志初始化之前完成——审计层在构造时取一次快照；正式构建里这段不编译。
+    #[cfg(feature = "metrics")]
+    if let Some(provider) = config.llm.provider.as_ref() {
+        lib_core::audit::monitor_secret(provider.api_key.expose());
+    }
+
     // 守卫必须存活到进程退出，提前释放会丢失日志并停止归档线程。
     let guard = match logger::init_server(config.log_level) {
         Ok(guard) => guard,

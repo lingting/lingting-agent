@@ -2044,7 +2044,6 @@ dependencies = [
  "lib-core",
  "sqlx",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2182,6 +2181,7 @@ dependencies = [
  "framework-timer",
  "lib-core",
  "lib-db",
+ "serde",
  "serde_json",
  "service-core",
  "tokio",

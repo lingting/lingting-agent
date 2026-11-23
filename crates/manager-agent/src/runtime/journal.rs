@@ -72,7 +72,7 @@ impl Journal {
         self.writer.write_all(&line)?;
         self.writer.flush()?;
         self.next_seq += 1;
-        super::metrics::record_append(started.elapsed(), &self.path);
+        super::metrics::record_append(started.elapsed());
         Ok(event)
     }
 

@@ -4,7 +4,7 @@
 //! 超出 `agent.max_concurrent_runs` 时排队，超过 `agent.run_queue_timeout_ms` 即放弃执行。
 //!
 //! 排队时长进 [`crate::metrics`]：它是「全局许可是不是瓶颈」的唯一直接证据（P2.1-003）。
-//! 阈值日志由指标模块负责，这里只计时与推进水位。
+//! 数据只经指标快照读出去，这里只计时与推进水位（阈值日志已删除，P2.2-004）。
 
 use std::time::{Duration, Instant};
 
@@ -39,12 +39,7 @@ impl Drop for RunPermit<'_> {
 }
 
 /// 取全局许可：等待期间同时受排队超时与取消信号约束。
-pub(crate) async fn acquire<'a>(
-    limit: &'a Semaphore,
-    timeout_ms: u64,
-    cancel: &RunCancel,
-    run_id: &str,
-) -> Acquired<'a> {
+pub(crate) async fn acquire<'a>(limit: &'a Semaphore, timeout_ms: u64, cancel: &RunCancel) -> Acquired<'a> {
     metrics::queued_enter();
     let started = Instant::now();
     let acquired = tokio::select! {
@@ -61,8 +56,8 @@ pub(crate) async fn acquire<'a>(
     };
     metrics::queued_leave();
     match &acquired {
-        Acquired::Permit(_) => metrics::record_acquired_wait(started.elapsed(), run_id),
-        Acquired::Timeout => metrics::record_timeout(started.elapsed(), run_id),
+        Acquired::Permit(_) => metrics::record_acquired_wait(started.elapsed()),
+        Acquired::Timeout => metrics::record_timeout(),
         Acquired::Cancelled => metrics::record_cancelled(),
     }
     acquired

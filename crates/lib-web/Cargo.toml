@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# 快照探针（P2.2-002）：只在 debug + `metrics` 构建注册，正式构建与 `make gen` 都不含该接口。
+metrics = ["manager-agent/metrics"]
+
 [dependencies]
 lib-core = { workspace = true }
 lib-web-core = { workspace = true }

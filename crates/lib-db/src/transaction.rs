@@ -21,7 +21,7 @@ impl Database {
         // 取连接等待是「数据库是不是瓶颈」的唯一直接证据（P2.1-003）：
         // 计时把手在未启用 `metrics` 特性时是零成本占位。
         let timer = crate::observability::AcquireTimer::start();
-        let transaction = self.pool().begin().await.map_err(DbError::Transaction)?;
+        let transaction = self.pool().begin().await.map_err(DbError::transaction)?;
         timer.finish();
         Ok(Transaction {
             inner: Some(transaction),
@@ -40,12 +40,12 @@ impl Transaction {
     /// 提交事务。
     pub async fn commit(mut self) -> Result<(), DbError> {
         let transaction = self.inner.take().expect("事务已结束：commit / rollback 只能调用一次");
-        transaction.commit().await.map_err(DbError::Transaction)
+        transaction.commit().await.map_err(DbError::transaction)
     }
 
     /// 显式回滚；调用方明确知道要放弃本次写入时使用（其余情况直接 `?` 返回即可）。
     pub async fn rollback(mut self) -> Result<(), DbError> {
         let transaction = self.inner.take().expect("事务已结束：commit / rollback 只能调用一次");
-        transaction.rollback().await.map_err(DbError::Transaction)
+        transaction.rollback().await.map_err(DbError::transaction)
     }
 }

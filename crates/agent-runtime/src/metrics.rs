@@ -4,21 +4,11 @@
 //! 不做原子操作、不付日志判断的代价；`bin-tests` 与 `make test` 构建的 `bin-agent`
 //! 打开该特性，运行结束后由测试报告输出一份快照。
 //!
-//! 阈值一律先比较再构造日志参数，热路径（每次取许可）只付几个原子加。
+//! 采集只做内存累加：数据只经结构化快照读出去，不再打任何阈值日志（P2.2-004）。
 
 #[cfg(feature = "metrics")]
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
-
-#[cfg(feature = "metrics")]
-use tracing::{debug, warn};
-
-/// 排队时长达到这个阈值记 `debug`：低于它属正常抖动。
-#[cfg(feature = "metrics")]
-const QUEUE_DEBUG_MS: u64 = 100;
-/// 排队时长达到这个阈值记 `warn`：这时吞吐已经被全局许可卡住。
-#[cfg(feature = "metrics")]
-const QUEUE_WARN_MS: u64 = 1000;
 
 /// 进入排队的次数。
 #[cfg(feature = "metrics")]
@@ -106,26 +96,21 @@ pub(crate) fn queued_leave() {
     QUEUED_NOW.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// 记一次排队成功：累计与最长等待，并按阈值打日志。
+/// 记一次排队成功：累计与最长等待。
 #[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-pub(crate) fn record_acquired_wait(elapsed: Duration, run_id: &str) {
+pub(crate) fn record_acquired_wait(elapsed: Duration) {
     #[cfg(feature = "metrics")]
     {
         let nanos = to_nanos(elapsed);
         WAIT_NANOS.fetch_add(nanos, Ordering::Relaxed);
         WAIT_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
-        log_slow_queue(elapsed, run_id);
     }
 }
 
 /// 排队超时：Run 落 `FAILED`（「执行排队超时」）。
-#[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
-pub(crate) fn record_timeout(elapsed: Duration, run_id: &str) {
+pub(crate) fn record_timeout() {
     #[cfg(feature = "metrics")]
-    {
-        TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-        warn!(run_id, waited_ms = elapsed.as_millis(), "Run 排队超时，未发起上游请求");
-    }
+    TIMEOUTS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// 排队期间被取消：不发终态事件之外的事件，也不落失败。
@@ -147,17 +132,6 @@ pub(crate) fn run_started() {
 pub(crate) fn run_finished() {
     #[cfg(feature = "metrics")]
     RUNNING_NOW.fetch_sub(1, Ordering::Relaxed);
-}
-
-/// 排队慢日志：先比较阈值，再构造日志参数。
-#[cfg(feature = "metrics")]
-fn log_slow_queue(elapsed: Duration, run_id: &str) {
-    let waited_ms = elapsed.as_millis();
-    if waited_ms >= QUEUE_WARN_MS as u128 {
-        warn!(run_id, waited_ms, "Run 排队过久，全局并发许可已饱和");
-    } else if waited_ms >= QUEUE_DEBUG_MS as u128 {
-        debug!(run_id, waited_ms, "Run 排队等待超过阈值");
-    }
 }
 
 /// 时长转纳秒：饱和到 `u64`，不 panic。

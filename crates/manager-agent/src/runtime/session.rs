@@ -181,7 +181,6 @@ impl RuntimeSession {
                 .map_err(|error| io::Error::other(format!("写者任务异常退出：{error}")))
         };
         metrics::record_stop(
-            &session_id,
             started.elapsed(),
             database_elapsed,
             executor_elapsed,
