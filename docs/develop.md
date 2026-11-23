@@ -74,7 +74,7 @@
 |---|---|
 | 配置文件 | `<应用根目录>/config.toml`：`[server]` 的 `addr` / `port` / `log_level`、`[runtime.events]` 的事件文件轮转、`[provider]` / `[[provider.models]]` 的模型清单、`[agent]` 的运行参数；文件不存在时全部取默认值（`[provider]` 缺省即「Provider 未配置」，服务端照常启动） |
 | `[provider]` / `[[provider.models]]` | 只读 Provider 配置：`id` / `kind`（只接受 `openai-compatible`）/ `base_url` / `api_key` / `default_model`；每个模型有 `id` / `context_window`（缺省 8192）/ `max_output_tokens`（缺省 1024）。段一旦存在，缺字段、未知 `kind`、`default_model` 不在 `models` 中、`models` 为空或 id 重复、数值非正或 `max_output_tokens > context_window` 都是启动期硬错误（退出码 2） |
-| `[agent]` | 运行参数：`max_concurrent_runs`（缺省 4）、`run_queue_timeout_ms`（缺省 120000）、`llm_idle_timeout_ms`（缺省 60000）、`context_max_messages`（缺省 40）、`context_safety_tokens`（缺省 256） |
+| `[agent]` | 运行参数：`max_concurrent_runs`（缺省 `"3C"`，即 3 × CPU 核数；也可写整数如 `4` 表示绝对许可数）、`run_queue_timeout_ms`（缺省 120000）、`llm_idle_timeout_ms`（缺省 60000）、`context_max_messages`（缺省 40）、`context_safety_tokens`（缺省 256）。核数在装配时取一次（`available_parallelism()`），运行期不变；`0` / `0C` / 非法后缀 / 负数 / 超过信号量上限都是启动期硬错误（退出码 2） |
 | 系统提示词 | `<应用根目录>/AGENTS.md`：名称全大写优先，其次忽略大小写的 Markdown 文件；每次组装 Context 现场读取、不缓存；缺失或为空时不发 system 消息 |
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
 | 环境变量 | 只有 `AGENT_HOME`（应用根目录覆盖）；地址 / 端口 / 日志级别等配置项不再支持环境变量 |

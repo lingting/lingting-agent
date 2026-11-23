@@ -28,6 +28,7 @@
 | D-P2.1-010 | 锁面分类口径：互斥原语不 ArcSwap 化，整表状态先拆每帧写锁 | DECIDED |
 | D-P2.1-011 | `arc-swap` 的引入范围：只在确定改造的 Crate 与同一次改动里引入 | DECIDED |
 | D-P2.1-012 | 表级快照采用「失效 + 读时回源」，且当前不启用（触发条件见报告 §七） | DECIDED |
+| D-P2.1-015 | `Concurrency` 值类型与 `NC` 形式的解析位置（值类型在 `types-core`，校验在 `lib-bin-cli`，解析在装配层） | DECIDED |
 
 `README.md` §九 的 D-P2.1-001 ~ 006 已在 Batch A 落定，结论汇总在 README 的「Batch A 后已落定的口径」一节；其中 D-P2.1-001 / 004 / 006 的结论不再在本文件重复。
 
@@ -194,3 +195,27 @@
 - **判据**：凡是断言「终态事件已落盘」的用例，读取前必须有一次 `wait_until`；默认并发连续三轮全量不出现「实际 N 条」类失败。
 - **约束**：等待超时沿用 `wait_until` 的默认值，不新增限流开关，不改 `default_concurrency()`；不允许用「降低并发度」让窗口不再触发。
 - **承接任务**：P2.1-013（已修复并复跑三轮全绿，证据见 `docs/reports/p2.1-013-default-concurrency.md`）。
+
+---
+
+## D-P2.1-015 `Concurrency` 值类型与核数倍数的解析位置
+
+- **状态**：`DECIDED`（2026-11-22）
+- **问题**：`[agent] max_concurrent_runs` 要支持 `"2C"` 这类「核数倍数」写法且默认值改为 `3C`。值类型放哪、在哪解析、默认值常量怎么改写才不出现两处默认值不一致？
+- **背景与证据**：原字段是 `usize`，`DEFAULT_MAX_CONCURRENT_RUNS = 4`，唯一使用点是 `agent-runtime/src/port.rs` 的 `Semaphore::new(...)`；`lib-bin-cli` 的 `validate_agent` 只校验「大于 0」。`available_parallelism()` 在整个 workspace 只有 `bin-tests` 的 `cli` 用过（取默认并发），业务侧没有第二处取核数的位置。
+- **可选方案**：
+  1. `types-core` 定义 `Concurrency`（`Absolute(usize)` / `Cores(usize)`）+ 纯函数 `resolve(cores)`，自定义 `Deserialize` 同时接受整数与字符串，装载层校验，装配时解析；
+  2. 新增独立字符串字段（如 `max_concurrent_runs_cores`），保留旧整数字段；
+  3. 只在 `lib-bin-cli` 里把文本解析成 `usize`，运行期不再知道原始写法。
+- **决策**：①。
+  - 值类型与 `resolve(cores)` 放 `types-core::config::agent`：`Default = Cores(3)`，`DEFAULT_MAX_CONCURRENT_RUNS` 的类型同步改为 `Concurrency`（一个常量，避免两处默认值）。
+  - `Deserialize` 走 `deserialize_any`：整数（含旧写法 `4`）解析为 `Absolute`，`"NC"`（大小写后缀都接受）解析为 `Cores`；错误文案在解析阶段就点名字段 `[agent] max_concurrent_runs`。
+  - 校验在 `lib-bin-cli::config::validate_max_concurrent_runs`：`0` / `0C` → 「必须大于 0」，`2X` / 非数字 → 「取值无效」，负数 → 「不接受负数」，超过 `MAX_PERMITS` → 「超过可用上限」，全部是启动期硬错误。
+  - 解析在装配层 `agent-runtime::AgentRuntime::new`：`available_parallelism()` 只取一次，`resolve` 的结果直接交给 `Semaphore::new`，运行期不变。
+- **理由**：①一处值类型 + 一处纯函数，下游只在信号量处取值，旧整数写法天然兼容；②让同一语义有两个字段，配置文件可能出现二者并存的歧义；③丢失「倍数」语义，配置无法随机器核数变化，且解析逻辑会与类型定义分离。
+- **约束**：
+  - `resolve` 必须是纯函数且核数可注入（用例按 8 核断言，不依赖真实机器）。
+  - 结果落在 `1..=Concurrency::MAX_PERMITS`（与 `tokio::sync::Semaphore::MAX_PERMITS` 同值），倍数溢出按上限饱和，不 panic、不产生超限信号量。
+  - 不改 `RunEvent` 契约、不改接口、不新增配置项、不动测试侧并发；`bin-tests` 的共享服务端仍走「不写 `[agent]` → 默认值」。
+  - 默认值变更会放大上游并发（18 核时 `3C` = 54），只改配置面，不承诺上游配额。
+- **承接任务**：P2.1-015。

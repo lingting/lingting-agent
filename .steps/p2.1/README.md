@@ -1,6 +1,6 @@
 # P2.1：共享服务端并发根因修复与测试基础设施整理
 
-**状态：Batch A ~ C 已完成（2026-11-21 / 2026-11-22），Batch D ~ E 待开工。** 任务与批次见 [tasks.md](tasks.md)，判据见 §七，决策见 [decisions.md](decisions.md)，已知问题见 [known-issues.md](known-issues.md)。
+**状态：全部批次已完成（Batch A ~ C 于 2026-11-21 / 2026-11-22，Batch D ~ E 于 2026-11-22）。** 验收结论见 [`docs/reports/p2.1-014-acceptance.md`](../../docs/reports/p2.1-014-acceptance.md)。任务与批次见 [tasks.md](tasks.md)，判据见 §七，决策见 [decisions.md](decisions.md)，已知问题见 [known-issues.md](known-issues.md)。
 
 > 依据：P2 验收结论（[`docs/reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)）、[`known-issues.md`](known-issues.md) 的 K-1、`docs/develop.md` 的「测试」约定、`docs/workspace.md` 的 `bin-tests` 条目，以及仓库实际代码。凡文档与代码不一致之处，以代码为准并记入 `decisions.md`。
 > 任务与批次见 §六；判据见 §七；待确认项见 §九。
@@ -251,8 +251,8 @@ C ────────┘
 
 > 硬前置：P2.1-013。先在 `max_concurrent_runs = 4` 下证明并发异常已消除，才允许改默认值与语法。
 
-- [ ] **P2.1-015 `max_concurrent_runs` 支持核数倍数（`NC`）**：支持 `"2C"`（2 × 核数）、默认 `3C`、可被配置文件覆盖；整数写法保持兼容；`resolve(cores)` 纯函数可注入核数。
-- [ ] **P2.1-014 验收与报告**：在 015 之后执行，覆盖 G-1 / G-2 / G-3 三组判据并产出阶段报告。
+- [x] **P2.1-015 `max_concurrent_runs` 支持核数倍数（`NC`）**：支持 `"2C"`（2 × 核数）、默认 `3C`、可被配置文件覆盖；整数写法保持兼容；`resolve(cores)` 纯函数可注入核数。
+- [x] **P2.1-014 验收与报告**：在 015 之后执行，覆盖 G-1 / G-2 / G-3 三组判据并产出阶段报告（[`docs/reports/p2.1-014-acceptance.md`](../../docs/reports/p2.1-014-acceptance.md)）。
 
 ---
 
@@ -322,7 +322,7 @@ C ────────┘
 |---|---|---|---|
 | **D-P2.1-001** | 是否允许新增 `arcswap` 依赖 | ① 不引入，先靠「快照后放锁」；② 指标证明争用后再引入；③ 本期直接引入 | ②：先量测，避免为假设改依赖 |
 | **D-P2.1-002** | 断连链并行化的边界 | ① 按客户端并行、会话锁保留；② 全并行（含同客户端） | ①：同客户端顺序是语义，不是性能 |
-| **D-P2.1-003** | `NC` 形式的语法与解析位置（P2.1-015） | ① `types-core` 定义 `Concurrency`（整数 + `NC`），装载层校验，装配时 `resolve`；② 新增独立字符串字段，保留旧整数字段；③ 只在 `lib-bin-cli` 解析成 `usize` | ①：一处值类型 + 一处纯函数，下游只在 `Semaphore` 处取值，旧整数写法天然兼容 |
+| **D-P2.1-003** | `NC` 形式的语法与解析位置（P2.1-015） | ① `types-core` 定义 `Concurrency`（整数 + `NC`），装载层校验，装配时 `resolve`；② 新增独立字符串字段，保留旧整数字段；③ 只在 `lib-bin-cli` 解析成 `usize` | ①：一处值类型 + 一处纯函数，下游只在 `Semaphore` 处取值，旧整数写法天然兼容（**已落定为 ①，见 [decisions.md](decisions.md) D-P2.1-015**） |
 | **D-P2.1-004** | K-1 结案口径 | ① 默认并发连续 3 次全绿；② 全绿 + 关键指标（排队时长、阻塞时长）达标 | ②：避免「这次运气好」式结案 |
 | **D-P2.1-005** | `docs/develop.md` 的用例放置规则、`docs/workspace.md` 的 `bin-tests` 条目、`.steps/README.md` 的 P2.1 登记 | ① 阶段验收后一并授权修改；② 现在只登记 `.steps/README.md` | ①：按 AGENTS.md「未经要求不主动同步文档」 |
 | **D-P2.1-006** | 是否把 §3 的 H-3 / H-4 登记为 `known-issues.md` 的 K-2 / K-3 | ① 不单独登记，阶段报告里记录；② 登记后按已知问题流程追踪 | ①：它们是 K-1 的子假设，结案时一并给结论 |

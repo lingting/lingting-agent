@@ -27,7 +27,7 @@
 //! max_output_tokens = 4096
 //!
 //! [agent]
-//! max_concurrent_runs = 4
+//! max_concurrent_runs = "3C"
 //! ```
 //!
 //! 配置只来自命令行与这个文件（应用根目录本身由 `AGENT_HOME` 决定），不为任何配置项读环境变量。
@@ -46,7 +46,7 @@ use std::fs;
 use std::io;
 use std::str::FromStr;
 use tracing_subscriber::filter::LevelFilter;
-use types_core::config::{AgentConfig, ProviderConfig};
+use types_core::config::{AgentConfig, Concurrency, ProviderConfig};
 use url::Url;
 
 /// 默认监听地址。
@@ -341,11 +341,28 @@ fn validate_provider(provider: &ProviderConfig) -> Result<()> {
 
 /// Agent 参数校验：全部是正数，写 0 会让并发、超时或预算不可用。
 fn validate_agent(agent: &AgentConfig) -> Result<()> {
-    require_positive("[agent] max_concurrent_runs", agent.max_concurrent_runs as u64)?;
+    validate_max_concurrent_runs(agent.max_concurrent_runs)?;
     require_positive("[agent] run_queue_timeout_ms", agent.run_queue_timeout_ms)?;
     require_positive("[agent] llm_idle_timeout_ms", agent.llm_idle_timeout_ms)?;
     require_positive("[agent] context_max_messages", agent.context_max_messages as u64)?;
     require_positive("[agent] context_safety_tokens", agent.context_safety_tokens as u64)
+}
+
+/// 并发上限校验：绝对值与核数倍数都要求正数，且不超过 `Semaphore` 的可用上限（P2.1-015）。
+///
+/// 倍数的合法值只看倍数本身（真实核数装配时才确定）；最终许可数由装配层按真实核数
+/// [`Concurrency::resolve`] 算出，乘积溢出在上限处饱和，不会 panic。
+fn validate_max_concurrent_runs(value: Concurrency) -> Result<()> {
+    let factor = value.factor();
+    require_positive("[agent] max_concurrent_runs", factor as u64)?;
+    if factor > Concurrency::MAX_PERMITS {
+        return Err(anyhow!(
+            "[agent] max_concurrent_runs 超过可用上限 {}（{}）",
+            Concurrency::MAX_PERMITS,
+            factor
+        ));
+    }
+    Ok(())
 }
 
 /// 数值校验：只接受大于 0 的取值。

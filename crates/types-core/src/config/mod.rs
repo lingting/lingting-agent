@@ -19,11 +19,11 @@
 //! max_output_tokens = 4096
 //!
 //! [agent]
-//! max_concurrent_runs = 4
+//! max_concurrent_runs = "3C"
 //! ```
 
 pub mod agent;
 pub mod provider;
 
-pub use agent::AgentConfig;
+pub use agent::{AgentConfig, Concurrency};
 pub use provider::{ModelConfig, ProviderConfig, ProviderKind, Secret};

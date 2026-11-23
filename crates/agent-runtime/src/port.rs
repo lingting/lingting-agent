@@ -49,8 +49,11 @@ impl AgentRuntime {
         let llm: Option<Arc<dyn LlmProvider>> = provider
             .provider()
             .map(|config| Arc::new(OpenAiProvider::new(config, idle_timeout)) as Arc<dyn LlmProvider>);
-        // 许可数至少为 1：配置成 0 会让所有 Run 都在排队里超时，属配置错误但不该卡死服务。
-        let limit = Arc::new(Semaphore::new(agent.max_concurrent_runs.max(1)));
+        // 许可数按配置解析：核数只在装配时取一次，运行期不变（P2.1-015）；结果至少为 1，
+        // 配置成 0 会让所有 Run 都在排队里超时，属配置错误但不该卡死服务。
+        let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+        let permits = agent.max_concurrent_runs.resolve(cores);
+        let limit = Arc::new(Semaphore::new(permits));
         Self {
             service,
             provider,

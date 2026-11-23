@@ -8,7 +8,7 @@ use crate::case::CaseFuture;
 use crate::util::context::TestContext;
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::config::parse_llm;
-use types_core::config::agent::{DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS};
+use types_core::config::agent::{Concurrency, DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS};
 use types_core::config::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 
 /// 一份完整合法的配置：Provider 两个模型（一个全字段、一个只写 id 走缺省值）+ 全量 Agent 参数。
@@ -57,7 +57,7 @@ pub(super) fn config(_context: &TestContext) -> CaseFuture<'_> {
             "Context 消息条数缺省值与 types-core 不一致"
         );
         notes.push(format!(
-            "缺 [provider] 段：provider=None，max_concurrent_runs={}",
+            "缺 [provider] 段：provider=None，max_concurrent_runs={:?}",
             minimal.agent.max_concurrent_runs
         ));
 
@@ -77,12 +77,12 @@ pub(super) fn config(_context: &TestContext) -> CaseFuture<'_> {
             "只写 id 的模型应取 types-core 的缺省值"
         );
         ensure!(
-            full.agent.max_concurrent_runs == 2 && full.agent.context_safety_tokens == 128,
+            full.agent.max_concurrent_runs == Concurrency::Absolute(2) && full.agent.context_safety_tokens == 128,
             "[agent] 段装载不符：{:?}",
             full.agent
         );
         notes.push(format!(
-            "完整配置：provider={}，models={}，max_concurrent_runs={}",
+            "完整配置：provider={}，models={}，max_concurrent_runs={:?}",
             provider.id,
             provider.models.len(),
             full.agent.max_concurrent_runs
@@ -200,13 +200,67 @@ id = "model-a"
             );
         }
 
-        let zero_agent = expect_failure("[agent]\nmax_concurrent_runs = 0\n")?;
+        // 4) 并发上限支持核数倍数（P2.1-015）：缺省 3C，倍数是纯函数，按注入核数断言。
+        let default_cores = minimal.agent.max_concurrent_runs.resolve(8);
         ensure!(
-            zero_agent.contains("[agent] max_concurrent_runs 必须大于 0"),
-            "[agent] 数值 0 应被拒绝：{zero_agent}"
+            minimal.agent.max_concurrent_runs == Concurrency::Cores(3) && default_cores == 24,
+            "[agent] 缺省并发应为 3C：8 核时解析为 {default_cores}"
         );
-        notes.push(format!("非法配置全部拒绝：{} 类", rejected.len() + 1));
 
+        let multiples = parse_llm("[agent]\nmax_concurrent_runs = \"2C\"\n")?;
+        ensure!(
+            multiples.agent.max_concurrent_runs == Concurrency::Cores(2)
+                && multiples.agent.max_concurrent_runs.resolve(8) == 16,
+            "\"2C\" 应按核数倍数装载：{:?}",
+            multiples.agent.max_concurrent_runs
+        );
+
+        let absolute = parse_llm("[agent]\nmax_concurrent_runs = 4\n")?;
+        ensure!(
+            absolute.agent.max_concurrent_runs == Concurrency::Absolute(4)
+                && absolute.agent.max_concurrent_runs.resolve(8) == 4,
+            "整数写法应保持绝对值语义：{:?}",
+            absolute.agent.max_concurrent_runs
+        );
+        notes.push(format!(
+            "并发配置：缺省 3C（8 核 {default_cores}）、\"2C\"（8 核 {}）、整数 4",
+            multiples.agent.max_concurrent_runs.resolve(8)
+        ));
+
+        // 5) 并发上限的非法取值同样点名字段。
+        let rejected_concurrency = [
+            (
+                "[agent] max_concurrent_runs 必须大于 0",
+                "[agent]\nmax_concurrent_runs = 0\n",
+            ),
+            (
+                "[agent] max_concurrent_runs 必须大于 0",
+                "[agent]\nmax_concurrent_runs = \"0C\"\n",
+            ),
+            (
+                "[agent] max_concurrent_runs 取值无效",
+                "[agent]\nmax_concurrent_runs = \"2X\"\n",
+            ),
+            (
+                "[agent] max_concurrent_runs 不接受负数",
+                "[agent]\nmax_concurrent_runs = -1\n",
+            ),
+            (
+                "[agent] max_concurrent_runs 超过可用上限",
+                "[agent]\nmax_concurrent_runs = 9223372036854775807\n",
+            ),
+        ];
+        for (expected, text) in &rejected_concurrency {
+            let message = expect_failure(text)?;
+            ensure!(
+                message.contains(expected),
+                "错误文案应指出问题（期望包含「{expected}」）：{message}"
+            );
+        }
+        notes.push(format!(
+            "非法配置全部拒绝：{} 类",
+            rejected.len() + rejected_concurrency.len()
+        ));
         Ok(notes)
     })
 }
