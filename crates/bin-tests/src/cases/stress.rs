@@ -103,7 +103,7 @@ async fn boundary_body(context: &TestContext) -> Result<Vec<String>> {
         ),
     );
 
-    // ① 标定：测的是完整链路，因此 `L0` 包含了准备开销，得到的 `N` 偏小——这是保守方向。
+    // ① 标定：量的是「发消息 → 终态」的串行段（先跑 1 轮预热），`N` 由它算出。
     let calibration = calibrate(context).await?;
     let l0 = calibration.distribution.max;
     context.measure("① 标定原始值", calibration.render());
@@ -111,8 +111,9 @@ async fn boundary_body(context: &TestContext) -> Result<Vec<String>> {
 
     let Some(inner) = stress::boundary(l0, budget) else {
         bail!(
-            "参数不足以形成边界：L0 = {}、T = {} → N = floor(T / L0) + 1 = {}，低于最小客户端数 {}。\
-             这说明本机单次串行耗时太大（或等待预算太小），不是服务端缺陷；按 D-P2.2-009 不允许在公式外放水。",
+            "阶段 {CALIBRATION_TAG}：参数不足以形成边界——L0 = {}、T = {} → N = floor(T / L0) + 1 = {}，\
+             低于最小客户端数 {}。这说明本机单次串行耗时太大（或等待预算太小），不是服务端缺陷；\
+             按 D-P2.2-009 不允许在公式外放水。",
             stress::precise(l0),
             stress::millis(budget),
             stress::count(l0, budget),
