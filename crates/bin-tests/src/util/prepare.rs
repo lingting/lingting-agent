@@ -5,7 +5,7 @@
 //! `Makefile` 的 `test` 前置里（见 `.plan/p1-016-webui-tests.md`「既定约束」）。
 
 use crate::case::{Case, Prep};
-use crate::frontend;
+use crate::util::frontend;
 use anyhow::Result;
 
 /// 按选中用例的要求依次执行准备动作，同类准备只做一次。

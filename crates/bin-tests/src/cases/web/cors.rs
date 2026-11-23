@@ -1,7 +1,7 @@
 //! `web.cors`：浏览器来源的预检与实际请求（D-027）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::ensure;
 use framework_http::{HttpMethod, HttpRequest};
 use lib_bin_cli::sdk::PROBE_HEALTH;

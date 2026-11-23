@@ -18,8 +18,10 @@ use tokio::sync::mpsc;
 use types_core::runtime::{ClientCloseReason, OccupancyCreatePO as ContractOccupancyCreatePO, OccupancyVO};
 
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
-use crate::context::TestContext;
-use crate::support::{assembly_events_root, installed, runtime_state, session_service, temp_directory, wait_until};
+use crate::util::context::TestContext;
+use crate::util::support::{
+    assembly_events_root, installed, runtime_state, session_service, temp_directory, wait_until,
+};
 
 /// 断连处理链用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -307,7 +309,7 @@ fn unregister(context: &TestContext) -> CaseFuture<'_> {
 
 /// 进程级运行时状态：处理链只安装一次，`runtime.disconnect` 用它验证真实装配。
 ///
-/// 与其它进程内用例共用同一份装配（`crate::support::installed`）：注入只能发生一次。
+/// 与其它进程内用例共用同一份装配（`crate::util::support::installed`）：注入只能发生一次。
 async fn global_state() -> Result<&'static RuntimeState> {
     Ok(installed().await?.runtime())
 }

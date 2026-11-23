@@ -1,8 +1,8 @@
 //! `web.sdk-only`：前端不得手写 API path，所有调用必须来自生成的 SDK（P1-016 验收标准 2）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
-use crate::frontend;
+use crate::util::context::TestContext;
+use crate::util::frontend;
 use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;

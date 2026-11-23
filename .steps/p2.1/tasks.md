@@ -1,6 +1,6 @@
 # P2.1 任务清单
 
-**状态：Batch A 已完成（P2.1-001 ~ 003，2026-11-21）；Batch B 已完成（P2.1-004 ~ 008，2026-11-21，逐任务「修复前 / 修复后」对照见 `docs/reports/p2.1-004 ~ 008`）；Batch C ~ E 待开工（7 个任务 / 3 个批次）；Batch B 追加 P2.1-008.1 / 008.2（锁面与数据库读路径复核，审查型）：008.1 / 008.2 均已完成（锁面与数据库读路径逐项「不改」，见 `docs/reports/p2.1-008.1-lock-audit.md`、`docs/reports/p2.1-008.2-db-read-cache.md`）。** 阶段目标、边界、根因分析与判据见本目录 [README.md](README.md)；`acceptance.md` 不单独建（判据在 README §七），`decisions.md` 已随 Batch A 展开。关键结论：**K-1 未复现**，G-1 口径改为「结构修复 + 指标对照」（[decisions.md](decisions.md) D-P2.1-007）；Batch B 修掉四处结构缺陷（测试侧同步阻塞、全局断连链、锁内收尾、锁表只增），H-3 复核结论为「许可与 journal 都不是瓶颈」。
+**状态：Batch A 已完成（P2.1-001 ~ 003，2026-11-21）；Batch B 已完成（P2.1-004 ~ 008，2026-11-21，逐任务「修复前 / 修复后」对照见 `docs/reports/p2.1-004 ~ 008`）；Batch C 已完成（P2.1-009 ~ 011，2026-11-22，`cases/` 只剩用例、Mock 与通用支持各自归位，`cargo check` / `clippy` 与两轮用例全绿）；Batch D ~ E 待开工（4 个任务 / 2 个批次）；Batch B 追加 P2.1-008.1 / 008.2（锁面与数据库读路径复核，审查型）：008.1 / 008.2 均已完成（锁面与数据库读路径逐项「不改」，见 `docs/reports/p2.1-008.1-lock-audit.md`、`docs/reports/p2.1-008.2-db-read-cache.md`）。** 阶段目标、边界、根因分析与判据见本目录 [README.md](README.md)；`acceptance.md` 不单独建（判据在 README §七），`decisions.md` 已随 Batch A 展开。关键结论：**K-1 未复现**，G-1 口径改为「结构修复 + 指标对照」（[decisions.md](decisions.md) D-P2.1-007）；Batch B 修掉四处结构缺陷（测试侧同步阻塞、全局断连链、锁内收尾、锁表只增），H-3 复核结论为「许可与 journal 都不是瓶颈」。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码审查、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -235,11 +235,11 @@
 
 ---
 
-## Batch C：测试基础设施整理（P2.1-009 ~ P2.1-011）
+## Batch C：测试基础设施整理（P2.1-009 ~ P2.1-011）**已完成（2026-11-22）**
 
 > 依赖：无（可与 Batch A / B 并行）。**只做位移，不改行为**；本批次完成后才能跑 Batch D 的全量回归，保证归因唯一。
 
-- [ ] **P2.1-009 Mock 迁出 `cases`**
+- [x] **P2.1-009 Mock 迁出 `cases`**（已完成）
 
   **目标**：`cases/` 只留用例，Mock 成为独立支持模块。
   **前置依赖**：无。
@@ -249,13 +249,14 @@
   2. `MockServer` 的公开面（`start` / `base_url` / `url`）保持不变；引用改为 `crate::mock::llm::MockServer`。
   3. `cases/llm/mod.rs` 去掉 `pub(crate) mod mock`；`cases/mod.rs` 不再向外部暴露 Mock。
   4. 确认 `runner` / `util` / `mock` 不出现 `crate::cases`（R4）。
+  **实施结果**：六件套与用例本体同时落位——用例文件改为 `cases/llm/mock.rs`（若在 009 保留 `cases/llm/mock/mod.rs` 会让模块树在 009 / 010 之间不成立）；`MODEL` 经 `crate::mock::llm` 再导出，`reply` 等子模块保持私有。R4 实测无 `crate::cases`（`runner` / `util` / `mock` 全部为 0 处）。
   **验收标准**：
-  - [ ] Mock 的 4 个端点、7 种场景、节奏参数、观测字段零变化。
-  - [ ] `cargo check -p bin-tests` 通过。
-  - [ ] `llm.mock` / `chat.*` / `run.*` 通过。
-  **测试要求**：`make test ARGS="llm chat run"`。**需授权**。
+  - [x] Mock 的 4 个端点、7 种场景、节奏参数、观测字段零变化。
+  - [x] `cargo check -p bin-tests` 通过（`cargo clippy -p bin-tests` 无告警）。
+  - [x] `llm.mock` / `chat.*` / `run.*` 通过。
+  **测试要求**：`make test ARGS="llm chat run"`。**已授权并执行**（17/17 全绿）。
 
-- [ ] **P2.1-010 `llm.mock` 瘦身与观测去重**
+- [x] **P2.1-010 `llm.mock` 瘦身与观测去重**（已完成）
 
   **目标**：`llm.mock` 只写步骤与断言；Mock 的「请求构造 + SSE 读取」与「观测读取」各自只有一处实现。
   **前置依赖**：P2.1-009。
@@ -264,13 +265,14 @@
   1. chat 请求体构造、非流式 / 流式请求、SSE 读取与汇总、期望回复计算 → `mock/llm/probe.rs`。
   2. `/mock/stats`、`/mock/last-request` 的读取与轮询等待 → `mock/llm/observe.rs`；`flow::get_json` / `flow::wait_aborted` 与 `cases/chat.rs::last_request_messages` 改为调用它。
   3. `cases/llm/mock.rs` 只保留用例步骤与断言；纠正模块文档中被引用的用例名（实际断言在 `run.execute` / `run.failed_auth` / `run.failed_upstream` / `run.failed_timeout`）。
+  **实施结果**：`flow::get_json` / `flow::wait_aborted` 与 `cases/chat.rs::last_request_messages` 删除，改为 `mock::llm::observe`；轮询等待收敛为一条 `poll_aborted` 核心 + 两个入口（「至少一次中断」超时报错、「超过已知值」超时返值），保留原有超时与间隔口径，行为未变。断言条目逐条比对未减少（唯一挪动的是 `GET … 应返回 200`，随 `get_json` 进 `observe`）。
   **验收标准**：
-  - [ ] `llm.mock` 的断言条目不减少，覆盖的场景与之前一致。
-  - [ ] stats / last-request 的读取与等待只有一处实现。
-  - [ ] `cases/` 内不再直接实现 HTTP/SSE 细节。
-  **测试要求**：`make test ARGS="llm chat run"`。**需授权**。
+  - [x] `llm.mock` 的断言条目不减少，覆盖的场景与之前一致。
+  - [x] stats / last-request 的读取与等待只有一处实现。
+  - [x] `cases/` 内不再直接实现 HTTP/SSE 细节（**本任务范围**：`llm.mock` 与 Mock 观测已全部走 `probe` / `observe`；其余领域用例自有的单点探测与 web / tui 领域内共用 helper 不在本任务清单，口径见 [decisions.md](decisions.md) D-P2.1-013）。
+  **测试要求**：`make test ARGS="llm chat run"`。**已授权并执行**（17/17 全绿）。
 
-- [ ] **P2.1-011 通用支持归位与 import 收敛**
+- [x] **P2.1-011 通用支持归位与 import 收敛**（已完成）
 
   **目标**：通用支持平铺到 `src/util/`，用例只引 `crate::{util, mock}`。
   **前置依赖**：P2.1-009。
@@ -280,11 +282,12 @@
   2. 全部用例文件的 `crate::context` / `crate::server` / `crate::flow` / `crate::support` / `crate::frontend` 引用改为 `crate::util::*`。
   3. 回收可见性：`cases/mod.rs` 去掉不再必要的 `pub(crate)`。
   4. 复查 R1：`cases/` 下不存在可被两个以上用例复用的动作实现。
+  **实施结果**：七个模块按清单迁入，另按 D-P2.1-013 把 `observability.rs`（P2.1-003 新增、清单未列）一并迁入 `src/util/`；顶层只剩 `main` / `cli` / `runner` / `report` / `case`。全量 import 改为 `crate::{util, mock}`，`cases/mod.rs` 的 `chat` / `llm` / `run` 去掉 `pub(crate)`。
   **验收标准**：
-  - [ ] 目录结构符合 README §四，`cases/` 只剩用例。
-  - [ ] `cargo check -p bin-tests` 通过，无未使用 import。
-  - [ ] 无用例名变化、无新增依赖。
-  **测试要求**：`make test ARGS="llm chat run session tui web"`。**需授权**。
+  - [x] 目录结构符合 README §四，`cases/` 只剩用例。
+  - [x] `cargo check -p bin-tests` 通过，无未使用 import（`cargo clippy -p bin-tests` 无告警）。
+  - [x] 无用例名变化、无新增依赖（`Cargo.toml` 未改动）。
+  **测试要求**：`make test ARGS="llm chat run session tui web"`。**已授权并执行**（44/44 全绿，含 `web.ui` / `web.e2e`）。
 
 ---
 

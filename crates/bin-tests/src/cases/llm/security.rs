@@ -4,7 +4,7 @@
 //! canary 检索归端到端验收 Z-1（P2-032）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Context, ensure};
 use manager_agent::ProviderService;
 use types_core::config::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};

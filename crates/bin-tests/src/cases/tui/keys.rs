@@ -3,7 +3,7 @@
 
 use super::{STREAM_TIMEOUT, draft, offline, open, wait_run_cancelled};
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{bail, ensure};
 use lib_bin_cli::sdk::MessageRole;
 use lib_bin_tui::testing::{Focus, KeyCode, KeyModifiers, Phase};

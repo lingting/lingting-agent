@@ -5,7 +5,7 @@
 //! 没有环境变量覆盖）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::config::parse_llm;
 use types_core::config::agent::{DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS};

@@ -1,21 +1,15 @@
 //! `bin-tests`：lingting agent 端到端测试入口。
 //!
 //! 职责边界：只负责参数解析、运行时启动与退出码；用例选择、资源管理与并发调度在 `runner`，
-//! 服务端子进程在 `server`，运行期准备在 `prepare`，前端命令在 `frontend`，用例本身在 `cases`。
+//! 通用支持（服务端子进程、运行期准备、前端命令等）在 `util`，测试替身在 `mock`，用例本身在 `cases`。
 
 mod case;
 mod cases;
 mod cli;
-mod context;
-mod flow;
-mod frontend;
-mod observability;
-mod paths;
-mod prepare;
+mod mock;
 mod report;
 mod runner;
-mod server;
-mod support;
+mod util;
 
 use std::process::ExitCode;
 

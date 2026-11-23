@@ -3,7 +3,7 @@
 //! `prepare`（构建产物）、`web.ui` 与 `web.e2e` 用例共用这里的入口。
 //! 目录一律由 `paths::repo_root` 定位，不依赖测试进程的当前工作目录。
 
-use crate::paths;
+use crate::util::paths;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};

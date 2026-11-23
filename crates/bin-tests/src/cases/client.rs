@@ -4,7 +4,7 @@
 //! 第三条用隔离服务端的探针接口。
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Context, Result, ensure};
 use lib_bin_cli::client::{Client, ClientError};
 use lib_bin_cli::sdk::{ApiClient, ProbeQueryPO};
@@ -29,7 +29,7 @@ fn errors(context: &TestContext) -> CaseFuture<'_> {
         let mut notes = Vec::new();
 
         // 服务未启动：拿到可读的连接失败，而不是 panic 或空错误。
-        let port = crate::server::free_port()?;
+        let port = crate::util::server::free_port()?;
         let url = format!("http://127.0.0.1:{port}");
         let error = call(&url).await?;
         match error {

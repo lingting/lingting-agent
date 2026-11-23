@@ -14,7 +14,7 @@ mod stream;
 mod ui;
 
 use crate::case::{Case, CaseKind, Prep};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Context, Result};
 use framework_http::{HttpClient, HttpMethod, HttpRequest, HttpResponse};
 use lib_bin_cli::sdk::ApiError;

@@ -1,7 +1,7 @@
 //! `web.assets`：静态资源托管（首页、构建产物与缺失资源）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Result, bail, ensure};
 use framework_http::{HttpMethod, HttpRequest};
 

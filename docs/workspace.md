@@ -436,6 +436,8 @@ agent status
 - 以无终端驱动覆盖 TUI 界面：按键迁移、输入编辑、渲染定位、流式展示与退出时的取消，不进入 raw 模式。
 - 校验 SDK 生成器的导出行为：直接调用 `framework-proc-core` 的 `RustApiBuilder` / `TypescriptApiBuilder`，断言非法元数据（重名接口、重复 method+path）报错且合法输入幂等；不经过 `make gen` 的文件系统路径。
 
+源码结构（P2.1-011 / D-P2.1-013）：`cases/` 只放用例（注册 + 断言 + 该用例独有的数据构造）；`mock/<领域>/` 放测试替身（当前只有 `llm`：最小 HTTP/1.1 实现、场景、观测记录，以及请求侧 `probe` 与观测侧 `observe`）；`util/` 平铺与领域无关的通用支持（`context` / `server` / `flow` / `support` / `paths` / `prepare` / `frontend` / `observability`）。入口与调度框架 `main` / `cli` / `runner` / `report` / `case` 留在顶层。依赖方向为 `cases -> {util, mock}`、`mock -> util`，三者都不得依赖 `cases`；`util::server` 需要共享 Mock 实例时按 `util -> mock` 单向引用。
+
 边界：
 
 - **不得进程内启动服务端**：服务端一律以 `bin-agent server` 子进程运行，测试进程只作为客户端。

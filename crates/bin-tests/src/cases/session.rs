@@ -4,7 +4,7 @@
 //! `client/create` → `client/stream` → `occupancy/create` → `message/create` 的客户端编排。
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Context, bail, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
@@ -13,7 +13,7 @@ use lib_bin_cli::sdk::{
 };
 use std::time::Duration;
 
-use crate::flow::{journal_path, occupy, read_journal, register, release, run_event_of};
+use crate::util::flow::{journal_path, occupy, read_journal, register, release, run_event_of};
 
 /// 会话领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -502,7 +502,7 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
         // 事件文件是事实源：Run 落成已取消，文件以 server_shutdown 收尾（RT-003）。
         let path = journal_path(context, &session.id, &occupied.runtime_session_id);
         ensure!(
-            crate::support::wait_until(|| std::fs::read_to_string(&path)
+            crate::util::support::wait_until(|| std::fs::read_to_string(&path)
                 .ok()
                 .is_some_and(|text| text.contains("\"server_shutdown\"")))
             .await,
@@ -541,5 +541,5 @@ fn stream_terminal(context: &TestContext) -> CaseFuture<'_> {
 
 /// 轮询直到 Run 抵终态，返回是否正常完成。
 async fn wait_run_done(client: &lib_bin_cli::client::Client, run_id: &str) -> anyhow::Result<bool> {
-    Ok(crate::flow::wait_run(client, run_id).await?.status == RunStatus::Completed)
+    Ok(crate::util::flow::wait_run(client, run_id).await?.status == RunStatus::Completed)
 }

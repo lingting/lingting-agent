@@ -1,10 +1,10 @@
 //! 用例调度：共享资源、并发执行、超时、结果汇总与报告落盘。
 
 use crate::case::{Case, CaseKind};
-use crate::context::TestContext;
-use crate::prepare;
 use crate::report::{self, CaseReport, RunReport};
-use crate::server::{self, Server};
+use crate::util::context::TestContext;
+use crate::util::prepare;
+use crate::util::server::{self, Server};
 use anyhow::{Context, Result, anyhow};
 use futures_util::FutureExt;
 use lib_core::time;

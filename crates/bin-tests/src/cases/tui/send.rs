@@ -2,7 +2,7 @@
 
 use super::{STREAM_TIMEOUT, draft, open};
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::ensure;
 use lib_bin_tui::testing::{KeyCode, KeyModifiers, Phase};
 

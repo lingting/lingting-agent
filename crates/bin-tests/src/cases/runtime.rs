@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use agent_core::session::RunEventKind as ContractRunEventKind;
 use anyhow::{Context, ensure};
 use framework_http::{HttpClient, HttpRequest};
@@ -27,7 +27,7 @@ use types_core::runtime::ClientEventKind as ContractClientEventKind;
 use types_core::runtime::ClientUpdateKind as ContractClientUpdateKind;
 use types_core::runtime::OccupancyVO as ContractOccupancyVO;
 
-use crate::support::session_service;
+use crate::util::support::session_service;
 
 /// 运行时领域用例。
 pub(crate) fn cases() -> Vec<Case> {

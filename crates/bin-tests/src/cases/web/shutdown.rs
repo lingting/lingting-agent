@@ -1,7 +1,7 @@
 //! `web.shutdown`：关闭期间的新请求必须拿到可读的 503，而不是连接被静默丢弃（D-028）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{bail, ensure};
 use framework_http::{HttpMethod, HttpRequest};
 use lib_bin_cli::sdk::{PROBE_HEALTH, PROBE_SHUTDOWN};

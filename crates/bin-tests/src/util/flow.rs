@@ -7,24 +7,20 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use framework_http::{HttpClient, HttpRequest};
 use lib_bin_cli::client::{Client, ClientError, EventStream};
 use lib_bin_cli::sdk::{
     ApiClient, ClientCreatePO, ClientDeletePO, ClientEvent, ClientEventKind, ClientStreamParams, MessageSendPO,
     MessageSendVO, OccupancyCreatePO, OccupancyDeletePO, OccupancyVO, Run, RunEvent, RunEventKind, RunGetParams,
     RunStatus, SessionCreatePO, SessionSummary,
 };
-use serde_json::Value;
 use tokio::time::sleep;
 
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 
 /// 一次 Run 从发起到终态的上限：慢速分块场景也只在该量级内结束。
 pub(crate) const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// 轮询间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// 等 Mock 记录到连接中断的上限：Mock 在下一帧才探测到关闭。
-const ABORT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 注册一个客户端，返回 `clientId`。
 pub(crate) async fn register(context: &TestContext) -> Result<String> {
@@ -232,40 +228,6 @@ pub(crate) async fn wait_first_delta(stream: &mut EventStream, run_id: &str) -> 
         if delta {
             return Ok(events);
         }
-    }
-}
-
-/// 读 Mock LLM 的 JSON 端点（`/mock/last-request`、`/mock/stats`）。
-pub(crate) async fn get_json(url: &str) -> Result<Value> {
-    let client = HttpClient::new();
-    let response = client
-        .get(HttpRequest::new(url))
-        .await
-        .with_context(|| format!("GET {url} 失败"))?;
-    ensure!(response.status == 200, "GET {url} 应返回 200，实际 {}", response.status);
-    let body = response.string();
-    serde_json::from_str(&body).with_context(|| format!("GET {url} 的响应不是 JSON：{body}"))
-}
-
-/// 等 Mock 记录到一次连接中断（`streamsAborted`）。
-///
-/// Mock 只在写下一帧探测时才可能发现对端关闭，因此执行方 drop 模型流之后需要轮询一小会儿：
-/// 这是 O-1 的实测口径（P2-018：drop 流式响应确实关闭 TCP 连接）。
-pub(crate) async fn wait_aborted(base_url: &str) -> Result<u64> {
-    let url = format!("{}/mock/stats", base_url.trim_end_matches('/'));
-    let deadline = Instant::now() + ABORT_TIMEOUT;
-    loop {
-        let stats = get_json(&url).await?;
-        let aborted = stats["streamsAborted"].as_u64().unwrap_or_default();
-        if aborted >= 1 {
-            return Ok(aborted);
-        }
-        ensure!(
-            Instant::now() < deadline,
-            "Mock 在 {} 秒内未记录到连接中断",
-            ABORT_TIMEOUT.as_secs()
-        );
-        sleep(POLL_INTERVAL).await;
     }
 }
 

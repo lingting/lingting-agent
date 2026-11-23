@@ -4,7 +4,7 @@
 //! 内部用的是同一段校验逻辑，而写盘行为（内容一致不刷新 mtime）由 `make gen` 的日志体现。
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::ensure;
 use framework_proc_core::{
     ApiMetadata, ApiReturnType, RustApiBuilder, RustBuilder, TypescriptApiBuilder, TypescriptBuilder,

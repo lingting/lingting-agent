@@ -12,10 +12,10 @@ use lib_bin_cli::sdk::{ApiClient, MessageListParams, MessageRole, RunEventKind, 
 use serde_json::Value;
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::cases::llm::mock::MockServer;
-use crate::context::TestContext;
-use crate::flow::{self, Occupied};
-use crate::server::{self, config};
+use crate::mock::llm::{MockServer, observe};
+use crate::util::context::TestContext;
+use crate::util::flow::{self, Occupied};
+use crate::util::server::{self, config};
 
 /// 系统提示词内容：`AGENT_HOME/AGENTS.md` 写在用例目录里，每次组装现场读取（P2-020）。
 const SYSTEM_PROMPT: &str = "# 测试系统提示词\n\n始终用简体中文回答。";
@@ -93,7 +93,7 @@ async fn multiturn_body(context: &TestContext, mock: &MockServer) -> Result<Vec<
     }
 
     // 历史进入请求体：最后一条是本次输入，之前按 user/assistant 交替且不含系统提示词。
-    let messages = last_request_messages(mock).await?;
+    let messages = observe::last_request_messages(mock).await?;
     ensure!(
         messages.len() == 2 * ROUNDS - 1,
         "最后一次请求应有 {} 条消息，实际 {}",
@@ -179,7 +179,7 @@ async fn context_body(context: &TestContext, mock: &MockServer) -> Result<Vec<St
         prompts.push(content);
     }
 
-    let messages = last_request_messages(mock).await?;
+    let messages = observe::last_request_messages(mock).await?;
     ensure!(
         messages.len() == 2 * ROUNDS,
         "带系统提示词时应有 {} 条消息，实际 {}",
@@ -230,7 +230,7 @@ async fn truncate_body(context: &TestContext, mock: &MockServer) -> Result<Vec<S
         prompts.push(content);
     }
 
-    let messages = last_request_messages(mock).await?;
+    let messages = observe::last_request_messages(mock).await?;
     ensure!(
         messages.len() == 3,
         "条数上限为 2 时应保留两条历史 + 本次输入，实际 {} 条：{messages:?}",
@@ -250,16 +250,6 @@ async fn truncate_body(context: &TestContext, mock: &MockServer) -> Result<Vec<S
         format!("请求体：{} 条消息，最旧的历史已被裁掉", messages.len()),
         "本次输入与最近两条历史保留".to_string(),
     ])
-}
-
-/// 最后一次请求的 `messages` 数组。
-async fn last_request_messages(mock: &MockServer) -> Result<Vec<Value>> {
-    let request = flow::get_json(&mock.url("/mock/last-request")).await?;
-    request
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .context("last-request 应返回完整的 messages 数组")
 }
 
 /// 请求体里一条消息的角色。

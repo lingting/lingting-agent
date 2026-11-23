@@ -1,15 +1,15 @@
 //! 用例注册：新增领域时在这里汇总。
 
-pub(crate) mod chat;
+mod chat;
 mod client;
 mod disconnect;
 mod journal;
-pub(crate) mod llm;
+mod llm;
 mod occupancy;
 mod persist;
 mod probe;
 mod rotation;
-pub(crate) mod run;
+mod run;
 mod runtime;
 mod sdk;
 mod session;

@@ -58,10 +58,11 @@
 
 约定：
 
-- 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总；领域内用例变多时拆成 `cases/<领域>/` 子模块，由 `cases/<领域>.rs` 统一注册与放公共辅助。
+- 用例名为 `<领域>.<场景>`，放在 `crates/bin-tests/src/cases/<领域>.rs`，并在 `cases/mod.rs` 汇总；领域内用例变多时拆成 `cases/<领域>/` 子模块，由 `cases/<领域>.rs` 统一注册。
+- 目录职责（P2.1-011 / D-P2.1-013）：`cases/` 只放用例（注册 + 断言 + 该用例独有的输入数据构造）；被两个以上用例复用的动作（HTTP/SSE 探测、子进程、临时目录、轮询等待、流程编排）放 `util/*.rs`（通用支持平铺，入口与调度框架 `main` / `cli` / `runner` / `report` / `case` 留顶层）；测试替身按被替身领域放 `mock/<领域>/`（当前只有 `mock/llm`）。依赖方向为 `cases → {util, mock}`、`mock → util`，`runner` / `util` / `mock` 不得依赖 `cases`。历史残留：`cases/web/*` 等领域内的探测 helper 仍留在领域模块里，未外移（口径见 `.steps/p2.1/decisions.md` D-P2.1-013）。
 - 测试只写在 `bin-tests`：其他 crate 不写 `#[cfg(test)]` 单元测试，为测试提供的入口必须由 feature 隔离（如 `lib-bin-tui` 的 `testing`）且只在 `bin-tests` 启用。
 - 用例优先只通过生成的 SDK（`lib-bin-cli::client::Client`）访问服务端，不手写 API 定义。**例外**：`web.*` 里断言静态资源、SPA 回落与 CORS 预检这类不经过 SDK 的路径，用 workspace 内的 `framework-http` 直发原始请求；接口 path 仍复用生成的 `PROBE_HEALTH` / `PROBE_SHUTDOWN` / `CLIENT_STREAM` 常量，只有「本就不存在」的路径保留字面量（那正是断言目标）。
-- 前端用例分两层：`lingting-agent-ui/tests/*.test.ts(x)` 是 jsdom 单元用例（Transport、SSE 切帧、`useChat`、首屏渲染），`lingting-agent-ui/tests/e2e/*.spec.ts` 是 Playwright 端到端用例（真实浏览器 + 真实服务端）。前端命令由 `bin-tests` 的 `frontend` 模块执行，不在 `package.json` 里另设 `test` 脚本。
+- 前端用例分两层：`lingting-agent-ui/tests/*.test.ts(x)` 是 jsdom 单元用例（Transport、SSE 切帧、`useChat`、首屏渲染），`lingting-agent-ui/tests/e2e/*.spec.ts` 是 Playwright 端到端用例（真实浏览器 + 真实服务端）。前端命令由 `bin-tests` 的 `util::frontend` 模块执行，不在 `package.json` 里另设 `test` 脚本。
 - 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
 - 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。
 

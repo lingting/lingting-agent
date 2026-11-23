@@ -14,7 +14,7 @@ mod send;
 mod stream;
 
 use crate::case::Case;
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{Result, bail, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{ApiClient, RunGetParams, RunStatus};

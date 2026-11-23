@@ -1,6 +1,6 @@
 # P2.1：共享服务端并发根因修复与测试基础设施整理
 
-**状态：规划中（本版只定稿路线图；`tasks.md` / `acceptance.md` / `decisions.md` 在正式开工前展开）。**
+**状态：Batch A ~ C 已完成（2026-11-21 / 2026-11-22），Batch D ~ E 待开工。** 任务与批次见 [tasks.md](tasks.md)，判据见 §七，决策见 [decisions.md](decisions.md)，已知问题见 [known-issues.md](known-issues.md)。
 
 > 依据：P2 验收结论（[`docs/reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)）、[`known-issues.md`](known-issues.md) 的 K-1、`docs/develop.md` 的「测试」约定、`docs/workspace.md` 的 `bin-tests` 条目，以及仓库实际代码。凡文档与代码不一致之处，以代码为准并记入 `decisions.md`。
 > 任务与批次见 §六；判据见 §七；待确认项见 §九。
@@ -14,7 +14,7 @@
 | 目标 | 内容 | 结案证据 |
 |---|---|---|
 | **G-1** 结构性并发缺陷修复 | K-1 在 P2.1-001 的默认并发 3 次与 5 档加压实验下**均未复现**（[`docs/reports/p2.1-001-baseline.md`](../../docs/reports/p2.1-001-baseline.md)）。本目标改为按**结构性缺陷**处置：消除已确认的同步阻塞与全局串行点，并用指标基线把各自的量级讲清楚 | 每个结构缺陷有「修复前 / 修复后」指标对照（P2.1-002 / 003 的快照 + 测试报告）；修复不引入任何测试侧限流；默认并发连续 3 次全绿作为**回归**判据，不作为修复证据 |
-| **G-2** 用例与支持分离 | `cases/` 只放测试用例；Mock 与通用支持平铺到 `src/mock/` / `src/util/` | §四 的目录结构与 R1~R4 全部可核 |
+| **G-2** 用例与支持分离 | `cases/` 只放测试用例；Mock 与通用支持平铺到 `src/mock/` / `src/util/` | §四 的目录结构与 R1~R4 全部可核（**已完成**：Batch C，口径见 D-P2.1-013） |
 | **G-3** 并发配置可表达核数倍数 | `[agent] max_concurrent_runs` 支持 `"2C"` 这类写法，默认 `3C`，可被配置文件覆盖 | `resolve` 纯函数断言 + 显式 `4` 与默认 `3C` 两种配置下默认并发全绿（P2.1-015） |
 
 G-1 改并发行为与可观测性，G-2 只做模块位移，二者互不阻塞；G-2 必须在 G-1 的全量回归之前完成，避免归因混淆（见 §八 风险 5）。G-3 是并发配置的增强，**硬前置是 P2.1-013（默认并发全量回归通过）**：先证明结构修复没有破坏现有行为，才允许把默认值改成 `3C`，否则无法区分「结构修复生效」与「默认值变相放宽」。
@@ -135,6 +135,7 @@ crates/bin-tests/src/
 └── util/                ← 与领域无关的通用支持（平铺）
     ├── mod.rs / context.rs / server.rs / flow.rs
     ├── support.rs / paths.rs / prepare.rs / frontend.rs
+    └── observability.rs（P2.1-003 新增，按 D-P2.1-013 一并归位）
 ```
 
 ### 结构规则
@@ -199,7 +200,7 @@ crates/bin-tests/src/
 |---|---|---|---|
 | A | 量测与可观测性 | P2.1-001 ~ P2.1-003 | 有基线数据与指标快照：H-1 已量化（4.8s / 34s，人均 0.26s）、H-2 结构确认（并发水位 2、最长 15ms）、H-3 / H-4 留待 P2.1-008 复核（已完成） |
 | B | 结构性并发缺陷修复 | P2.1-004 ~ P2.1-008 | **已完成**：四处缺陷各有「修复前 / 修复后」指标对照（同步阻塞 4752ms → 0ms；并发水位只代表并行清理；锁持有最长 1ms、链最长 0ms；锁表 6 条 → 0 条）；H-3 复核结论为「许可与 journal 都不是瓶颈」 |
-| C | 测试基础设施整理 | P2.1-009 ~ P2.1-011 | `cases/` 只剩用例，结构规则可核 |
+| C | 测试基础设施整理 | P2.1-009 ~ P2.1-011 | **已完成**：`cases/` 只剩用例，`mock/llm/` 与 `util/` 各自归位，R1 ~ R4 可核；`llm chat run` 17/17、`llm chat run session tui web` 44/44 全绿 |
 | D | 回归与验收 | P2.1-012 ~ P2.1-013 | 默认并发全量全绿，判据有证据 |
 | E | 并发配置增强与验收 | P2.1-014 ~ P2.1-015 | `NC` 语法与 `3C` 默认值可核；显式 `4` 与默认 `3C` 两种配置下默认并发全绿；出阶段报告 |
 
@@ -237,9 +238,9 @@ C ────────┘
 
 ### Batch C：测试基础设施整理
 
-- [ ] **P2.1-009 Mock 迁出 `cases`**：`cases/llm/mock/{mod,http,handler,record,reply,scenario}.rs` → `src/mock/llm/`；`MockServer` 公开面不变；引用改为 `crate::mock::llm`。
-- [ ] **P2.1-010 `llm.mock` 瘦身与观测去重**：用例只留步骤与断言；请求构造 / SSE 读取汇总 → `mock/llm/probe.rs`；`/mock/stats`、`/mock/last-request` 读取与等待 → `mock/llm/observe.rs`；`util/flow.rs` 与 `cases/chat.rs` 的重复观测改为调用它；同时纠正模块文档中的用例名（应为 `run.*`）。
-- [ ] **P2.1-011 通用支持归位与 import 收敛**：`context` / `server` / `flow` / `support` / `paths` / `prepare` / `frontend` 迁入 `src/util/`；`cases/mod.rs` 去掉不再必要的 `pub(crate)`。
+- [x] **P2.1-009 Mock 迁出 `cases`**：`cases/llm/mock/{mod,http,handler,record,reply,scenario}.rs` → `src/mock/llm/`；`MockServer` 公开面不变；引用改为 `crate::mock::llm`。
+- [x] **P2.1-010 `llm.mock` 瘦身与观测去重**：用例只留步骤与断言；请求构造 / SSE 读取汇总 → `mock/llm/probe.rs`；`/mock/stats`、`/mock/last-request` 读取与等待 → `mock/llm/observe.rs`；`util/flow.rs` 与 `cases/chat.rs` 的重复观测改为调用它；同时纠正模块文档中的用例名（应为 `run.*`）。
+- [x] **P2.1-011 通用支持归位与 import 收敛**：`context` / `server` / `flow` / `support` / `paths` / `prepare` / `frontend` 迁入 `src/util/`；`cases/mod.rs` 去掉不再必要的 `pub(crate)`。
 
 ### Batch D：回归与验收（P2.1-012 ~ P2.1-013）
 
@@ -311,6 +312,7 @@ C ────────┘
 7. **共享服务端仍是单进程单库**：即使修好串行点，SQLite 单写者仍是天花板；本阶段只保证「18 条用例并发下不出现 20s / 45s 级饥饿」，不承诺更高并发。
 8. **默认值变更会放大上游并发**：`3C` 在本机 18 核时是 54；Mock 无压力，但真实 Provider 可能限流。P2.1-015 只改配置面，不承诺上游配额，报告里记录换算后的数值与风险。
 9. **配置语法兼容性**：`"2C"` 引入字符串值，旧配置的整数写法必须继续可用；共享服务端仍走「不写 `[agent]` → 默认值」，因此默认值一改就影响全部用例的并发度，必须单独回归。
+10. **`cases/` 仍有领域自有的探测与等待**：Batch C 只把 Mock 替身与通用支持移出 `cases/`（D-P2.1-013）。`cases/web/*` 的静态资源 / 预检探测、`cases/{occupancy,runtime,disconnect}.rs` 的单点 HTTP 断言，以及 `cases/{persist,run,probe}.rs` 的少量轮询循环仍在用例内——它们各自只服务一个用例（或一个领域内的用例族），本轮按「只做位移」未外移。因此 G-2-1 的「`cases/` 不出现 HTTP/SSE 探测」只在本批次清单范围内成立；若要完全满足，需要另开任务把领域探测 helper 也归入 `util/`。
 
 ---
 

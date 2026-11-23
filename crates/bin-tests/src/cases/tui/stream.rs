@@ -2,7 +2,7 @@
 
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH, STREAM_TIMEOUT, draft, open};
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::ensure;
 #[cfg(debug_assertions)]
 use lib_bin_cli::client::ClientError;

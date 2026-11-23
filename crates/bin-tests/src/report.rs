@@ -239,7 +239,7 @@ fn write_readme(directory: &Path, report: &RunReport<'_>, locations: &Locations)
         ));
     }
 
-    text.push_str(&crate::observability::section(report.started_at_ms));
+    text.push_str(&crate::util::observability::section(report.started_at_ms));
 
     write_file(directory.join("README.md"), text)
 }

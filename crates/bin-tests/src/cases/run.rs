@@ -20,11 +20,11 @@ use tokio::time::sleep;
 use types_core::runtime::OccupancyCreatePO;
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::cases::llm::mock::MockServer;
-use crate::context::TestContext;
-use crate::flow::{self, Occupied};
-use crate::server::{self, config};
-use crate::support::{runtime_state, session_service, temp_directory};
+use crate::mock::llm::{MockServer, observe};
+use crate::util::context::TestContext;
+use crate::util::flow::{self, Occupied};
+use crate::util::server::{self, config};
+use crate::util::support::{runtime_state, session_service, temp_directory};
 
 /// 一次失败路径对外的脱敏文案（与 `agent-route` 的 `public_message()` 逐字一致）。
 const AUTH_ERROR: &str = "调用模型失败：认证失败";
@@ -290,7 +290,7 @@ async fn cancel_body(context: &TestContext, mock: &MockServer) -> Result<Vec<Str
     );
 
     // O-1 的实测结论：drop 模型流即关闭底层连接，Mock 侧记录到一次中断。
-    let aborted = flow::wait_aborted(mock.base_url()).await?;
+    let aborted = observe::wait_aborted(mock).await?;
 
     talk.release(context).await?;
     Ok(vec![
@@ -357,7 +357,7 @@ async fn disconnect_body(context: &TestContext, mock: &MockServer) -> Result<Vec
         "断连不应重复追加终态事件"
     );
 
-    let aborted = flow::wait_aborted(mock.base_url()).await?;
+    let aborted = observe::wait_aborted(mock).await?;
 
     Ok(vec![
         format!("会话：{}，下行流已断开", session.id),

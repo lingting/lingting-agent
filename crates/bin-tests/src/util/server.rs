@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
 
-use crate::cases::llm::mock::MockServer;
-use crate::context::TestContext;
+use crate::mock::llm::MockServer;
+use crate::util::context::TestContext;
 
 /// 共享服务端固定端口（见 `docs/develop.md` 端口表）。
 pub const SHARED_PORT: u16 = 20104;
@@ -112,7 +112,7 @@ impl Server {
             .env(ENV_HOME, &log_dir)
             // 静态资源目录（`lingting-agent-ui/dist`）按服务端进程工作目录解析，固定到仓库根目录，
             // 否则从其他目录跑测试时 WebUI 会 503。
-            .current_dir(crate::paths::repo_root()?)
+            .current_dir(crate::util::paths::repo_root()?)
             .stdin(Stdio::null())
             .stdout(Stdio::from(output))
             .stderr(Stdio::from(errors))

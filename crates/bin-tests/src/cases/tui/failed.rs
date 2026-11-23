@@ -2,7 +2,7 @@
 
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH, STREAM_TIMEOUT, draft, open};
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::ensure;
 use lib_bin_cli::sdk::MessageRole;
 use lib_bin_tui::testing::{Harness, KeyCode, KeyModifiers, Phase};

@@ -12,9 +12,10 @@
 //!
 //! 场景见 [`scenario::Scenario`]，节奏参数用查询串 `chunk_ms` / `stall_ms` 控制。
 
-pub(crate) mod case;
 mod handler;
 mod http;
+pub(crate) mod observe;
+pub(crate) mod probe;
 mod record;
 mod reply;
 mod scenario;
@@ -25,6 +26,8 @@ use tokio::net::TcpListener;
 use tokio::task::{JoinHandle, JoinSet};
 
 use record::MockState;
+
+pub(crate) use reply::MODEL;
 
 /// 运行中的 Mock LLM Server：`Drop` 时停止监听并中断所有连接任务。
 pub(crate) struct MockServer {

@@ -1,7 +1,7 @@
 //! 探针接口用例：探活、回声、错误响应与关闭副作用。
 
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
+use crate::util::context::TestContext;
 use anyhow::{bail, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{ApiCallError, ApiClient, ProbeEchoPO, ProbeQueryPO};

@@ -13,8 +13,8 @@ use tokio::sync::mpsc;
 use types_core::runtime::{ClientCloseReason, OccupancyCreatePO, OccupancyVO};
 
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
-use crate::context::TestContext;
-use crate::support::{runtime_state, session_service, temp_directory, wait_until};
+use crate::util::context::TestContext;
+use crate::util::support::{runtime_state, session_service, temp_directory, wait_until};
 
 /// 事件领域用例。
 pub(crate) fn cases() -> Vec<Case> {

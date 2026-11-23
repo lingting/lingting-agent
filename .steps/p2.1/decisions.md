@@ -1,6 +1,6 @@
 # P2.1 技术决策记录
 
-**状态：Batch A 已定稿（2026-11-21），后续批次按需增补。** 本文件记录 P2.1 的阶段级决策。编号 `D-P2.1-xxx`；被否决与被修订的方案保留记录，不删除。
+**状态：Batch A 已定稿（2026-11-21），Batch B（D-P2.1-010 ~ 012）与 Batch C（D-P2.1-013）已按需增补；后续批次继续增补。** 本文件记录 P2.1 的阶段级决策。编号 `D-P2.1-xxx`；被否决与被修订的方案保留记录，不删除。
 
 任务分解见 [tasks.md](tasks.md)，判据见 [README.md](README.md) §七，阶段边界见 [README.md](README.md) §二。
 
@@ -150,3 +150,27 @@
 - **理由**：①会让依赖面先于结论铺开，后续若判定「不改」就留下无用的依赖边；③排除了 P2.1-008.2 可能需要的表级快照形态（`service-core` 侧持有 `ArcSwap<Vec<..>>`）与 §五 的通道表快照。
 - **判据**：`cargo tree -p <crate> | grep arc-swap` 只应出现在确实做了改造的 Crate 上；`lib-core` 保持「基础设施才用」的定位，不为业务缓存提供依赖转发。
 - **承接任务**：P2.1-008.1（本轮未引入）、P2.1-008.2（若采用表级快照）。
+
+---
+
+## D-P2.1-013 `bin-tests` 的目录边界：`cases` / `mock` / `util` 三层与 `observability` 归位
+
+- **状态**：`DECIDED`（2026-11-22）
+- **问题**：P2.1-011 的清单只列了 `context` / `server` / `flow` / `support` / `paths` / `prepare` / `frontend` 七个模块，但 `src/observability.rs`（P2.1-003 新增，只被 `report.rs` 引用）既不在清单也不在 README §四 的目录树里。它留顶层还是并入 `src/util/`？另外 README §四 的 R1 要求「被两个以上用例复用的动作一律外移」，与「本批次只做位移」的范围需要一条可核的边界。
+- **背景与证据**：Batch C 完成后 `crates/bin-tests/src/` 顶层只剩 `main` / `cli` / `runner` / `report` / `case`；`cases/` 下 27 个文件全部是用例注册与断言；`mock/llm/` 8 个文件、`util/` 9 个文件。`runner` / `util` / `mock` 内 `crate::cases` 出现次数为 0（R4 可核）。
+- **可选方案**：
+  1. 严格按清单只迁七个模块，`observability.rs` 留在顶层；
+  2. 按 R3「通用支持平铺 `src/util/*.rs`，入口与调度框架留顶层」把它一并迁入；
+  3. 把它并入 `report.rs`（唯一调用方）。
+- **决策**：②。
+  - `observability.rs` 渲染的是「测试报告里的一节观测数据」，属于通用支持而非入口 / 调度，迁入 `src/util/`；`report.rs` 改引 `crate::util::observability`。
+  - 顶层只保留入口与调度框架：`main` / `cli` / `runner` / `report` / `case`。
+- **理由**：①会让顶层长期留一个「既不是入口也不是调度」的模块，使 R3 无法逐条核对；③会把报告渲染与指标读取耦到一个文件里，且 `report.rs` 已经承担汇总与索引职责。
+- **边界口径（G-2-1 的适用范围）**：
+  - 本批次把 **Mock 替身与 Mock 观测**、以及 **通用支持** 移出 `cases/`：`cases/llm/mock.rs` 内的请求构造、SSE 读取、`/mock/*` 读取与等待全部走 `mock/llm/{probe,observe}`。
+  - 仍然留在 `cases/` 的是**领域自有**的探测与等待：`cases/web/*` 的静态资源 / 预检探测、`cases/{occupancy,runtime,disconnect}.rs` 的单点 HTTP 断言、`cases/{persist,run,probe}.rs` 的少量轮询循环。它们各自只服务一个用例（或一个领域内的用例族），按「只做位移、不改行为」本轮不外移。
+  - 因此 G-2-1「`cases/` 下不出现 HTTP/SSE 探测」这一判据**只在本批次清单范围内成立**；完全满足需要另开任务把领域探测 helper 归入 `util/`，届时须同步更新 README §四 的目录树与本项边界口径。
+- **约束**：
+  - `mock → util` 方向不引入：`probe` / `observe` 只依赖 `framework-http` 与自身模块，`util::server` 需要共享 `MockServer` 时按 `util → mock` 单向引用，避免模块级循环。
+  - 位移不改行为：断言、用例名、Mock 契约（4 个端点 / 7 种场景 / 节奏参数 / 观测字段）一律不动；`probe` / `observe` 的超时与轮询间隔沿用原实现。
+- **承接任务**：P2.1-009 / P2.1-010 / P2.1-011（均已完成）。

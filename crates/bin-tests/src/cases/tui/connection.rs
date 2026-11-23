@@ -3,8 +3,8 @@
 
 use super::{CONNECT_TIMEOUT, POLL_INTERVAL, RECONNECT_TIMEOUT, SCREEN_HEIGHT, SCREEN_WIDTH, STREAM_TIMEOUT, open};
 use crate::case::{Case, CaseFuture, CaseKind};
-use crate::context::TestContext;
-use crate::server;
+use crate::util::context::TestContext;
+use crate::util::server;
 use anyhow::ensure;
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{ApiClient, ClientDeletePO};

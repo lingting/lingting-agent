@@ -1,8 +1,8 @@
 //! `web.e2e`：真实浏览器端到端用例（Playwright）。
 
 use crate::case::CaseFuture;
-use crate::context::TestContext;
-use crate::frontend;
+use crate::util::context::TestContext;
+use crate::util::frontend;
 
 /// 用本用例的隔离服务端跑 Playwright：服务端地址经 `WEBUI_BASE_URL` 传给前端配置。
 ///
