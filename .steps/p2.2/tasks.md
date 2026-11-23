@@ -1,6 +1,6 @@
 # P2.2 任务清单
 
-**状态：全部任务未开始（仅规划）。** 阶段目标、边界、技术方案与判据见 [README.md](README.md)，决策见 [decisions.md](decisions.md)。
+**状态：Batch A（P2.2-001 ~ P2.2-004）与 Batch B（P2.2-005 ~ P2.2-007）已落地并按实测验收；Batch C 及之后未开始。** 阶段目标、边界、技术方案与判据见 [README.md](README.md)，决策见 [decisions.md](decisions.md)。Batch A / B 的证据为一次性实测（无新增用例代码），待 P2.2-016 汇总进阶段报告。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -16,7 +16,7 @@
 
 > 依赖：无。本批次只做「把内存里的数字变成结构化出口」，不改任何业务行为。B 批次依赖本批次的出口。
 
-- [ ] **P2.2-001 快照聚合 DTO 与序列化**
+- [x] **P2.2-001 快照聚合 DTO 与序列化**
 
   **目标**：让「一个进程的运行时指标」有一份完整、可序列化的快照，且子进程与测试进程读同一个类型。
   **前置依赖**：无。
@@ -27,12 +27,12 @@
   3. 在 `metrics` 特性下为快照与其子结构实现 `Serialize` / `Deserialize`（`serde` 已在工作区依赖内）；非 `metrics` 构建不引入序列化代价。
   4. 保留 `snapshot()` 的「纯内存读、不重置」语义。
   **验收标准**：
-  - [ ] 非 `metrics` 构建下 `metrics` 模块仍是空实现（无序列化、无额外依赖）；`cargo check -p manager-agent` 与 `cargo check -p bin-agent` 通过。
-  - [ ] `metrics` 构建下 `Snapshot` 可序列化成 JSON 再反序列化回等值结构（由 B 批次的用例读取链路间接证明）。
-  - [ ] `manager-agent` 的 `Cargo.toml` 不新增对 `agent-runtime` 的依赖边。
+  - [x] 非 `metrics` 构建下 `metrics` 模块仍是空实现（无序列化、无额外依赖）；`cargo check -p manager-agent` 与 `cargo check -p bin-agent` 通过。
+  - [x] `metrics` 构建下 `Snapshot` 可序列化成 JSON 再反序列化回等值结构（已直接用探针产出的 JSON 实测往返等值，不再依赖 B 批次的读取链路）。
+  - [x] `manager-agent` 的 `Cargo.toml` 不新增对 `agent-runtime` 的依赖边。
   **测试要求**：无（不写测试代码）。检查方式为 `cargo check` 与 `git diff`。
 
-- [ ] **P2.2-002 快照出口：debug + `metrics` 双限定的探针**
+- [x] **P2.2-002 快照出口：debug + `metrics` 双限定的探针**
 
   **目标**：让测试进程能从服务端子进程取到快照，不需要日志、不需要在进程内装配。
   **前置依赖**：P2.2-001。
@@ -43,12 +43,12 @@
   3. `lib-bin-web` 的 `run()` 在装配完成处（`manager_agent::install` 附近）用 `#[cfg(feature = "metrics")]` 注册 `agent_runtime::metrics::snapshot` 的转写函数。
   4. 确认 `make gen`（不带 `metrics` 特性）生成的 SDK 不包含该路径；接口清单只增这一条，且 release 不存在。
   **验收标准**：
-  - [ ] `make test` 构建下 `GET api/probe/metrics` 返回 JSON，含 P2.2-001 的 `limit` 段与既有各段。
-  - [ ] `make build` / `make release` 产物的路由表不含 `api/probe/metrics`（`--help` 之外的接口清单核对或一次 404 探测）。
-  - [ ] 无新增配置文件字段、无新增第三方依赖；`docs/api/probe.md` 的更新列入 P2.2-015，不在本任务内改。
+  - [x] `make test` 构建下 `GET api/probe/metrics` 返回 JSON，含 P2.2-001 的 `limit` 段与既有各段（实测 `limit` 非零：`queued=2` / `running_max=1`）。
+  - [x] `make build` / `make release` 产物的路由表不含 `api/probe/metrics`（实测：非 `metrics` 构建下该路径 404，同进程 `api/probe/health` 仍 200）。
+  - [x] 无新增配置文件字段、无新增第三方依赖；`docs/api/probe.md` 的更新列入 P2.2-015，不在本任务内改。
   **测试要求**：需要执行一次带 `metrics` 的服务端验证接口返回（**需授权**）。
 
-- [ ] **P2.2-003 审计计数：事件级别、敏感串与 panic**
+- [x] **P2.2-003 审计计数：事件级别、敏感串与 panic**
 
   **目标**：把「原来靠检索日志文本得到的三个事实」变成内存计数：日志事件数 / ERROR 数、敏感串（`[provider] api_key`）是否出现在任何日志事件里、进程内 panic 次数。
   **前置依赖**：P2.2-001（`audit` 段的落点）。
@@ -64,13 +64,13 @@
   5. `lib-db` 在 `metrics` 下累加 `database is locked` / `SQLITE_BUSY` 计数（`lib_db::observability` 增加 `errors` 段），由 `manager-agent` 转写。
   **技术要求**：审计层只在 `metrics` 构建存在；正式构建的 `init` 路径与现在逐字节等价（除 cfg 分支）；审计层不得改变事件的内容与去向。
   **验收标准**：
-  - [ ] `metrics` 构建下快照有 `audit.total` / `audit.error` / `audit.warn` / `audit.secret_hits` / `audit.panics` 与 `database.errors`。
-  - [ ] 故意让服务端打一条含 `api_key` 的日志（临时手工验证即可，**不得**提交为用例）时 `secret_hits` 增长：验证由人工执行，结论写进阶段报告。
-  - [ ] 非 `metrics` 构建下 `lib-core` 不编译审计代码，`make build` 通过；事件输出与改动前一致。
-  - [ ] 热路径不分配：字段比对用访问器实现，代码可核。
+  - [x] `metrics` 构建下快照有 `audit.total` / `audit.error` / `audit.warn` / `audit.secret_hits` / `audit.panics` 与 `database.errors`。
+  - [x] 故意让服务端打一条含 `api_key` 的日志（临时手工验证即可，**不得**提交为用例）时 `secret_hits` 增长：实测 `secret_hits` 0 → 1、`audit.warn` 0 → 1，注入代码已还原并重建确认为 0；结论写进阶段报告。
+  - [x] 非 `metrics` 构建下 `lib-core` 不编译审计代码，`make build` 通过；事件输出与改动前一致。
+  - [x] 热路径不分配：字段比对用访问器实现，代码可核。
   **测试要求**：无（不写测试代码）；人工验证一次计数增长（**需授权**执行）。
 
-- [ ] **P2.2-004 删除为采集而打的阈值日志**
+- [x] **P2.2-004 删除为采集而打的阈值日志**
 
   **目标**：把「用日志传递测试数据」的最后一环去掉——阈值日志删掉，内存计数留下。
   **前置依赖**：P2.2-003（计数已齐，才敢删日志）。
@@ -81,10 +81,10 @@
   3. `lib-db` 移除 `tracing` 需要在 `metrics` 特性下编译的注释与依赖声明，并同步 D-P2.1-009 的口径（在 `decisions.md` 里注明该依赖回退）。
   4. 全仓检索确认 `metrics` 特性下不再有「阈值 → 日志」分支。
   **验收标准**：
-  - [ ] 三处模块里不再出现阈值常量与采集型日志调用；`git diff` 可核。
-  - [ ] 运行期流程日志一条不少（对照改动前列出的清单）。
-  - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 通过（含 `--features metrics` 的目标）。
-  - [ ] 快照字段与 P2.2-001 一致，未因删日志而丢数据。
+  - [x] 三处模块里不再出现阈值常量与采集型日志调用；`git diff` 可核。
+  - [x] 运行期流程日志一条不少（实测日志仍含 `run_id` / `session_id` 的排队失败、Context 组装等流程事件）。
+  - [x] `cargo clippy --workspace --all-targets -- -D warnings` 通过（含 `--features metrics` 的目标）。
+  - [x] 快照字段与 P2.2-001 一致，未因删日志而丢数据。
   **测试要求**：无（不写测试代码）。
 
 ---
@@ -92,8 +92,10 @@
 ## Batch B：采集与报告收敛（P2.2-005 ~ P2.2-007）
 
 > 依赖：Batch A。本批次只改 `crates/bin-tests`：数据进来、报告出去，中间不经过日志。
+>
+> **进度**：三个任务已落地并按实测验收。`cargo fmt --check` 与 `cargo clippy --workspace --all-targets -- -D warnings` 通过；`make test ARGS="llm persist run"` 19 个用例全绿；`make test ARGS="--all"` 73 个用例全绿（报告 `target/tests/run-1795428485492-31504`）。自管用例里在用例内停掉服务端的三条 `persist.*` 与 `web.e2e`、以及触发优雅关闭的 5 条用例，其「运行数据」显式写「未采集：原因」。
 
-- [ ] **P2.2-005 快照采集入口**
+- [x] **P2.2-005 快照采集入口**
 
   **目标**：`bin-tests` 能用一份代码取到「本进程快照」与「子进程快照」，并区分「未采集」。
   **前置依赖**：P2.2-002（接口）、P2.2-001（DTO）。
@@ -104,12 +106,12 @@
   3. 明确两种来源的标注：`本进程（holder 装配）` 与 `子进程（<用例> 的服务端）`。
   4. 保留 `lib_bin_tui::testing::blocking_snapshot()` 一段（它是测试进程内存计数，不涉及日志）。
   **验收标准**：
-  - [ ] 隔离 / 自管用例执行完能拿到服务端快照；构建未开特性时得到「未采集：接口不存在（用 make test 构建）」。
-  - [ ] `util/observability.rs` 内不出现任何文件读取（`fs::read*`）。
-  - [ ] `cargo check -p bin-tests` 无未使用 import。
+  - [x] 隔离 / 自管用例执行完能拿到服务端快照（实测 `run.queue_timeout` 的「运行数据」有完整限流段）；构建未开特性时得到「未采集：接口不存在（用 make test 构建）」（实测非 `metrics` 的 `bin-agent` + `llm.config`）。
+  - [x] `util/observability.rs` 内不出现任何文件读取（`fs::read*`）。
+  - [x] `cargo check -p bin-tests` 无未使用 import。
   **测试要求**：需要跑一条 isolated 用例观察拿到快照（**需授权**）。
 
-- [ ] **P2.2-006 报告结构化：`CaseReport` 增加数据段**
+- [x] **P2.2-006 报告结构化：`CaseReport` 增加数据段**
 
   **目标**：每个用例的报告章节能承载「运行数据」，且与观测数据一节共用同一渲染器。
   **前置依赖**：P2.2-005。
@@ -120,12 +122,12 @@
   3. README 的统计与索引结构保持兼容（行号索引仍可算：新小节计入该用例的行数）。
   4. `runner` 在用例收尾阶段（服务端停止之前）取快照并填进 `CaseReport`。
   **验收标准**：
-  - [ ] 报告里每个用例章节都有「运行数据」（或显式「未采集」）；README 的行号索引仍指向正确位置。
-  - [ ] 观测数据的 Markdown 只有一处生成逻辑（`git diff` 可核）。
-  - [ ] 报告不新增「日志行数」「日志内容」类字段。
+  - [x] 报告里每个用例章节都有「运行数据」（或显式「未采集」）；README 的行号索引仍指向正确位置（实测 `--all` 73 个用例：73 个「运行数据」小节、9 个显式「未采集」、索引起始行均为 `## <用例名>`）。
+  - [x] 观测数据的 Markdown 只有一处生成逻辑（`git diff` 可核）。
+  - [x] 报告不新增「日志行数」「日志内容」类字段。
   **测试要求**：跑一条用例后人工读报告（**需授权**）。
 
-- [ ] **P2.2-007 四处日志断言的等价替换**
+- [x] **P2.2-007 四处日志断言的等价替换**
 
   **目标**：删掉用例对 `server.log` 的读取，换成快照字段断言，且断言的**力度不变**。
   **前置依赖**：P2.2-003（审计与 DB 计数）、P2.2-005（采集入口）。
@@ -137,10 +139,10 @@
   4. `start_with_level(…, "trace")` 的用途消失后，检查 `start_with_level` / `serve_once_level` 是否还有调用者；无调用者则删除（避免留下只为日志存在的入口）。
   5. 全仓检索 `server.log` / `logs` 目录读取：`crates/bin-tests` 内必须归零。
   **验收标准**：
-  - [ ] `crates/bin-tests` 中 `read_to_string` 与日志目录遍历只剩 0 处（`grep` 可核）。
-  - [ ] 四个断言点各有对应的快照字段，失败信息点名该字段。
-  - [ ] 用例名、断言语义与等待上限不变（除「数据来源」外零口径变化）。
-  - [ ] `llm.canary` / `persist.*` / `run.*` 三组用例通过（**需授权**）。
+  - [x] `crates/bin-tests` 中 `read_to_string` 与日志目录遍历只剩 0 处（`grep` 可核）。
+  - [x] 四个断言点各有对应的快照字段，失败信息点名该字段。
+  - [x] 用例名、断言语义与等待上限不变（除「数据来源」外零口径变化）。
+  - [x] `llm.canary` / `persist.*` / `run.*` 三组用例通过（**已授权**；19 个用例全绿，另跑 `--all` 73 个用例全绿）。
   **测试要求**：`make test ARGS="llm persist run"`（**需授权**）。
 
 ---

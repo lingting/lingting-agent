@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use lib_bin_cli::client::{ClientError, EventStream};
 use lib_bin_cli::sdk::{
     ApiClient, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole, MessageSendPO, OccupancyGetParams,
@@ -16,7 +16,7 @@ use lib_bin_cli::sdk::{
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::util::context::TestContext;
 use crate::util::flow::{self, occupy, register};
-use crate::util::server::Server;
+use crate::util::server::{Server, capture};
 /// 等待 Run 抵终态的上限：Mock 生产方按固定间隔吐增量，留足余量。
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（与 `manager-agent` 的 `HEAL_RUNNING` 逐字一致）。
@@ -136,16 +136,20 @@ async fn running_heal_body(context: &TestContext) -> Result<CaseOutcome> {
         again.finished_at_ms
     );
 
-    // 异常不留 RUNNING，且服务端日志无 panic 行（L-5）。
-    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
-    ensure!(!log.contains("panic"), "服务端日志出现 panic 行");
-    let log_lines = log.lines().count();
+    // 异常不留 RUNNING，且进程内无 panic（L-5）：由审计计数判定，不读日志文本。
+    let metrics = metrics_of(context).await?;
+    ensure!(
+        metrics.audit.panics == 0,
+        "服务端出现了 panic：audit.panics = {}（共 {} 条日志事件）",
+        metrics.audit.panics,
+        metrics.audit.total
+    );
 
     Ok(vec![
         format!("强杀前 Run 状态 {:?}，无结束时间", before.status),
         format!("重启后 Run 状态 {:?}，原因 {HEAL_RUNNING}", healed.status),
         "第二次重启后终态与结束时间保持不变，无助手消息".to_string(),
-        format!("服务端日志 {log_lines} 行，无 panic"),
+        "服务端 audit.panics = 0（panic 由进程内钩子计数，与日志级别无关）".to_string(),
     ])
 }
 
@@ -225,21 +229,23 @@ async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
     let summary = find_session(context, &session.id).await?;
     ensure!(summary.id == session.id, "第二次启动后会话应保留：{}", summary.id);
 
-    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
-    let errors: Vec<&str> = log
-        .lines()
-        .filter(|line| line.contains("ERROR") || line.contains("database is locked") || line.contains("SQLITE_BUSY"))
-        .collect();
+    // 第二次启动不应有 ERROR 级事件、也不应有写锁争用：两项都由进程内计数给出（P2.2-003）。
+    let metrics = metrics_of(context).await?;
     ensure!(
-        errors.is_empty(),
-        "第二次启动不应出现错误日志（{}）：{:?}",
-        errors.len(),
-        errors
+        metrics.audit.error == 0,
+        "第二次启动出现 ERROR 级日志事件：audit.error = {}（共 {} 条事件）",
+        metrics.audit.error,
+        metrics.audit.total
+    );
+    ensure!(
+        metrics.database.errors == 0,
+        "第二次启动出现数据库写锁争用：database.errors = {}",
+        metrics.database.errors
     );
 
     Ok(vec![
         "同一 data 目录连续启动两次：第二次成功且数据保留".to_string(),
-        format!("第二次启动日志无错误（已扫描 {} 行日志）", log.lines().count()),
+        "第二次启动 audit.error = 0、database.errors = 0（ERROR 级事件与写锁争用均为 0）".to_string(),
     ])
 }
 
@@ -351,6 +357,16 @@ async fn restarted(context: &TestContext, server: Server, port: u16) -> Result<S
         context.base_url()
     );
     Ok(server)
+}
+
+/// 取当前服务端的运行时快照；采集不到时直接让用例失败，断言不允许静默跳过（P2.2-005）。
+async fn metrics_of(context: &TestContext) -> Result<manager_agent::runtime::metrics::MetricsSnapshot> {
+    let snapshot = capture(context.base_url())
+        .await
+        .map_err(|reason| anyhow!("未采集服务端快照（{reason}），无法判定日志与数据库状态"))?;
+    // 服务端还活着时取到的这一份同时留给报告：入口在用例返回后已经取不到它了（P2.2-005）。
+    context.observe_metrics(Ok(snapshot));
+    Ok(snapshot)
 }
 
 /// 建会话。

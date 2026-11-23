@@ -1,10 +1,10 @@
 //! `llm.canary`：密钥不进日志、不进响应（Z-1、Z-2）。
 //!
 //! 与 `llm.security` 互补：那里查进程内可输出文本（`Debug` / `Display` / 错误文案），
-//! 这里用真实服务端 + 带 canary 的 `config.toml` 跑成功与失败两条路径，再检索
-//! 服务端日志文件与下行 / 查询响应。
+//! 这里用真实服务端 + 带 canary 的 `config.toml` 跑成功与失败两条路径：日志侧走写出侧的
+//! 审计计数（P2.2-003，命中即计数），响应侧检索下行与查询结果。全程不读日志文本。
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use lib_bin_cli::client::{ClientError, EventStream};
 use lib_bin_cli::sdk::{
     ApiClient, ClientStreamParams, MessageListParams, MessageSendPO, RunEventKind, RunGetParams, SessionCreatePO,
@@ -24,11 +24,13 @@ pub(super) fn canary(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move { canary_body(context).await })
 }
 
-/// 用例主体：带 canary 起服务端 → 成功一轮 → 失败一轮 → 检索日志与响应。
+/// 用例主体：带 canary 起服务端 → 成功一轮 → 失败一轮 → 核对审计计数与响应。
 async fn canary_body(context: &TestContext) -> Result<Vec<String>> {
     let mock = MockServer::start().await?;
     let port = context.port()?;
-    let _server = Server::start_with_level(
+    // `trace` 让审计层看到全部级别的事件（原来是为了检索日志文本）：密钥出现在任何一级日志
+    // 里都该命中计数，因此不降级别。
+    let server = Server::start_with_level(
         port,
         context.home().to_path_buf(),
         &canary_config(mock.base_url()),
@@ -87,31 +89,35 @@ async fn canary_body(context: &TestContext) -> Result<Vec<String>> {
         ensure!(!text.contains(CANARY), "{source} 的响应里出现了 canary 密钥");
     }
 
-    // 日志侧：服务端进程的 stdout / stderr 与落盘日志都不能带密钥。
-    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
-    ensure!(!log.contains(CANARY), "服务端日志里出现了 canary 密钥");
-    let log_files = server_log_files(context)?;
-    for (path, text) in &log_files {
-        ensure!(!text.contains(CANARY), "日志文件 {path} 里出现了 canary 密钥");
-    }
-    let scanned_lines: usize =
-        log.lines().count() + log_files.iter().map(|(_, text)| text.lines().count()).sum::<usize>();
+    // 日志侧：审计层在事件构造时比对已登记的密钥，命中即计数（P2.2-003）——不读日志文本。
+    // `audit.total > 0` 保留原证据「日志确实在产出」；`audit.secret_hits == 0` 才是「密钥没进日志」。
+    let metrics = server
+        .metrics()
+        .await
+        .map_err(|reason| anyhow!("未采集服务端快照（{reason}），无法判定密钥未进日志"))?;
     ensure!(
-        scanned_lines > 0,
-        "服务端日志为空（server.log 与 {} 个日志文件），无法判定 Z-1",
-        log_files.len()
+        metrics.audit.total > 0,
+        "服务端没有产出任何日志事件（audit.total = 0），无法判定密钥未进日志"
     );
-
+    ensure!(
+        metrics.audit.secret_hits == 0,
+        "服务端日志出现了 canary 密钥：audit.secret_hits = {}（共 {} 条事件）",
+        metrics.audit.secret_hits,
+        metrics.audit.total
+    );
     flow::release(context, &client_id).await?;
+
+    context.measure("audit.total", metrics.audit.total.to_string());
+    context.measure("audit.secret_hits", metrics.audit.secret_hits.to_string());
+    context.observe_metrics(Ok(metrics));
 
     Ok(vec![
         format!("成功路径：run_completed，正文 {} 字符", drained.content.chars().count()),
         format!("失败路径：run_failed（{:?}）", failed_drained.terminal.error),
         format!("响应检索：{} 处，均无 canary", rendered.len()),
         format!(
-            "日志检索：server.log（{} 行）+ {} 个日志文件，共 {scanned_lines} 行，均无 canary",
-            log.lines().count(),
-            log_files.len()
+            "日志审计：{} 条事件（trace 级），audit.secret_hits = 0",
+            metrics.audit.total
         ),
     ])
 }
@@ -169,24 +175,4 @@ async fn send(context: &TestContext, session_id: &str, content: &str) -> Result<
         .await
         .map_err(ClientError::from_call)
         .map_err(anyhow::Error::from)
-}
-
-/// 应用日志目录下的全部日志文件（`logs/` 与 `logs/archive/`）。
-fn server_log_files(context: &TestContext) -> Result<Vec<(String, String)>> {
-    let root = context.home().join("logs");
-    let mut files = Vec::new();
-    for directory in [root.clone(), root.join("archive")] {
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry?.path();
-            if path.extension().is_some_and(|extension| extension == "log") {
-                let text = std::fs::read_to_string(&path).unwrap_or_default();
-                files.push((path.display().to_string(), text));
-            }
-        }
-    }
-    ensure!(!files.is_empty(), "没有找到任何服务端日志文件，无法判定 Z-1");
-    Ok(files)
 }

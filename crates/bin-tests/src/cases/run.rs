@@ -10,7 +10,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use agent_core::session as domain;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
     ApiClient, MessageListParams, MessageRole, MessageSendPO, RunCancelPO, RunEventKind, RunStatus,
@@ -120,19 +120,9 @@ pub(crate) fn cases() -> Vec<Case> {
 
 /// 用共享 Mock 与追加配置起一次服务端：只需要 `[agent]` 参数、不需要 Mock 观测记录的用例走这里。
 async fn serve_with<T>(context: &TestContext, extra: &str, body: impl Future<Output = Result<T>>) -> Result<T> {
-    serve_with_level(context, extra, "warn", body).await
-}
-
-/// 同 [`serve_with`]，但指定服务端日志级别。
-async fn serve_with_level<T>(
-    context: &TestContext,
-    extra: &str,
-    level: &str,
-    body: impl Future<Output = Result<T>>,
-) -> Result<T> {
     let mock = server::shared_mock().await?;
     let text = config(mock.base_url(), extra);
-    server::serve_once_level(context, &text, level, body).await
+    server::serve_once(context, &text, body).await
 }
 
 /// 认证失败：`run_failed` + 脱敏文案，无助手消息。
@@ -436,7 +426,7 @@ async fn shutdown_body(context: &TestContext) -> Result<Vec<String>> {
 
 /// 全局并发上限：`max_concurrent_runs = 1` 时两个会话的 Run 不同时进入 `RUNNING`（P2-025）。
 fn concurrency(context: &TestContext) -> CaseFuture<'_> {
-    Box::pin(async move { serve_with_level(context, CONCURRENCY_EXTRA, "trace", concurrency_body(context)).await })
+    Box::pin(async move { serve_with(context, CONCURRENCY_EXTRA, concurrency_body(context)).await })
 }
 
 /// 并发用例主体：两个会话同时发慢速消息，采样两个 Run 的状态直到都抵终态。
@@ -504,23 +494,26 @@ async fn concurrency_body(context: &TestContext) -> Result<Vec<String>> {
     first.release(context).await?;
     second.release(context).await?;
 
-    // 并发写入不撞锁：运行期日志里不应出现锁竞争与 panic（S-7、L-5）。
-    let log = std::fs::read_to_string(context.home().join("server.log")).unwrap_or_default();
-    let conflicts: Vec<&str> = log
-        .lines()
-        .filter(|line| line.contains("database is locked") || line.contains("SQLITE_BUSY") || line.contains("panic"))
-        .collect();
+    // 并发写入不撞锁：写锁争用与 panic 都改由进程内计数给出（S-7、L-5），不读日志文本。
+    let metrics = server::capture(context.base_url())
+        .await
+        .map_err(|reason| anyhow!("未采集服务端快照（{reason}），无法判定并发期是否撞锁"))?;
     ensure!(
-        conflicts.is_empty(),
-        "并发运行期日志不应有锁竞争或 panic：{conflicts:?}"
+        metrics.database.errors == 0,
+        "并发运行期出现数据库写锁争用：database.errors = {}",
+        metrics.database.errors
     );
-    let log_lines = log.lines().count();
+    ensure!(
+        metrics.audit.panics == 0,
+        "并发运行期出现 panic：audit.panics = {}",
+        metrics.audit.panics
+    );
 
     Ok(vec![
         format!("采样 {samples} 次，同时 RUNNING 的最大值：{max_running}"),
         "两个 Run 都抵 Completed".to_string(),
         "配置：max_concurrent_runs = 1".to_string(),
-        format!("服务端日志 {log_lines} 行，无 database is locked / SQLITE_BUSY / panic"),
+        "服务端快照：database.errors = 0、audit.panics = 0".to_string(),
     ])
 }
 

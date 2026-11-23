@@ -4,6 +4,7 @@
 //! 与信号处理都是进程级单例，同进程起多个实例会互相干扰。
 
 use anyhow::{Context, Result, bail};
+use framework_http::{HttpClient, HttpRequest};
 use lib_bin_cli::client::Client;
 use lib_bin_cli::sdk::ApiClient;
 use lib_core::directorys::{CONFIG_FILE, ENV_HOME};
@@ -17,6 +18,7 @@ use tokio::time::sleep;
 
 use crate::mock::llm::MockServer;
 use crate::util::context::TestContext;
+use crate::util::observability::Capture;
 
 /// 共享服务端固定端口（见 `docs/develop.md` 端口表）。
 pub const SHARED_PORT: u16 = 20104;
@@ -26,6 +28,11 @@ const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// 子进程输出文件名。
 const LOG_FILE: &str = "server.log";
+/// 快照探针路径：只在 debug + `metrics` 构建注册（P2.2-002），`make gen` 不启用该特性，
+/// 因此它不在生成的 SDK 里，这里只能写字面量（与 `api/probe/shutdown` 同规格）。
+const METRICS_PATH: &str = "api/probe/metrics";
+/// 取快照的超时：探针是纯内存读，超时只用于避免服务端卡住时拖住用例。
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 服务端的 `config.toml` 模板：`[provider]` 指向内置 Mock LLM，`extra` 追加 `[agent]` 等段。
 ///
@@ -139,6 +146,13 @@ impl Server {
         &self.base_url
     }
 
+    /// 取一份运行时快照：**必须在停止之前**调用，进程一退就再也取不到（P2.2-005）。
+    ///
+    /// 拿不到时返回「未采集」的原因，由调用方决定是写进报告还是让断言失败。
+    pub async fn metrics(&self) -> Capture {
+        capture(&self.base_url).await
+    }
+
     /// 停止服务端并回收子进程。
     pub async fn stop(mut self) -> Result<()> {
         let _ = self.child.start_kill();
@@ -191,18 +205,10 @@ pub(crate) async fn serve_once<T>(
     config: &str,
     body: impl Future<Output = Result<T>>,
 ) -> Result<T> {
-    serve_once_level(context, config, "warn", body).await
-}
-
-/// 同 [`serve_once`]，但自定义服务端日志级别：需要检索日志内容的用例（S-7 / L-5）用 `trace`。
-pub(crate) async fn serve_once_level<T>(
-    context: &TestContext,
-    config: &str,
-    level: &str,
-    body: impl Future<Output = Result<T>>,
-) -> Result<T> {
-    let server = Server::start_with_level(context.port()?, context.home().to_path_buf(), config, level).await?;
+    let server = Server::start_with(context.port()?, context.home().to_path_buf(), config).await?;
     let result = body.await;
+    // 采集必须在停止之前：停止走 `start_kill`，进程一退就再也取不到快照（P2.2-005）。
+    context.observe_metrics(server.metrics().await);
     let stopped = server.stop().await;
     match (result, stopped) {
         (Ok(value), Ok(())) => Ok(value),
@@ -217,6 +223,37 @@ pub(crate) async fn serve_once_level<T>(
 pub fn free_port() -> Result<u16> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).context("申请空闲端口失败")?;
     Ok(listener.local_addr().context("读取空闲端口失败")?.port())
+}
+
+/// 从服务端取一份运行时快照（P2.2-005）：只在服务端存活时可用。
+///
+/// 返回「未采集」的原因而不是报错：接口不存在（普通构建 / release）、进程已退出、
+/// 响应无法解析都作为「未采集」的原因写进报告；要不要因此让用例失败由用例自己决定。
+pub(crate) async fn capture(base_url: &str) -> Capture {
+    let url = format!("{}/{METRICS_PATH}", base_url.trim_end_matches('/'));
+    let http = match HttpClient::with(|builder| builder.timeout(Some(CAPTURE_TIMEOUT))) {
+        Ok(http) => http,
+        Err(error) => return Err(format!("创建客户端失败：{error:#}")),
+    };
+    let response = match http.get(HttpRequest::new(url)).await {
+        Ok(response) => response,
+        Err(error) => return Err(format!("连接失败：{error:#}")),
+    };
+    if response.status == 404 {
+        return Err("接口不存在（用 `make test` 构建）".to_string());
+    }
+    if !response.is_success() {
+        return Err(format!("HTTP {}（服务端未就绪或正在关闭）", response.status));
+    }
+    // 响应体是框架的 `R<T>` 包装：载荷在 `data` 里。
+    let envelope = match serde_json::from_str::<serde_json::Value>(&response.string()) {
+        Ok(envelope) => envelope,
+        Err(error) => return Err(format!("响应不是 JSON：{error}")),
+    };
+    let Some(data) = envelope.get("data").filter(|data| !data.is_null()) else {
+        return Err("响应的 data 段为空".to_string());
+    };
+    serde_json::from_value(data.clone()).map_err(|error| format!("快照字段不匹配：{error}"))
 }
 
 /// 服务端二进制：默认与测试入口同目录，可用 `AGENT_TEST_SERVER_BIN` 覆盖。

@@ -26,6 +26,13 @@ pub fn temp_directory(name: &str) -> Result<PathBuf> {
     Ok(directory)
 }
 
+/// 本测试进程的运行时快照：`metrics` 特性下 `manager-agent` 的进程内累加值，直接读内存。
+///
+/// 只覆盖本进程装配的 holder；服务端子进程的数字由 [`crate::util::server::capture`] 取。
+pub fn local_metrics() -> manager_agent::runtime::metrics::MetricsSnapshot {
+    manager_agent::runtime::metrics::snapshot()
+}
+
 /// 轮询等待条件成立；超时返回 `false`，由调用方给出可读断言。
 pub async fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
     let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;

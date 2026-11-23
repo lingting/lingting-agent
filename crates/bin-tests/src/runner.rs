@@ -3,6 +3,7 @@
 use crate::case::{Case, CaseKind};
 use crate::report::{self, CaseReport, RunReport};
 use crate::util::context::TestContext;
+use crate::util::observability::{Capture, SOURCE_OWN, SOURCE_SHARED};
 use crate::util::prepare;
 use crate::util::server::{self, Server};
 use anyhow::{Context, Result, anyhow};
@@ -48,33 +49,50 @@ impl Summary {
 struct CaseRun {
     base_url: String,
     notes: Vec<String>,
+    measures: Vec<(String, String)>,
+    snapshot: Capture,
+    snapshot_source: &'static str,
     error: Option<anyhow::Error>,
 }
 
 impl CaseRun {
-    /// 成功结果。
-    fn success(base_url: String, notes: Vec<String>) -> Self {
+    /// 在跑到采集阶段之前就失败：快照显式记「未采集」，报告据此写原因。
+    fn failed(base_url: impl Into<String>, snapshot_source: &'static str, reason: &str, error: anyhow::Error) -> Self {
         Self {
-            base_url,
-            notes,
-            error: None,
-        }
-    }
-
-    /// 失败结果。
-    fn failure(base_url: String, error: anyhow::Error) -> Self {
-        Self {
-            base_url,
+            base_url: base_url.into(),
             notes: Vec::new(),
+            measures: Vec::new(),
+            snapshot: Err(reason.to_string()),
+            snapshot_source,
             error: Some(error),
         }
     }
 
-    /// 由用例返回值转换。
-    fn from_result(base_url: String, result: Result<Vec<String>>) -> Self {
+    /// 由执行结果、用例度量与已采集的快照合成结果：失败时保留已采集到的数据。
+    fn settle(
+        base_url: String,
+        snapshot_source: &'static str,
+        context: &TestContext,
+        snapshot: Capture,
+        result: Result<Vec<String>>,
+    ) -> Self {
         match result {
-            Ok(notes) => Self::success(base_url, notes),
-            Err(error) => Self::failure(base_url, error),
+            Ok(notes) => Self {
+                base_url,
+                notes,
+                measures: context.measures(),
+                snapshot,
+                snapshot_source,
+                error: None,
+            },
+            Err(error) => Self {
+                base_url,
+                notes: Vec::new(),
+                measures: context.measures(),
+                snapshot,
+                snapshot_source,
+                error: Some(error),
+            },
         }
     }
 }
@@ -90,14 +108,13 @@ pub async fn execute(config: Config) -> Result<Summary> {
     prepare::ensure(&config.cases).await?;
     let shared = start_shared(&config.cases, &run_dir).await?;
     let shared_base_url = shared.as_ref().map(|server| server.base_url().to_string());
-    let shared_context = match shared.as_ref() {
-        Some(server) => Some(Arc::new(TestContext::new(
-            "shared",
-            server.base_url().to_string(),
-            server.log_dir().to_path_buf(),
-        )?)),
-        None => None,
-    };
+    // 共享服务端只提供接入信息：每个用例建自己的上下文，度量条目与快照不跨用例混。
+    let shared_endpoint = shared.as_ref().map(|server| {
+        Arc::new(SharedEndpoint {
+            base_url: server.base_url().to_string(),
+            home: server.log_dir().to_path_buf(),
+        })
+    });
 
     let total = config.cases.len();
     let concurrency = config.concurrency;
@@ -106,11 +123,11 @@ pub async fn execute(config: Config) -> Result<Summary> {
 
     for case in config.cases {
         let permit = semaphore.clone().acquire_owned().await.context("获取并发许可失败")?;
-        let shared_context = shared_context.clone();
+        let shared_endpoint = shared_endpoint.clone();
         let run_dir = run_dir.clone();
         tasks.spawn(async move {
             let _permit = permit;
-            run_case(case, shared_context, run_dir).await
+            run_case(case, shared_endpoint, run_dir).await
         });
     }
 
@@ -145,17 +162,17 @@ pub async fn execute(config: Config) -> Result<Summary> {
     Ok(Summary { failed })
 }
 
-/// 执行单个用例：共享用例直接复用上下文，隔离用例自起服务端。
-async fn run_case(case: Case, shared: Option<Arc<TestContext>>, run_dir: PathBuf) -> CaseReport {
+/// 共享服务端的接入信息：每个用例据此建自己的上下文（度量与快照按用例隔离）。
+struct SharedEndpoint {
+    base_url: String,
+    home: PathBuf,
+}
+
+/// 执行单个用例：共享用例复用共享服务端、隔离用例自起服务端、自管用例自己启停。
+async fn run_case(case: Case, shared: Option<Arc<SharedEndpoint>>, run_dir: PathBuf) -> CaseReport {
     let started = Instant::now();
     let run = match case.kind {
-        CaseKind::Shared => match shared {
-            Some(context) => {
-                let base_url = context.base_url().to_string();
-                CaseRun::from_result(base_url, run_with_timeout(&case, &context).await)
-            }
-            None => CaseRun::failure("-".to_string(), anyhow!("共享服务端未启动")),
-        },
+        CaseKind::Shared => run_shared(case, shared).await,
         CaseKind::Isolated => run_isolated(case, &run_dir).await,
         CaseKind::SelfServed => run_self_served(case, &run_dir).await,
     };
@@ -166,9 +183,28 @@ async fn run_case(case: Case, shared: Option<Arc<TestContext>>, run_dir: PathBuf
         base_url: run.base_url,
         log_dir: case_dir(&run_dir, case),
         elapsed: started.elapsed(),
+        measures: run.measures,
+        snapshot: run.snapshot,
+        snapshot_source: run.snapshot_source,
         notes: run.notes,
         error: run.error.map(|error| format!("{error:#}")),
     }
+}
+
+/// 共享用例：只建上下文，服务端由入口统一启动与停止。
+async fn run_shared(case: Case, shared: Option<Arc<SharedEndpoint>>) -> CaseRun {
+    let Some(endpoint) = shared else {
+        return CaseRun::failed("-", SOURCE_SHARED, "共享服务端未启动", anyhow!("共享服务端未启动"));
+    };
+    let base_url = endpoint.base_url.clone();
+    let context = match TestContext::new(case.name, base_url.clone(), endpoint.home.clone()) {
+        Ok(context) => context,
+        Err(error) => return CaseRun::failed(base_url, SOURCE_SHARED, "上下文创建失败", error),
+    };
+
+    let result = run_with_timeout(&case, &context).await;
+    let snapshot = snapshot_of(&base_url, &context).await;
+    CaseRun::settle(base_url, SOURCE_SHARED, &context, snapshot, result)
 }
 
 /// 隔离用例：启动独立服务端，执行完后无论成败都停止。
@@ -176,15 +212,17 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
     let log_dir = run_dir.join(case.name);
     let port = match server::free_port() {
         Ok(port) => port,
-        Err(error) => return CaseRun::failure("-".to_string(), error),
+        Err(error) => return CaseRun::failed("-", SOURCE_OWN, "服务端未启动", error),
     };
     let base_url = format!("http://127.0.0.1:{port}");
 
     let server = match Server::start(port, log_dir.clone()).await {
         Ok(server) => server,
         Err(error) => {
-            return CaseRun::failure(
+            return CaseRun::failed(
                 base_url,
+                SOURCE_OWN,
+                "服务端未就绪",
                 error.context(format!("启动隔离服务端失败（用例 {}）", case.name)),
             );
         }
@@ -193,18 +231,15 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
         Ok(context) => context,
         Err(error) => {
             let _ = server.stop().await;
-            return CaseRun::failure(base_url, error);
+            return CaseRun::failed(base_url, SOURCE_OWN, "上下文创建失败", error);
         }
     };
 
     let result = run_with_timeout(&case, &context).await;
+    // 采集必须在停止之前：停止走 `start_kill`，进程一退就再也取不到快照（P2.2-005）。
+    let snapshot = server.metrics().await;
     let stopped = server.stop().await;
-    let result = match (result, stopped) {
-        (Ok(notes), Ok(())) => Ok(notes),
-        (Ok(_), Err(error)) => Err(error),
-        (Err(error), _) => Err(error),
-    };
-    CaseRun::from_result(base_url, result)
+    CaseRun::settle(base_url, SOURCE_OWN, &context, snapshot, join(result, stopped))
 }
 
 /// 自管用例：只准备上下文（基地址与 `AGENT_HOME`），服务端由用例自己启停。
@@ -214,22 +249,45 @@ async fn run_isolated(case: Case, run_dir: &Path) -> CaseRun {
 async fn run_self_served(case: Case, run_dir: &Path) -> CaseRun {
     let log_dir = run_dir.join(case.name);
     if let Err(error) = std::fs::create_dir_all(&log_dir) {
-        return CaseRun::failure(
-            "-".to_string(),
+        return CaseRun::failed(
+            "-",
+            SOURCE_OWN,
+            "用例目录创建失败",
             anyhow!("创建用例目录失败（{}）：{error}", log_dir.display()),
         );
     }
     let port = match server::free_port() {
         Ok(port) => port,
-        Err(error) => return CaseRun::failure("-".to_string(), error),
+        Err(error) => return CaseRun::failed("-", SOURCE_OWN, "服务端未启动", error),
     };
     let base_url = format!("http://127.0.0.1:{port}");
     let context = match TestContext::new(case.name, base_url.clone(), log_dir) {
         Ok(context) => context,
-        Err(error) => return CaseRun::failure(base_url, error),
+        Err(error) => return CaseRun::failed(base_url, SOURCE_OWN, "上下文创建失败", error),
     };
-    CaseRun::from_result(base_url.clone(), run_with_timeout(&case, &context).await)
+
+    let result = run_with_timeout(&case, &context).await;
+    let snapshot = snapshot_of(&base_url, &context).await;
+    CaseRun::settle(base_url, SOURCE_OWN, &context, snapshot, result)
 }
+
+/// 服务端快照：先直接取；服务端已在用例内停掉时，退回用例在停止前记录的那一份。
+async fn snapshot_of(base_url: &str, context: &TestContext) -> Capture {
+    match server::capture(base_url).await {
+        Ok(metrics) => Ok(metrics),
+        Err(reason) => context.observed_metrics().unwrap_or(Err(reason)),
+    }
+}
+
+/// 合并「用例结果」与「停止服务端结果」：任一方失败都算用例失败。
+fn join(result: Result<Vec<String>>, stopped: Result<()>) -> Result<Vec<String>> {
+    match (result, stopped) {
+        (Ok(notes), Ok(())) => Ok(notes),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), _) => Err(error),
+    }
+}
+
 /// 带超时与 panic 兜底执行用例；panic 不让整个测试进程退出。
 async fn run_with_timeout(case: &Case, context: &TestContext) -> Result<Vec<String>> {
     let run = AssertUnwindSafe((case.run)(context)).catch_unwind();

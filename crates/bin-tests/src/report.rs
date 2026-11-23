@@ -4,6 +4,7 @@
 //! README 的索引给出行号范围，领域文档顶部也有同样的行号索引，便于按行读取具体结果。
 
 use crate::case::CaseKind;
+use crate::util::observability::{self, Capture};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -24,6 +25,12 @@ pub struct CaseReport {
     pub elapsed: Duration,
     /// 用例返回的结果信息。
     pub notes: Vec<String>,
+    /// 用例自报的度量条目（项 / 值），如压力用例的 `T` / `L0` / `N`。
+    pub measures: Vec<(String, String)>,
+    /// 用例服务端的运行时快照；`Err` 是「未采集」的原因。
+    pub snapshot: Capture,
+    /// 快照来源标注：共享服务端 / 用例自己的服务端。
+    pub snapshot_source: &'static str,
     /// 失败原因（已格式化为错误链文本）。
     pub error: Option<String>,
 }
@@ -193,6 +200,10 @@ fn section_lines(case: &CaseReport) -> Vec<String> {
         }
     }
 
+    lines.push(String::new());
+    let data = observability::case_section(case.snapshot_source, &case.snapshot, &case.measures);
+    lines.extend(data.lines().map(ToString::to_string));
+
     if let Some(error) = &case.error {
         lines.push(String::new());
         lines.push("### 失败原因".to_string());
@@ -239,7 +250,7 @@ fn write_readme(directory: &Path, report: &RunReport<'_>, locations: &Locations)
         ));
     }
 
-    text.push_str(&crate::util::observability::section(report.started_at_ms));
+    text.push_str(&observability::section(report.started_at_ms));
 
     write_file(directory.join("README.md"), text)
 }
