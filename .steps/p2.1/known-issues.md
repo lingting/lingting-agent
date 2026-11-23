@@ -86,3 +86,17 @@
 - 回收只在 `Arc::strong_count == 1` 时发生，调用点固定在「撤回占用登记之后」（会话锁已释放），失败只记 `debug`。
 - 同一会话取锁仍唯一：`runtime.occupancy` / `runtime.handler` 通过，`--all` 73/73 通过。
 - 证据：`docs/reports/p2.1-007-lock-reclaim.md`。
+
+---
+
+## K-3 `runtime.disconnect` 的终态事件断言与后台收尾竞态
+
+- **状态**：已结案（2026-11-22，P2.1 Batch D）——用例在断言前等终态事件出现，产品侧语义不回退
+- **发现**：2026-11-22，P2.1-013 的默认并发首轮全量（`run-1795405722172-12620`）
+- **现象**：`runtime.disconnect`（shared，81ms）报「客户端主动断开：应有一条终态事件，实际 1 条」，同一轮其余 72 条全绿；随后两轮同一用例分别 110ms / 108ms 通过。
+- **根因**：P2.1-006 把 `RuntimeSession::stop` 移到后台任务（`stop_session_in_background`），断连清理链返回时终态事件不再保证已落盘（`docs/reports/p2.1-006-finalize-out-of-lock.md` 第三节已把这点写成可观察变化），该任务当时只同步改了 `cases/journal.rs` 的两处断言，「先等事件出现」的口径没有覆盖 `cases/disconnect.rs`——它在清理链完成后立即 `read_events` 并断言条数为 2。
+- **证据**：该轮事件文件（`lingting-agent-tests/units/assembly-1795405722705/events/`）事后 5 条夹具全是 2 行且都带 `run_cancelled`（`error` 为固定文本「客户端连接已断开」）；终态事件时间为起手事件之后 15 / 27 / 28 / 45 / 64ms，落在用例读取之后，是毫秒级窗口，不是丢失。
+- **影响**：仅测试用例：窗口很窄，只在默认并发的高负载轮次里偶发撞到，会让「默认并发连续全绿」的回归判据随机变红，且红灯文案（「实际 1 条」）容易被误读成产品漏写终态事件。
+- **处置**：`crates/bin-tests/src/cases/disconnect.rs` 在断言条数前加 `wait_until(|| read_events(&fixture.path()).len() == 2)`（超时报「{label}：终态事件应在超时内落盘」），断言内容与文案不变。口径见 `decisions.md` D-P2.1-014。
+- **验收口径**：「终态事件在清理链返回后异步落盘」的所有断言点都必须先等待再断言；`runtime.disconnect` / `runtime.journal` 与 `--all` 连续三轮全绿。
+- **证据报告**：`docs/reports/p2.1-013-default-concurrency.md`。
