@@ -105,19 +105,27 @@ impl ToolExecutor {
 
     /// 执行一次调用。
     pub async fn execute(&self, call: ToolCall, cancel: &CancellationToken) -> ExecOutcome {
+        self.execute_of(call, cancel, false).await
+    }
+
+    /// 执行一次调用；`approved` 为真时把 `confirm` 权限当成已批准（挂起恢复专用，D-P3-023）。
+    ///
+    /// 只有「需确认」这一档被放行：`deny` 仍然拒绝，参数校验、超时、取消与归一化的顺序不变。
+    pub(crate) async fn execute_of(&self, call: ToolCall, cancel: &CancellationToken, approved: bool) -> ExecOutcome {
         // ① 查找：未注册与「模型凭空构造的名字」都归到这里。
         let Some(tool) = self.registry.lookup(&call.tool_name) else {
             return self.denied(&call, ToolFileAccess::None);
         };
-        // ② 权限：拒绝的工具不执行，需确认的工具交回 Loop 挂起。
+        // ② 权限：拒绝的工具不执行，需确认的工具交回 Loop 挂起（已批准的不再拦）。
         match self.registry.policy().permission_of(&call.tool_name, tool.risk()) {
             ToolPermission::Allow => {}
             ToolPermission::Deny => return self.denied(&call, tool.file_access()),
-            ToolPermission::Confirm => {
+            ToolPermission::Confirm if !approved => {
                 return ExecOutcome::ConfirmRequired {
                     record: ToolCallRecord::pending(&call, tool.file_access()),
                 };
             }
+            ToolPermission::Confirm => {}
         }
         // ③④ 执行：参数校验在工具内部（`schema::parse`），超时与取消在这里并列等待。
         let outcome = self.run(call, tool.as_ref(), cancel).await;

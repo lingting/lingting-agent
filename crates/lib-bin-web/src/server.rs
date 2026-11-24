@@ -37,11 +37,14 @@ async fn run(host: &str, port: u16, options: AssemblyOptions) -> Result<()> {
     let state = manager_agent::assemble(options).await?;
     // 执行端口（P2-022 / D-P2-028 第 3 条）：由启动装配构造并注入。未注入的进程
     // （`api_probe_server`、部分进程内用例）里 Run 会直接落 FAILED「执行器未装配」。
+    // 工具注册表与执行参数同样出自装配结果（P3-014）：注册表在装配期建一次，运行期只读。
     let driver = agent_runtime::AgentRuntime::new(
         Arc::clone(state.session()),
         state.provider().clone(),
         state.agent().clone(),
         state.home(),
+        Arc::clone(state.tools()),
+        state.tool_limits(),
     );
     if !state.runtime().install_driver(Arc::new(driver)) {
         tracing::warn!("执行端口已注入，跳过重复注入");

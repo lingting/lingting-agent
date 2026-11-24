@@ -10,6 +10,7 @@ use std::time::Duration;
 use agent_context::ContextBuilder;
 use agent_route::rig::OpenAiProvider;
 use agent_route::{LlmProvider, ProviderService};
+use agent_tool::{ToolExecutor, ToolLimits, ToolRegistry};
 use async_trait::async_trait;
 use service_core::session::{RunDriver, RunInput, RunOutcome, SessionService};
 use tokio::sync::Semaphore;
@@ -17,7 +18,7 @@ use types_core::config::AgentConfig;
 
 use crate::loop_;
 
-/// 执行端口实现：会话业务 + Provider 配置 + Context 组装 + 全局并发上限。
+/// 执行端口实现：会话业务 + Provider 配置 + Context 组装 + 工具执行 + 全局并发上限。
 pub struct AgentRuntime {
     /// 会话业务服务：读历史、落终态都经它（`service-core` 的 Repository 不对外）。
     pub(crate) service: Arc<SessionService>,
@@ -27,10 +28,14 @@ pub struct AgentRuntime {
     pub(crate) llm: Option<Arc<dyn LlmProvider>>,
     /// Context 组装器：系统提示词来自 `home` 下的 `AGENTS.md`。
     pub(crate) builder: ContextBuilder,
-    /// `[agent]` 运行参数：Context 预算、排队超时与模型流空闲超时。
+    /// `[agent]` 运行参数：Context 预算、排队超时、轮次上限与模型流空闲超时。
     pub(crate) agent: AgentConfig,
     /// 全局并发上限：许可随 Run 结束释放（P2-025）。
     pub(crate) limit: Arc<Semaphore>,
+    /// 工具注册表：模型可见清单与执行期查找的唯一入口（P3-004）。
+    pub(crate) tools: Arc<ToolRegistry>,
+    /// 工具执行器：校验 → 权限 → 超时 → 取消 → 归一化（P3-006 / P3-007）。
+    pub(crate) executor: ToolExecutor,
 }
 
 impl AgentRuntime {
@@ -39,12 +44,18 @@ impl AgentRuntime {
     /// Provider 适配器在这里一次性构造：共享 reqwest 连接池，空闲超时取
     /// `agent.llm_idle_timeout_ms`（P2-016）。未配置 Provider 时留空，`drive` 再按
     /// `LlmError::Unconfigured` 的文案落 `FAILED`。
+    ///
+    /// 工具注册表与执行参数同样来自装配（P3-014）：注册表在装配期建一次，本函数只读它，
+    /// 并用同一个 `home` 与 `limits` 构造执行器（工具的路径白名单基准与截断上限都在这里）。
     pub fn new(
         service: Arc<SessionService>,
         provider: ProviderService,
         agent: AgentConfig,
         home: impl Into<PathBuf>,
+        tools: Arc<ToolRegistry>,
+        limits: ToolLimits,
     ) -> Self {
+        let home = home.into();
         let idle_timeout = Some(Duration::from_millis(agent.llm_idle_timeout_ms));
         let llm: Option<Arc<dyn LlmProvider>> = provider
             .provider()
@@ -54,6 +65,7 @@ impl AgentRuntime {
         let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
         let permits = agent.max_concurrent_runs.resolve(cores);
         let limit = Arc::new(Semaphore::new(permits));
+        let executor = ToolExecutor::new(Arc::clone(&tools), limits, home.clone());
         Self {
             service,
             provider,
@@ -61,6 +73,8 @@ impl AgentRuntime {
             builder: ContextBuilder::new(home),
             agent,
             limit,
+            tools,
+            executor,
         }
     }
 }

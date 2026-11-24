@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agent_route::ProviderService;
+use agent_tool::{ToolLimits, ToolPermission, ToolPolicy, ToolRegistry};
 use anyhow::{Context, Result};
 use lib_core::time;
 use lib_db::{DATABASE_FILE, Database, DbConfig};
 use service_core::repository::Repository;
 use service_core::session::SessionService;
-use types_core::config::{AgentConfig, ProviderConfig};
+use types_core::config::{AgentConfig, ProviderConfig, ToolConfig, ToolPermissionKind};
 
 use crate::holder::AgentHolder;
 use crate::runtime::{JournalConfig, RuntimeState};
@@ -33,6 +34,8 @@ pub struct AssemblyOptions {
     pub provider: Option<ProviderConfig>,
     /// Agent 运行参数；由启动方从 `config.toml` 解析后透传。
     pub agent: AgentConfig,
+    /// 工具执行参数与权限（`[tools]`）；由启动方从 `config.toml` 解析后透传（P3-005）。
+    pub tools: ToolConfig,
     /// 数据库连接参数。
     pub database: DbConfig,
     /// 应用根目录；`None` 时按应用目录推导（用例传自己的临时目录）。
@@ -95,5 +98,44 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
             directory_root(&directories)
         }
     };
-    Ok(AgentHolder::new(session, runtime, provider, options.agent, home))
+    let (tools, tool_limits) = build_tools(&options.tools);
+    Ok(AgentHolder::new(
+        session,
+        runtime,
+        provider,
+        options.agent,
+        home,
+        tools,
+        tool_limits,
+    ))
+}
+
+/// 按 `[tools]` 建注册表与执行参数：权限判定表、并发/超时上限，然后注册内置工具。
+///
+/// 内置工具在 P3-021 ~ P3-025 落地后由 `agent_tool::builtin` 提供注册入口；在此之前注册表
+/// 为空，`model_definitions()` 也就返回空清单，请求里不带 `tools`（P3-004 第 6 条）。
+fn build_tools(config: &ToolConfig) -> (Arc<ToolRegistry>, ToolLimits) {
+    let policy = ToolPolicy::new(
+        config
+            .permissions
+            .iter()
+            .map(|(name, kind)| (name.clone(), permission_of(*kind))),
+    );
+    let registry = Arc::new(ToolRegistry::new(policy));
+    let limits = ToolLimits {
+        timeout_ms: config.timeout_ms,
+        max_result_chars: config.max_result_chars,
+        max_parallel_calls: config.max_parallel_calls,
+        max_retries: config.max_retries,
+    };
+    (registry, limits)
+}
+
+/// 配置侧的权限取值 → 工具层的判定值：两处枚举刻意分开，配置类型不进 `agent-tool`。
+fn permission_of(kind: ToolPermissionKind) -> ToolPermission {
+    match kind {
+        ToolPermissionKind::Allow => ToolPermission::Allow,
+        ToolPermissionKind::Deny => ToolPermission::Deny,
+        ToolPermissionKind::Confirm => ToolPermission::Confirm,
+    }
 }

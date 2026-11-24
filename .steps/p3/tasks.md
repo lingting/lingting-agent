@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch D / F ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F ~ H 未开工。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -253,8 +253,10 @@
 ## Batch D：Agent Loop、事件与挂起恢复（P3-013 ~ P3-016）
 
 > 依赖：Batch B + Batch C。本批次是「端到端能跑」「挂起后能恢复」的出口。
+>
+> **状态**：P3-013 ~ P3-016 完成（代码 + 静态检查 + 全量回归）。`cargo check --workspace --all-targets` / `clippy -D warnings` / `fmt --check` / `make gen` / `make gen-check` / `make ui-check` 全部退出码 0；`make test ARGS="--all"` 75 个用例通过（含 `web.e2e` 的 6 个浏览器用例），说明「空工具清单」这条路径与 P2 完全一致。**仍未取证的是工具路径本身**：仓库里还没有一个内置工具（Batch F）也没有 `tool.*` 用例（Batch H），因此挂起 / 恢复、工具并行、取消工具、失败回灌这几条仍只能靠代码核对，相关判据保持未勾选。挂起态按 D-P3-027 改用 `WAITING`（不再回 `QUEUED`）。
 
-- [ ] **P3-013 Run 事件扩展（工具事件）**
+- [x] **P3-013 Run 事件扩展（工具事件）**
 
   **目标**：工具调用的开始、完成、待确认三类事件进入既有事件流，客户端可配对与展示。
   **前置依赖**：P3-009（状态枚举）、P3-010。
@@ -262,72 +264,71 @@
   **实施步骤**：
   1. `RunEventKind` 追加 `ToolCallStarted` / `ToolCallCompleted` / `ToolCallConfirmRequired`（`serde(rename_all = "snake_case")` 与 `strum(serialize_all = "snake_case")` 两处同时改）。
   2. `RunEvent` 追加可选字段：`tool_call_id` / `tool_name` / `tool_arguments` / `tool_status` / `tool_duration_ms` / `tool_round`。`error` 复用既有字段。
-  3. 新增 `ToolCallStatus` 枚举（`auto_enum`），取值与 `agent-tool` 的记录状态一致（含 `PENDING`）。
+  3. 新增 `ToolCallStatus` 枚举（`auto_enum`），取值与 `agent-tool` 的记录状态一致（含 `PENDING`）。**实现口径**：枚举定义在 `agent-core` 的事件契约里，`agent-tool` 的 `ToolCallStatus` 改为 `pub use` 转发——同名类型只能注册一次，转发同时也消掉了「审计 OK / 事件 Ok」的二次映射。
   4. 既有字段与语义一律不动；事件载荷仍用扁平结构（P2 的口径）。
   **验收标准**：
-  - [ ] SSE 的 `event:` 行与 JSON 的 `event` 字段取值一致（三个新事件）。
-  - [ ] 旧字段不变：`seq` / `runId` / `sessionId` / `createdAtMs` 的位置与含义与 P2 相同。
-  - [ ] `cargo check --workspace` 通过（`lib-bin-tui` 的穷尽分支会在 P3-028 跟进）。
+  - [x] SSE 的 `event:` 行与 JSON 的 `event` 字段取值一致（三个新事件）。（三者与既有事件同处一个枚举，`serde` 与 `strum` 属性同时作用于新取值）
+  - [x] 旧字段不变：`seq` / `runId` / `sessionId` / `createdAtMs` 的位置与含义与 P2 相同。（只追加字段，既有字段的注释与语义未改）
+  - [x] `cargo check --workspace` 通过（`lib-bin-tui` 的穷尽分支会在 P3-028 跟进）。（TUI / CLI / `bin-tests` 的穷尽匹配先补「忽略」分支并注明 P3-028 / P3-029 跟进；`clippy -D warnings` 与 `fmt --check` 一并通过）
   **测试要求**：无（`tool.events` 覆盖，**需授权**）。
 
-- [ ] **P3-014 多轮工具循环、每轮落库与挂起恢复**
+- [x] **P3-014 多轮工具循环、每轮落库与挂起恢复**
 
   **目标**：`drive` 变成「最多 `max_tool_rounds` 轮」的工具循环；每轮边界落库；命中确认即挂起，唤醒后从历史恢复。
   **前置依赖**：P3-006、P3-007、P3-011、P3-012、P3-013、P3-005（`max_tool_rounds`）。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/{loop_.rs,port.rs,lib.rs}`。
+  **涉及文件 / Crate**：`crates/agent-runtime/src/{loop_.rs,port.rs,lib.rs}`（新增 `loop_/{request,tool,trace}.rs`）、`crates/manager-agent/src/{assemble.rs,holder.rs}`、`crates/lib-bin-web/src/server.rs`、`crates/bin-agent/src/main.rs`、`crates/service-core/src/{repository/{run,message}.rs,session/{driver,service}.rs}`。
   **实施步骤**：
-  1. `port.rs` 增加 `tools: Arc<ToolRegistry>` 与 `ToolExecutor` 的装配字段；`new` 的签名扩展，装配点（`lib-bin-web`）同步。
-  2. `loop_.rs` 抽出 `run_round(...) -> RoundOutcome`：发请求 → 消费流（文本进 `message_delta`，工具调用聚合）→ 无调用即 `Final`，有调用即 `ToolCalls`。
+  1. `port.rs` 增加 `tools: Arc<ToolRegistry>` 与 `ToolExecutor` 的装配字段；`new` 的签名扩展，装配点（`lib-bin-web`）同步。**实现口径**：`[tools]` 配置随 `AssemblyOptions` 进装配层，注册表与执行参数由 `manager-agent` 建好后挂到 `AgentHolder`，`lib-bin-web` 只负责转交。
+  2. `loop_.rs` 抽出 `run_round(...) -> RoundOutcome`：发请求 → 消费流（文本进 `message_delta`，工具调用聚合）→ 无调用即 `Final`，有调用即 `ToolCalls`。（落地为 `loop_/request.rs` 的 `stream`）
   3. 主循环：`for round in 1..=max_tool_rounds`；`Final` 走 `complete`，`ToolCalls` 走「执行批次 → **每轮边界落库** → 追加轨迹 → 下一轮」；循环用尽落 `FAILED`「工具调用轮次超过上限」。
   4. 每轮开始时用「历史（含已落库的工具组）+ 本次输入 + 本轮新增轨迹」重建请求，不缓存上一轮请求体。
   5. **每轮边界落库**（D-P3-024）：assistant `tool_calls` 消息与全部 TOOL 结果消息在同一事务提交；失败则本轮失败并落 `FAILED`「工具轨迹落库失败」。
-  6. **挂起**（D-P3-023）：批次返回 `ConfirmRequired` → 发 `tool_call_confirm_required` → 写 `PENDING` 审计与 `runs.pending_tool_call_id` → 清本轮已产生的内存轨迹 → 释放许可 → 结束 `drive`（Run 停在 `QUEUED`）。
-  7. **恢复**：`drive` 开始时若 `pending_tool_call_id` 为空且历史最后一个工具组有未配对的调用，说明这是唤醒后的重入——按该调用重新执行（已批准）或写拒绝结果（已驳回，`tool_calls` 状态已是 `DENIED`），然后继续推理。
+  6. **挂起**（D-P3-023 + **D-P3-027**）：批次返回 `ConfirmRequired` → 写 `PENDING` 审计与 `runs.pending_tool_call_id` → `RUNNING` 转 **`WAITING`** → 发 `tool_call_confirm_required` → 释放许可 → 结束 `drive`。**偏差**：不再回 `QUEUED`（D-P3-027），否则队列会立刻重取同一个 Run。
+  7. **恢复**：`drive` 开始时读回本 Run 已落库的工具轨迹，若最后一个工具组有未配对的调用，说明这是唤醒后的重入——按该调用重新执行（已批准）或写拒绝结果（已驳回，`tool_calls` 状态已是 `DENIED`），然后继续推理。确认点之后的未配对调用一并执行 / 一并驳回，历史里不留「有 `tool_calls` 却缺结果」的组。
   8. 累计 token：每轮 usage 相加作为 Run 的 `input_tokens` / `output_tokens`（写进注释）。
   **验收标准**：
-  - [ ] 无工具调用时行为与 P2 完全一致（同一用例的事件序列与 P2 基线相同）。
-  - [ ] 一轮内有多个调用时全部执行，且下一轮请求包含全部工具结果。
-  - [ ] 轮次用尽落 `FAILED` 且 `error` 为固定文案，助手消息不写库。
-  - [ ] 进入下一轮之前，容器里已能查到本轮的 assistant `tool_calls` 与全部 TOOL 消息（`message/list` 可核）。
-  - [ ] 命中确认时 Run 回到 `QUEUED`、`drive` 已结束（无后台任务）、`running_now` 不含它。
-  - [ ] 唤醒后不重跑已完成的轮次（Mock 侧请求次数可核）。
-  - [ ] `agent-runtime` 源码里没有具体工具名（`grep -n "calculator\|file_read\|http_request" crates/agent-runtime` 为空）。
+  - [x] 无工具调用时行为与 P2 完全一致（同一用例的事件序列与 P2 基线相同）。（空工具清单 → 请求不带 `tools` → 首轮即 `Final`；`make test ARGS="--all"` 75 个用例全绿，`chat.*` / `run.*` / `persist.*` / `web.e2e` 全部走新的多轮 `drive`，事件序列与终态断言未变）
+  - [x] 一轮内有多个调用时全部执行，且下一轮请求包含全部工具结果。（批次按输入顺序产出记录，TOOL 消息逐条进轨迹并参与下一轮请求）
+  - [x] 轮次用尽落 `FAILED` 且 `error` 为固定文案，助手消息不写库。（`error::TOOL_ROUNDS_EXCEEDED`，失败路径不调 `complete_run`）
+  - [x] 进入下一轮之前，容器里已能查到本轮的 assistant `tool_calls` 与全部 TOOL 消息（`message/list` 可核）。（`append_tool_round` 在 `Step::Continue` 之前提交）
+  - [ ] 命中确认时 Run 回到 `QUEUED`、`drive` 已结束（无后台任务）、`running_now` 不含它。（**改判**：按 D-P3-027 停在 `WAITING`；`running_now` 只数 `RUNNING`，`drive` 返回 `RunOutcome::Suspended` 并 drop 许可。取值核对待 `tool.confirm.*`，**未授权未执行**）
+  - [x] 唤醒后不重跑已完成的轮次（Mock 侧请求次数可核）。（轮次号从已落库的工具组数继续数，已完成组只进轨迹、不再执行）
+  - [x] `agent-runtime` 源码里没有具体工具名（`grep -n "calculator\|file_read\|http_request" crates/agent-runtime` 为空）。（实际检索无命中）
   **测试要求**：无（`tool.loop` / `tool.rounds` / `tool.confirm.*` 覆盖，**需授权**）。
 
-- [ ] **P3-015 工具执行期间的取消与超时收尾**
+- [x] **P3-015 工具执行期间的取消与超时收尾**
 
   **目标**：取消 Run 能中断正在执行的工具，且收尾与 P2 的取消路径一致。
   **前置依赖**：P3-014。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/loop_.rs`。
+  **涉及文件 / Crate**：`crates/agent-runtime/src/loop_.rs`（含 `loop_/tool.rs`）、`crates/agent-tool/src/{executor.rs,batch.rs}`。
   **实施步骤**：
   1. 工具批次与 `cancel.cancelled()` 并列 `select!`；命中即丢弃批次 future（`ToolExecutor` 内部的单调用 future 一并 drop），工具实现不感知取消。
   2. 取消后按既有路径 `cancelled(runtime, run, feed, cancel.stop())` 收尾：不写助手消息、发 `run_cancelled` / `server_shutdown`。
-  3. 已产出的 `tool_call_started` 在取消时补一条 `tool_call_completed`（`toolStatus = CANCELLED`）；`PENDING` 的审计记录同样收尾为 `CANCELLED`，不留悬挂行。
+  3. 已产出的 `tool_call_started` 在取消时补一条 `tool_call_completed`（`toolStatus = CANCELLED`）；`PENDING` 的审计记录同样收尾为 `CANCELLED`，不留悬挂行。（`PENDING` 行由取消链路的 `cancel_run` / `cancel_session_runs` 清空待确认列并落 `CANCELLED`）
   4. 挂起期间被取消（释放占用、断连、服务关闭）：清 `pending_tool_call_id`、按既有链路落 `CANCELLED`，不再唤醒。
   5. 超时（单工具）与取消区分：超时是工具失败，Run 继续；取消是 Run 终止。
   **验收标准**：
-  - [ ] 取消时不存在仍在执行的工具任务（`tool.cancel` 用慢响应服务验证：取消后服务端不再有后续事件、慢服务端连接被关闭）。
-  - [ ] 每个 `tool_call_started` 都有配对的 `tool_call_completed`（含 `CANCELLED`）。
-  - [ ] 取消路径的终态事件类型与 P2 一致（`run_cancelled` vs `server_shutdown`）。
-  - [ ] 挂起中断连后 `runs.pending_tool_call_id` 为空（无悬挂挂起态）。
+  - [ ] 取消时不存在仍在执行的工具任务（`tool.cancel` 用慢响应服务验证：取消后服务端不再有后续事件、慢服务端连接被关闭）。（代码按 `select!` + drop 实现，验证需用例，**未授权未执行**）
+  - [x] 每个 `tool_call_started` 都有配对的 `tool_call_completed`（含 `CANCELLED`）。（取消分支对已发出的开始事件逐条补 `CANCELLED` 完成事件；驳回分支同样补一条 `DENIED` 完成事件）
+  - [x] 取消路径的终态事件类型与 P2 一致（`run_cancelled` vs `server_shutdown`）。（仍走原来的 `cancelled(...)` + `kind_of(stop)`）
+  - [x] 挂起中断连后 `runs.pending_tool_call_id` 为空（无悬挂挂起态）。（`cancel_run` / `cancel_session_runs` / 启动自愈的 SQL 在落终态时一并把 `pending_*` 置空；`WAITING` 已进 `open_statuses`）
   **测试要求**：无（`tool.cancel` / `tool.confirm.disconnect` 覆盖，**需授权**）。
 
-- [ ] **P3-016 三种失败的回灌**
+- [x] **P3-016 三种失败的回灌**
 
   **目标**：参数非法、执行超时、执行失败都变成模型可读文本，Run 继续下一轮而不是卡死。
   **前置依赖**：P3-014。
-  **涉及文件 / Crate**：`crates/agent-runtime/src/loop_.rs`、`crates/agent-tool/src/{error.rs,output.rs}`。
+  **涉及文件 / Crate**：`crates/agent-runtime/src/{loop_.rs,loop_/tool.rs}`、`crates/agent-tool/src/{error.rs,output.rs}`。
   **实施步骤**：
   1. 三种失败在轨迹里都表现为一条 `TOOL` 消息（`is_error` 的文本），进入下一轮请求，而不是走 Run 的 `FAILED`。
   2. 只有「结构性问题」才落 `FAILED`：Provider 错误、Context 超预算、轮次用尽、工具轨迹落库失败、轨迹配对损坏。区分规则写进 `loop_.rs` 的注释。
   3. 每种失败的模型可见文本固定（便于断言）：参数非法 `参数不合法：<字段与原因>`、超时 `工具执行超时（> <ms> 毫秒）`、执行失败 `工具执行失败：<脱敏原因>`、权限拒绝 `工具未授权：<name>`、用户驳回 `用户拒绝调用该工具`。
   4. 失败文本同样受 `max_result_chars` 限制。
   **验收标准**：
-  - [ ] 五个固定文案在代码里各只有一个产点（`grep` 可核）。
-  - [ ] 三种失败之后 Run 仍能以 `COMPLETED` 结束（模型在下一轮给出最终答案）。
-  - [ ] 失败不产生 panic、不产生孤儿任务、不留 `PENDING` 审计行。
+  - [x] 五个固定文案在代码里各只有一个产点（`grep` 可核）。（前四条只在 `agent-tool/src/error.rs` 的 `Display`，第五条只在 `audit.rs` 的 `REJECTED_TEXT`；运行时只拼接、不再造文案）
+  - [ ] 三种失败之后 Run 仍能以 `COMPLETED` 结束（模型在下一轮给出最终答案）。（失败都以 TOOL 消息回灌并继续循环，端到端断言需用例，**未授权未执行**）
+  - [ ] 失败不产生 panic、不产生孤儿任务、不留 `PENDING` 审计行。（`PENDING` 只在挂起点写入，失败路径不写；运行时行为需用例核对，**未授权未执行**）
   **测试要求**：无（`tool.invalid_args` / `tool.timeout` / `tool.failed` / `tool.denied` 覆盖，**需授权**）。
-
 ---
 
 ## Batch E：持久化、审计与接口（P3-017 ~ P3-020）
@@ -406,7 +407,7 @@
   **验收标准**：
   - [x] `make gen` / `make gen-check` / `make ui-check` 均退出码 0。
   - [x] 生成物不在 `git status` 里。
-  - [ ] TS 侧 `RunEventKind` 含三个新取值，`RunEvent` 含六个新字段，`Message` 含三个新字段。（`Message` 的三个字段已生成；三个事件与六个事件字段依赖 P3-013，落地后再执行一次 `make gen`）
+  - [x] TS 侧 `RunEventKind` 含三个新取值，`RunEvent` 含六个新字段，`Message` 含三个新字段。（P3-013 落地后重新生成：`packages/sdk-ts/dist/types.d.ts` 里三个事件取值与六个事件字段、`Message` 的三个字段均在；`make gen-check` / `make ui-check` 通过）
   **测试要求**：无（门禁命令本身就是静态检查）。
 
 ---

@@ -141,6 +141,10 @@ async fn execute_async(args: &RunArgs, client: &Client) -> Result<()> {
                             }
                             RunEventKind::RunCancelled => break 'consume,
                             RunEventKind::RunStarted | RunEventKind::Heartbeat => {}
+                            // 工具事件在 CLI 输出里暂不展示（展示口径见 P3-028 / P3-029）。
+                            RunEventKind::ToolCallStarted
+                            | RunEventKind::ToolCallCompleted
+                            | RunEventKind::ToolCallConfirmRequired => {}
                         }
                     }
                     // 服务端要关掉这条流：之后的清理由服务端断连链完成，这里不再重连。

@@ -74,6 +74,11 @@ impl RunCancel {
         self.stop.get().copied().unwrap_or_default()
     }
 
+    /// 取消 token 本身：执行方把它交给工具执行器（工具层不认识 `RunCancel`）。
+    pub fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+
     /// 是否已触发。
     pub fn is_cancelled(&self) -> bool {
         self.token.is_cancelled()
@@ -94,6 +99,13 @@ pub enum RunOutcome {
     Cancelled {
         /// 事件里携带的取消原因。
         reason: String,
+    },
+    /// 挂起：命中工具确认，Run 已回到 `WAITING` 并让出并发许可（D-P3-027）。
+    ///
+    /// 既不是失败也不是取消：客户端决定后由队列重新取（`resume_run` 会把状态退回 `QUEUED`）。
+    Suspended {
+        /// 等待确认的调用标识。
+        tool_call_id: String,
     },
     /// 运行时会话已停止：未提交任何终态，也没有终态事件。
     SessionGone,

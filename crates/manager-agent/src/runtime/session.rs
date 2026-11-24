@@ -338,6 +338,12 @@ fn terminal_event(run_id: &str, session_id: &str, reason: SessionStop) -> RunEve
         error: Some(error.to_string()),
         input_tokens: None,
         output_tokens: None,
+        tool_call_id: None,
+        tool_name: None,
+        tool_arguments: None,
+        tool_status: None,
+        tool_duration_ms: None,
+        tool_round: None,
     }
 }
 

@@ -197,6 +197,20 @@ impl SessionService {
             .map_err(internal)
     }
 
+    /// 本次 Run 已落库的工具轨迹：挂起唤醒后重建「本 Run 发生过什么」（D-P3-023）。
+    ///
+    /// 只取本次 Run 的 assistant `tool_calls` 与 TOOL 结果，按 `seq` 升序；普通历史仍由
+    /// [`Self::history_before_run`] 提供，两者拼起来就是恢复时的完整 Context 来源。
+    pub async fn tool_trace_of_run(&self, session_id: &str, run_id: &str) -> Result<Vec<Message>, SessionError> {
+        // 同 `next_queued_run`：跨 await 持有 `&str` 会让 `Send` 推导失败（D-P2-033）。
+        let session_id = session_id.to_string();
+        let run_id = run_id.to_string();
+        self.repository
+            .tool_trace_of_run(&session_id, &run_id)
+            .await
+            .map_err(internal)
+    }
+
     /// 写一条工具调用的审计记录：`Pending` 是挂起时的插入，其余状态是收尾覆盖（P3-018）。
     ///
     /// `PENDING` 插入失败必须让本轮失败——它是挂起的事实源；终态覆盖失败只记日志，
@@ -340,8 +354,10 @@ impl SessionService {
 }
 
 /// Run 是否处于未结束状态（可取消、可执行）。
+///
+/// `WAITING`（等工具确认）也是未结束：它没有终态，只是暂时不排队（D-P3-027）。
 pub fn is_open(status: RunStatus) -> bool {
-    matches!(status, RunStatus::Queued | RunStatus::Running)
+    matches!(status, RunStatus::Queued | RunStatus::Running | RunStatus::Waiting)
 }
 
 /// 「已终态不可取消」的统一文案：与 P1 的 Mock 行为逐字一致。

@@ -25,6 +25,9 @@ pub enum RunStatus {
     Queued,
     /// 执行中。
     Running,
+    /// 等待工具确认：`pending_tool_call_id` 指明在等哪一次调用，不占全局并发许可，
+    /// 也不阻塞同会话后续 Run（D-P3-027）。
+    Waiting,
     /// 正常结束。
     Completed,
     /// 已取消。

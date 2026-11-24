@@ -44,9 +44,21 @@ impl BatchOutcome {
 
 impl ToolExecutor {
     /// 执行一轮内的全部调用。
-    pub async fn execute_batch(&self, mut calls: Vec<ToolCall>, cancel: &CancellationToken) -> BatchOutcome {
+    pub async fn execute_batch(&self, calls: Vec<ToolCall>, cancel: &CancellationToken) -> BatchOutcome {
+        self.execute_batch_of(calls, cancel, false).await
+    }
+
+    /// 执行一轮内的全部调用；`approved` 为真时把 `confirm` 权限当成已批准（只用于挂起恢复，
+    /// 批准只对这一次调用有效，D-P3-023）。`deny` 与其余顺序不变。
+    pub async fn execute_batch_of(
+        &self,
+        mut calls: Vec<ToolCall>,
+        cancel: &CancellationToken,
+        approved: bool,
+    ) -> BatchOutcome {
         // 确认点可以提前识别（权限判定是纯计算）：先截掉它后面的调用，它们不应该被启动。
-        if let Some(index) = self.confirm_index(&calls) {
+        // 已批准的批次没有确认点，因此不截断。
+        if !approved && let Some(index) = self.confirm_index(&calls) {
             calls.truncate(index + 1);
         }
 
@@ -54,7 +66,8 @@ impl ToolExecutor {
         let mut cancelled = false;
         for segment in self.split_segments(calls) {
             let buffered = self.limits().max_parallel_calls.max(1);
-            let futures = stream::iter(segment.into_iter().map(|call| self.execute(call, cancel))).buffered(buffered);
+            let futures = stream::iter(segment.into_iter().map(|call| self.execute_of(call, cancel, approved)))
+                .buffered(buffered);
             let results: Vec<ExecOutcome> = futures.collect().await;
 
             // 段内保序：遇到取消或确认点，就把这一段的尾部丢掉。

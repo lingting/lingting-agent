@@ -19,9 +19,16 @@ SELECT id, session_id, status, model, error, input_tokens, output_tokens, \
 FROM runs";
 
 impl Repository {
-    /// 未结束的 Run 状态取值：终态更新与统计都只针对这两者（`status` 列存 wire 值）。
+    /// 未结束的 Run 状态取值：终态更新与统计都只针对这三者（`status` 列存 wire 值）。
+    ///
+    /// `WAITING`（等工具确认）也是未结束：它能被取消、能被自愈清理，但不能被队列取走。
     fn open_statuses() -> String {
-        format!("'{}','{}'", RunStatus::Queued, RunStatus::Running)
+        format!(
+            "'{}','{}','{}'",
+            RunStatus::Queued,
+            RunStatus::Running,
+            RunStatus::Waiting
+        )
     }
 
     /// 按 ID 取 Run；不存在时为空。
@@ -156,7 +163,8 @@ impl Repository {
     pub async fn cancel_run(&self, run_id: &str, error: Option<&str>, now_ms: i64) -> Result<bool, DbError> {
         let status = RunStatus::Cancelled.to_string();
         let sql = format!(
-            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ? \
+            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
+             pending_tool_call_id = NULL, pending_tool_round = NULL \
              WHERE id = ? AND status IN ({})",
             Self::open_statuses()
         );
@@ -181,7 +189,8 @@ impl Repository {
     ) -> Result<usize, DbError> {
         let status = RunStatus::Cancelled.to_string();
         let sql = format!(
-            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ? \
+            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
+             pending_tool_call_id = NULL, pending_tool_round = NULL \
              WHERE session_id = ? AND status IN ({})",
             Self::open_statuses()
         );
@@ -208,7 +217,7 @@ impl Repository {
             .map_err(DbError::Query)
     }
 
-    /// 挂起：把 `RUNNING` 的 Run 退回 `QUEUED`，并记下等待确认的调用（D-P3-023）。
+    /// 挂起：把 `RUNNING` 的 Run 推进到 `WAITING`，并记下等待确认的调用（D-P3-027）。
     ///
     /// 条件更新以 `status = 'RUNNING'` 为前提：影响 0 行说明 Run 已被取消或已终态，
     /// 调用方据此放弃挂起（不再发确认事件）。
@@ -223,7 +232,7 @@ impl Repository {
             "UPDATE runs SET status = ?, pending_tool_call_id = ?, pending_tool_round = ?, updated_at_ms = ? \
              WHERE id = ? AND status = ?",
         )
-        .bind(RunStatus::Queued.to_string())
+        .bind(RunStatus::Waiting.to_string())
         .bind(tool_call_id)
         .bind(tool_round)
         .bind(now_ms)
@@ -287,7 +296,8 @@ impl Repository {
         Ok(affected > 0)
     }
 
-    /// 唤醒：待确认标识与请求一致时清空；驳回时同一事务把审计记录置 `DENIED`。
+    /// 唤醒：待确认标识与请求一致时把 Run 退回 `QUEUED` 并清空待确认列；
+    /// 驳回时同一事务把审计记录置 `DENIED`（D-P3-027）。
     ///
     /// 返回是否命中：并发两次唤醒只有一次命中（第二次匹配不到待确认标识）。
     pub async fn with_resume_run(
@@ -299,12 +309,14 @@ impl Repository {
     ) -> Result<bool, DbError> {
         let mut transaction = self.begin().await?;
         let affected = sqlx::query(
-            "UPDATE runs SET pending_tool_call_id = NULL, pending_tool_round = NULL, updated_at_ms = ? \
-             WHERE id = ? AND pending_tool_call_id = ?",
+            "UPDATE runs SET status = ?, pending_tool_call_id = NULL, pending_tool_round = NULL, updated_at_ms = ? \
+             WHERE id = ? AND pending_tool_call_id = ? AND status = ?",
         )
+        .bind(RunStatus::Queued.to_string())
         .bind(now_ms)
         .bind(run_id)
         .bind(tool_call_id)
+        .bind(RunStatus::Waiting.to_string())
         .execute(transaction.connection())
         .await?
         .rows_affected();
@@ -326,9 +338,10 @@ impl Repository {
         Ok(true)
     }
 
-    /// 启动自愈：上一次进程残留的执行中 Run 落 `FAILED`，排队中的 Run 落 `CANCELLED`（D-P2-030）。
+    /// 启动自愈：上一次进程残留的执行中 Run 落 `FAILED`；排队中与等确认的 Run 落 `CANCELLED`（D-P2-030）。
     ///
-    /// 两者在同一个事务里完成，避免半自愈状态；返回被处理的 Run 数量。
+    /// 等确认（`WAITING`）也要清理：确认的发起方（客户端连接）随进程一起消失，留着挂起态只会永久占位。
+    /// 三者都在同一个事务里完成，避免半自愈状态；返回被处理的 Run 数量。
     pub async fn with_orphan_healing(
         &self,
         running_error: &str,
@@ -338,7 +351,6 @@ impl Repository {
         let failed = RunStatus::Failed.to_string();
         let cancelled = RunStatus::Cancelled.to_string();
         let running = RunStatus::Running.to_string();
-        let queued = RunStatus::Queued.to_string();
         let mut transaction = self.begin().await?;
         let healed_running = sqlx::query(
             "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ? WHERE status = ?",
@@ -352,13 +364,16 @@ impl Repository {
         .await?
         .rows_affected();
         let healed_queued = sqlx::query(
-            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ? WHERE status = ?",
+            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
+             pending_tool_call_id = NULL, pending_tool_round = NULL \
+             WHERE status IN (?, ?)",
         )
         .bind(&cancelled)
         .bind(queued_error)
         .bind(now_ms)
         .bind(now_ms)
-        .bind(&queued)
+        .bind(RunStatus::Queued.to_string())
+        .bind(RunStatus::Waiting.to_string())
         .execute(transaction.connection())
         .await?
         .rows_affected();

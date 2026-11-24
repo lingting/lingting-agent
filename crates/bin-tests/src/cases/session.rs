@@ -118,6 +118,10 @@ fn message(context: &TestContext) -> CaseFuture<'_> {
                 }
                 RunEventKind::RunFailed => bail!("Run 失败：{}", event.error.unwrap_or_default()),
                 RunEventKind::Heartbeat | RunEventKind::ServerShutdown | RunEventKind::RunCancelled => {}
+                // 工具事件的展示属于客户端用例（`tool.tui` / `tool.web`），这里只要求匹配穷尽。
+                RunEventKind::ToolCallStarted
+                | RunEventKind::ToolCallCompleted
+                | RunEventKind::ToolCallConfirmRequired => {}
             }
         }
 

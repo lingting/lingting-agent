@@ -379,6 +379,12 @@ fn event(fixture: &Fixture, kind: RunEventKind) -> RunEvent {
         error: None,
         input_tokens: None,
         output_tokens: None,
+        tool_call_id: None,
+        tool_name: None,
+        tool_arguments: None,
+        tool_status: None,
+        tool_duration_ms: None,
+        tool_round: None,
     }
 }
 

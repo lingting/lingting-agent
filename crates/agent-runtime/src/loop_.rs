@@ -1,20 +1,29 @@
-//! 单轮 Agent Loop（P2-022）：排队 → Context → LLM 流 → 收尾。
+//! 多轮 Agent Loop（P3-014）：排队 → Context → 每轮「请求 + 工具」 → 收尾。
 //!
-//! 时序固定（D-P2-008 / D-P2-029）：
+//! 时序固定（D-P2-008 / D-P2-029 / D-P3-024）：
 //!
 //! 1. 取全局并发许可（排队超时即落 `FAILED`，不发起上游请求）；
 //! 2. 推进 `QUEUED → RUNNING`：排队期间 Run 停在 `QUEUED`，`RUNNING` 才代表正在执行；
 //! 3. 组装 Context：模型预算 + 系统提示词 + 历史 + 本次输入，超预算落 `FAILED`；
 //! 4. 发 `run_started`（携带助手消息 ID 与估算输入 token）；
-//! 5. 逐段消费 LLM 流：增量即事件，流式期间不写库；
-//! 6. 成功 → 助手消息 + `COMPLETED` 同事务提交，提交后才发 `run_completed`；
-//!    失败 → `FAILED` + `run_failed`；取消 → `run_cancelled` / `server_shutdown`。
+//! 5. 恢复本 Run 已落库的工具轨迹，先把上一个挂起的工具组收尾（批准执行 / 驳回回灌）；
+//! 6. 逐轮：请求 Provider（带工具清单）→ 增量即事件 → 有工具调用则执行并按轮落库；
+//! 7. 没有工具调用的那一轮 → 助手消息 + `COMPLETED` 同事务提交，提交后才发 `run_completed`。
 //!
-//! 取消一律 `select!` 命中后 drop 模型流：连接随之关闭，不留下继续烧 token 的后台任务。
+//! 结构性问题才落 `FAILED`（[`fail`] 的调用点即清单）：Provider 错误、Context 超预算、
+//! 轮次用尽、工具轨迹落库失败、轨迹配对损坏。参数非法 / 超时 / 执行失败 / 权限拒绝都是
+//! **工具结果**，以 TOOL 消息回灌模型后继续下一轮（P3-016）。
+//!
+//! 取消一律 `select!` 命中后 drop 模型流或工具批次：连接随之关闭，不留下继续烧 token
+//! 或继续执行工具的后台任务。
+
+mod request;
+mod tool;
+mod trace;
 
 use agent_context_core::ContextPolicy;
 use agent_core::session::{Message, MessageRole, Run, RunEventKind, RunStatus};
-use agent_route::{LlmError, LlmMessage, LlmRequest, LlmStreamEvent};
+use agent_route::{LlmError, LlmMessage};
 use lib_core::{id, time};
 use service_core::session::{RunInput, RunOutcome, RunStop};
 use tracing::{info, warn};
@@ -23,6 +32,8 @@ use crate::error;
 use crate::feed::Feed;
 use crate::limit::{self, Acquired};
 use crate::port::AgentRuntime;
+
+use tool::{Resumed, Step};
 
 /// 一次 Run 的执行主体。
 pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome {
@@ -37,15 +48,15 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     // 一、全局并发上限：许可持有到本函数结束，代表「这个 Run 正在占用一个并发位」。
     let _permit = match limit::acquire(&runtime.limit, runtime.agent.run_queue_timeout_ms, &cancel).await {
         Acquired::Permit(permit) => permit,
-        Acquired::Timeout => return fail(runtime, &run, feed, error::QUEUE_TIMEOUT).await,
-        Acquired::Cancelled => return cancelled(runtime, &run, feed, cancel.stop()).await,
+        Acquired::Timeout => return fail(runtime, &run, &mut feed, error::QUEUE_TIMEOUT).await,
+        Acquired::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
     };
 
     // 二、推进到 RUNNING：拿到许可之后才算「执行中」（P2-025），排队期间仍停在 QUEUED。
     match runtime.service.start_run(&run.id).await {
         Ok(true) => {}
         Ok(false) => {
-            // 排队期间被取消 / 已被别的路径落成终态：不产出任何事件。
+            // 排队期间被取消 / 已被别的路径落成终态 / 仍在等确认：不产出任何事件。
             info!(run_id = %run.id, "Run 已不在排队中，跳过执行");
             return RunOutcome::Cancelled {
                 reason: error::CANCEL_FALLBACK.to_string(),
@@ -59,7 +70,7 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     // 三、Context：模型预算、系统提示词、历史（不含本次输入）与本次输入。
     let prepared = match prepare(runtime, &run, &prompt).await {
         Ok(prepared) => prepared,
-        Err(public_error) => return fail(runtime, &run, feed, public_error).await,
+        Err(public_error) => return fail(runtime, &run, &mut feed, public_error).await,
     };
 
     // 四、run_started：助手消息 ID 先定，成功收尾时按它写库。
@@ -67,7 +78,7 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
         Ok(id) => id,
         Err(error) => {
             warn!(run_id = %run.id, %error, "生成助手消息 ID 失败");
-            return fail(runtime, &run, feed, error::STORAGE).await;
+            return fail(runtime, &run, &mut feed, error::STORAGE).await;
         }
     };
     let mut started = feed.event(RunEventKind::RunStarted);
@@ -80,57 +91,61 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
 
     // 五、调用模型：未配置 Provider 时按脱敏文案落 FAILED，不发上游请求。
     let Some(llm) = runtime.llm.clone() else {
-        return fail(runtime, &run, feed, LlmError::Unconfigured.public_message()).await;
-    };
-    let request = LlmRequest {
-        model: run.model.clone(),
-        messages: prepared.messages,
-        // 工具定义由 Batch D 的工具循环提供：Batch C 只把「能带工具、能收到调用」表达进契约。
-        tools: Vec::new(),
-        max_output_tokens: Some(prepared.max_output_tokens),
-    };
-    let mut stream = match llm.stream(request).await {
-        Ok(stream) => stream,
-        Err(error) => return fail(runtime, &run, feed, error.public_message()).await,
+        return fail(runtime, &run, &mut feed, LlmError::Unconfigured.public_message()).await;
     };
 
-    // 六、逐段消费：取消命中即 drop 流，取消原因取数据库里的权威值。
-    let mut content = String::new();
-    let mut usage = None;
+    // 六、工具清单与本 Run 已落库的轨迹：挂起唤醒后从「最后一个未配对的调用」续上。
+    let tools = tool::definitions(runtime);
+    let recovered = match trace::recover(&runtime.service, &run).await {
+        Ok(recovered) => recovered,
+        Err(public) => return fail(runtime, &run, &mut feed, public).await,
+    };
+    let mut trace = match tool::resume(runtime, &run, &mut feed, recovered, &cancel).await {
+        Resumed::Ready(trace) => trace,
+        Resumed::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
+        Resumed::Failed(public) => return fail(runtime, &run, &mut feed, public).await,
+        Resumed::SessionGone => return RunOutcome::SessionGone,
+    };
+
+    // 七、多轮：轮次从「已发生的工具轮次」继续数，轮次用尽即 FAILED。
+    let max_rounds = u32::try_from(runtime.agent.max_tool_rounds).unwrap_or(u32::MAX).max(1);
+    let mut round = trace.rounds();
+    let mut usage: Option<(i64, i64)> = None;
     loop {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
-                drop(stream);
-                return cancelled(runtime, &run, feed, cancel.stop()).await;
+        round += 1;
+        if round > max_rounds {
+            return fail(runtime, &run, &mut feed, error::TOOL_ROUNDS_EXCEEDED).await;
+        }
+        let request = request::build(&run, &prepared, &trace, &tools);
+        match request::stream(llm.as_ref(), request, &mut feed, &cancel).await {
+            request::Outcome::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
+            request::Outcome::Failed(public) => return fail(runtime, &run, &mut feed, public).await,
+            request::Outcome::SessionGone => return RunOutcome::SessionGone,
+            request::Outcome::Final {
+                content,
+                usage: round_usage,
+            } => {
+                usage = add_usage(usage, round_usage);
+                return complete(runtime, &run, &mut feed, assistant_message_id, content, usage).await;
             }
-            item = stream.next() => match item {
-                Some(Ok(LlmStreamEvent::Delta { text })) => {
-                    content.push_str(&text);
-                    let mut delta = feed.event(RunEventKind::MessageDelta);
-                    delta.delta = Some(text);
-                    if !feed.send(delta).await {
-                        return RunOutcome::SessionGone;
-                    }
-                }
-                Some(Ok(LlmStreamEvent::Usage { input_tokens, output_tokens })) => {
-                    usage = Some((input_tokens, output_tokens));
-                }
-                // 工具调用由 Batch D 的多轮循环接管：Batch C 的请求不带工具定义，不会出现。
-                Some(Ok(LlmStreamEvent::ToolCall { .. })) | Some(Ok(LlmStreamEvent::ToolCallsDone)) => {}
-                Some(Ok(LlmStreamEvent::Done)) | None => break,
-                Some(Err(error)) => {
-                    drop(stream);
-                    return fail(runtime, &run, feed, error.public_message()).await;
+            request::Outcome::ToolCalls {
+                content,
+                calls,
+                usage: round_usage,
+            } => {
+                usage = add_usage(usage, round_usage);
+                let turn = tool::Turn { round, content, calls };
+                let step = tool::run_round(runtime, &run, &mut feed, turn, &mut trace, &cancel).await;
+                match step {
+                    Step::Continue => {}
+                    Step::Suspended { tool_call_id } => return RunOutcome::Suspended { tool_call_id },
+                    Step::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
+                    Step::Failed(public) => return fail(runtime, &run, &mut feed, public).await,
+                    Step::SessionGone => return RunOutcome::SessionGone,
                 }
             }
         }
     }
-    // 流读完即释放：连接与缓冲区不再需要。
-    drop(stream);
-
-    // 七、成功收尾：先落库，提交成功后才发 run_completed。
-    complete(runtime, &run, feed, assistant_message_id, content, usage).await
 }
 
 /// Context 组装结果：请求体 + 本次请求的输出上限。
@@ -181,11 +196,20 @@ async fn prepare(runtime: &AgentRuntime, run: &Run, prompt: &str) -> Result<Prep
     })
 }
 
+/// token 用量累加（P3-014 第 8 条）：每轮的 usage 相加，缺一轮就按已有值算。
+fn add_usage(total: Option<(i64, i64)>, next: Option<(i64, i64)>) -> Option<(i64, i64)> {
+    match (total, next) {
+        (Some((input, output)), Some((more_input, more_output))) => Some((input + more_input, output + more_output)),
+        (Some(total), None) => Some(total),
+        (None, next) => next,
+    }
+}
+
 /// 成功收尾：助手消息与 `COMPLETED` 同事务提交；条件更新影响 0 行即静默退出（D-P2-009）。
 async fn complete(
     runtime: &AgentRuntime,
     run: &Run,
-    mut feed: Feed<'_>,
+    feed: &mut Feed<'_>,
     assistant_message_id: String,
     content: String,
     usage: Option<(i64, i64)>,
@@ -238,7 +262,7 @@ async fn complete(
 }
 
 /// 失败收尾：`FAILED` 条件更新成功才发 `run_failed`。
-async fn fail(runtime: &AgentRuntime, run: &Run, mut feed: Feed<'_>, public_error: impl Into<String>) -> RunOutcome {
+async fn fail(runtime: &AgentRuntime, run: &Run, feed: &mut Feed<'_>, public_error: impl Into<String>) -> RunOutcome {
     let public_error = public_error.into();
     match runtime.service.fail_run(&run.id, &public_error).await {
         Ok(true) => {}
@@ -260,7 +284,7 @@ async fn fail(runtime: &AgentRuntime, run: &Run, mut feed: Feed<'_>, public_erro
 }
 
 /// 取消收尾：停止类别决定终态事件类型，原因取数据库里的权威文本（D-P2-029）。
-async fn cancelled(runtime: &AgentRuntime, run: &Run, mut feed: Feed<'_>, stop: RunStop) -> RunOutcome {
+async fn cancelled(runtime: &AgentRuntime, run: &Run, feed: &mut Feed<'_>, stop: RunStop) -> RunOutcome {
     let reason = reason_of(runtime, run).await;
     let mut event = feed.event(kind_of(stop));
     event.status = Some(RunStatus::Cancelled);

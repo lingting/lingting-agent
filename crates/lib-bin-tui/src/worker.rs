@@ -814,6 +814,8 @@ fn dispatch_run_event(updates: &Sender<Update>, run_event: RunEvent) {
             },
         ),
         RunEventKind::Heartbeat => {}
+        // 工具事件的界面更新由 P3-028 跟进；此处先保证匹配穷尽。
+        RunEventKind::ToolCallStarted | RunEventKind::ToolCallCompleted | RunEventKind::ToolCallConfirmRequired => {}
     }
 }
 

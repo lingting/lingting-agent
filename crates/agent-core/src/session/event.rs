@@ -31,6 +31,36 @@ pub enum RunEventKind {
     ServerShutdown,
     /// 心跳：保留值。P1.1 起连接保活由客户端心跳（`api/client/update {PING}`）与下行流的 `: keepalive` 注释帧承担，运行时会话不再产出该事件。
     Heartbeat,
+    /// 工具调用开始执行（在真正执行之前发出，D-P3-013）。
+    ToolCallStarted,
+    /// 工具调用结束：结果、状态与耗时都在这一条上。
+    ToolCallCompleted,
+    /// 工具调用需要客户端确认：发出后 Run 挂起，等 `api/client/post` 回传决定。
+    ToolCallConfirmRequired,
+}
+
+/// 一次工具调用的状态（事件侧的一份，与审计记录取值一致）。
+///
+/// 定义在事件契约里而不是复用 `agent-tool` 的类型：`agent-core` 是更底层的领域契约，
+/// `agent-tool` 依赖它而不是反过来（D-P3-001）。取值与 `agent-tool` 的 `ToolCallStatus`
+/// 一一对应（`SCREAMING_SNAKE_CASE`）；`PENDING` 只出现在挂起等待确认期间，
+/// 不会出现在 `tool_call_completed` 事件里（D-P3-023）。
+#[auto_enum]
+pub enum ToolCallStatus {
+    /// 执行成功。
+    Ok,
+    /// 执行失败（含可重试失败重试用尽）。
+    Error,
+    /// 权限拒绝或未注册：工具没有被调用。
+    Denied,
+    /// 执行超时。
+    Timeout,
+    /// 执行期间 Run 被取消。
+    Cancelled,
+    /// 参数不合法：工具没有被真正执行。
+    InvalidArguments,
+    /// 等待客户端确认（挂起态）。
+    Pending,
 }
 
 /// Run 事件流中的一条事件。
@@ -52,10 +82,22 @@ pub struct RunEvent {
     pub message_id: Option<String>,
     /// Run 的最新状态；`run_started` 与 `run_completed` 有值。
     pub status: Option<RunStatus>,
-    /// 失败原因；仅 `run_failed` 有值，且不含内部细节。
+    /// 失败原因；仅 `run_failed` 有值；`tool_call_completed` 失败时复用为工具错误文本。
     pub error: Option<String>,
     /// 输入 token 用量；`run_started` 与 `run_completed` 有值（Mock 按字符数估算）。
     pub input_tokens: Option<i64>,
     /// 输出 token 用量；`run_completed` 有值（Mock 按字符数估算）。
     pub output_tokens: Option<i64>,
+    /// 工具调用标识；三个工具事件都有值，客户端据此配对开始与结束（D-P3-013）。
+    pub tool_call_id: Option<String>,
+    /// 工具名；三个工具事件都有值。
+    pub tool_name: Option<String>,
+    /// 工具参数：已脱敏、已截断的 JSON 文本；`tool_call_started` 与 `tool_call_confirm_required` 有值。
+    pub tool_arguments: Option<String>,
+    /// 工具调用状态；仅 `tool_call_completed` 有值。
+    pub tool_status: Option<ToolCallStatus>,
+    /// 工具调用耗时（毫秒）；仅 `tool_call_completed` 有值。
+    pub tool_duration_ms: Option<i64>,
+    /// 第几轮工具调用（从 1 开始）；`tool_call_started` 与 `tool_call_confirm_required` 有值。
+    pub tool_round: Option<u32>,
 }

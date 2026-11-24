@@ -48,6 +48,7 @@
 | D-P3-024 | 每轮边界落库（修订 D-P2-008 的「流式期间不写库」） | DECIDED |
 | D-P3-025 | 工具轨迹在 `messages` 里的配对与裁剪口径 | DECIDED |
 | D-P3-026 | 确认交互的客户端形态（TUI 一行 + `y`/`n`；WebUI 卡片 + 两个按钮） | DECIDED |
+| D-P3-027 | 挂起态改用 `WAITING` 状态（修订 D-P3-023 的「回 `QUEUED`」） | DECIDED |
 
 ---
 
@@ -640,8 +641,29 @@
 
 ---
 
+## D-P3-027 挂起态改用 `WAITING` 状态
+
+- **状态**：`DECIDED`（需求方在推进 Batch D 时定案，修订 D-P3-023 的「回 `QUEUED`」）
+- **问题**：挂起的 Run 若退回 `QUEUED`，执行队列的 `queued_run` 只按 `status = 'QUEUED'` 取最早的一条，会在 `drive` 返回后立刻把同一个 Run 再取出来：既不能真正挂起（忙循环），也说不清「它在等什么」。
+- **决策**：
+  - `RunStatus` 追加 `Waiting`（wire 值 `WAITING`）：`QUEUED → RUNNING → WAITING → QUEUED → RUNNING …` 或终态。
+  - 挂起 = `RUNNING → WAITING` + 写 `pending_tool_call_id` / `pending_tool_round`；唤醒 = `WAITING → QUEUED`（清待确认列），由 `resume_run` 的条件更新完成。
+  - `WAITING` 是「未结束」：可被取消、可被启动自愈清理（落 `CANCELLED` 并清待确认列），但不会被队列取走，也不计入 `running_now`。
+  - 取消 / 释放占用 / 断连 / 自愈的 SQL 在落终态时一并清空待确认列，不留悬挂挂起态。
+- **理由**：
+  - 状态本身就是「它在等什么」的第一层表达，`pending_*` 列只补「等哪一次调用」；后续要加「等用户输入」「等外部事件」时可以平行追加，不必再动队列的挑选条件。
+  - 队列条件保持「只取 `QUEUED`」不变：挂起不需要在队列里再写一遍排除逻辑，也不会出现「取出来又放回去」的空转。
+  - 用状态区分「排队」与「等确认」，`run/get` 与客户端展示也不再需要靠 `pendingToolCallId` 反推。
+- **约束**：
+  - `WAITING` 不是终态：`is_open` 必须包含它（可取消），`fail_run` / `cancel_run` / `cancel_session_runs` 的条件集合必须包含它。
+  - 迁移不需要改表结构（`status` 列存 wire 值，`pending_*` 列已由 `0002` 落地）。
+  - `RunOutcome` 追加 `Suspended { tool_call_id }`：挂起既不是完成也不是失败，执行队列只记日志、不写终态。
+- **承接任务**：P3-014（挂起点与恢复）、P3-015（取消收尾）、P3-027（服务端链路）、P3-030（用例口径改为断言 `WAITING`）。
+
+---
+
 ## 定案状态
 
-21 项决策（D-P3-001 ~ D-P3-021）与 5 项追加决策（D-P3-022 ~ D-P3-026）**全部 `DECIDED`**，无 `OPEN` 项，可以开工。
+21 项决策（D-P3-001 ~ D-P3-021）与 6 项追加决策（D-P3-022 ~ D-P3-027）**全部 `DECIDED`**，无 `OPEN` 项。
 
-追加决策的来源：D-P3-003 / D-P3-004 / D-P3-005 由需求方定案（其中 D-P3-004 追加了两条方案调整），D-P3-022 ~ D-P3-026 是把这两条调整与方案②的后果逐项写死，避免开工后再讨论。
+追加决策的来源：D-P3-003 / D-P3-004 / D-P3-005 由需求方定案（其中 D-P3-004 追加了两条方案调整），D-P3-022 ~ D-P3-026 是把这两条调整与方案②的后果逐项写死；D-P3-027 是推进 Batch D 时对 D-P3-023「回 `QUEUED`」的修订（挂起改用 `WAITING` 状态）。

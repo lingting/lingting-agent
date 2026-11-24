@@ -65,7 +65,7 @@ fn server(args: &ServerArgs) -> ExitCode {
     };
 
     // 运行期错误由 serve 内部写入日志，这里只负责刷盘与退出码。
-    // 装配参数：事件文件轮转配置在此收敛为服务端默认值，Provider / Agent 配置原样透传（P2-017）。
+    // 装配参数：事件文件轮转配置在此收敛为服务端默认值，Provider / Agent / Tools 配置原样透传（P2-017、P3-005）。
     let options = lib_bin_web::AssemblyOptions {
         journal: lib_bin_web::JournalConfig::resolve(
             config.runtime_events.max_sessions,
@@ -73,6 +73,7 @@ fn server(args: &ServerArgs) -> ExitCode {
         ),
         provider: config.llm.provider,
         agent: config.llm.agent,
+        tools: config.llm.tools,
         ..Default::default()
     };
     let result = lib_bin_web::serve(&config.host, config.port, options);

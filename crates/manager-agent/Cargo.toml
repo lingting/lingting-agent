@@ -24,6 +24,8 @@ agent-route = { workspace = true }
 agent-core = { workspace = true }
 # 客户端连接与会话占用契约（`ClientEvent`、`OccupancyVO` 等）。
 types-core = { workspace = true }
+# 工具注册表与执行参数：装配期按 `[tools]` 建一次，运行期只读（P3-014）。
+agent-tool = { workspace = true }
 
 anyhow = { workspace = true }
 tokio = { workspace = true }

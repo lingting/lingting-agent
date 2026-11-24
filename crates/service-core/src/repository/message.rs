@@ -111,6 +111,24 @@ impl Repository {
             .await?;
         rows.iter().map(message_from_row).collect()
     }
+
+    /// 某个 Run 已落库的工具轨迹：assistant `tool_calls` 与 TOOL 结果，按 `seq` 升序。
+    ///
+    /// 挂起唤醒后靠它重建「本 Run 已经发生过什么」（D-P3-023）：本次输入与最终助手消息不在其中，
+    /// 只取带工具列的行——按 `run_id` 过滤而不是读整个会话，恢复路径不做全量扫描。
+    pub async fn tool_trace_of_run(&self, session_id: &str, run_id: &str) -> Result<Vec<Message>, DbError> {
+        let sql = format!(
+            "{SELECT_MESSAGE} WHERE session_id = ? AND run_id = ? \
+             AND (tool_calls IS NOT NULL OR tool_call_id IS NOT NULL) \
+             ORDER BY seq"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(run_id)
+            .fetch_all(self.pool())
+            .await?;
+        rows.iter().map(message_from_row).collect()
+    }
 }
 
 /// 调用清单 → 列值：`NULL` 表示没有工具调用。

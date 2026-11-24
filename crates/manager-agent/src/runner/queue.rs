@@ -191,6 +191,9 @@ fn log_outcome(run_id: &str, outcome: RunOutcome) {
         RunOutcome::Completed => info!(run_id, "Run 执行完成"),
         RunOutcome::Failed { public_error } => info!(run_id, %public_error, "Run 执行失败"),
         RunOutcome::Cancelled { reason } => info!(run_id, %reason, "Run 已取消"),
+        RunOutcome::Suspended { tool_call_id } => {
+            info!(run_id, %tool_call_id, "Run 挂起等待工具确认，让出并发位");
+        }
         RunOutcome::SessionGone => info!(run_id, "运行时会话已停止，Run 未提交终态"),
     }
 }
@@ -218,6 +221,12 @@ async fn unassembled(service: &SessionService, run: &Run, producer: &mpsc::Sende
         error: Some(REASON_NOT_ASSEMBLED.to_string()),
         input_tokens: None,
         output_tokens: None,
+        tool_call_id: None,
+        tool_name: None,
+        tool_arguments: None,
+        tool_status: None,
+        tool_duration_ms: None,
+        tool_round: None,
     };
     let _ = producer.send(event).await;
 }

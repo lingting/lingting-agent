@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use agent_route::ProviderService;
+use agent_tool::{ToolLimits, ToolRegistry};
 use service_core::session::SessionService;
 use types_core::config::AgentConfig;
 
@@ -27,6 +28,10 @@ pub struct AgentHolder {
     agent: AgentConfig,
     /// 应用根目录：系统提示词（`AGENTS.md`）与 `config.toml` 都在这里。
     home: PathBuf,
+    /// 工具注册表：装配期建一次，运行期只读（P3-014）。
+    tools: Arc<ToolRegistry>,
+    /// 工具执行参数（`[tools]` 的超时、截断与并发上限）。
+    tool_limits: ToolLimits,
 }
 
 impl AgentHolder {
@@ -37,6 +42,8 @@ impl AgentHolder {
         provider: ProviderService,
         agent: AgentConfig,
         home: PathBuf,
+        tools: Arc<ToolRegistry>,
+        tool_limits: ToolLimits,
     ) -> Self {
         Self {
             session,
@@ -44,6 +51,8 @@ impl AgentHolder {
             provider,
             agent,
             home,
+            tools,
+            tool_limits,
         }
     }
 
@@ -70,6 +79,16 @@ impl AgentHolder {
     /// 应用根目录：执行方用它找系统提示词（`AGENTS.md`）。
     pub fn home(&self) -> &Path {
         &self.home
+    }
+
+    /// 工具注册表：执行方据此产出模型可见清单与执行期查找（P3-014）。
+    pub fn tools(&self) -> &Arc<ToolRegistry> {
+        &self.tools
+    }
+
+    /// 工具执行参数：超时、结果截断与一轮内的并发上限。
+    pub fn tool_limits(&self) -> ToolLimits {
+        self.tool_limits
     }
 }
 

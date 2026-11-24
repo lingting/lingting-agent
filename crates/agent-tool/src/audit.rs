@@ -16,7 +16,7 @@
 //! 失败原因也存进 `result`：OpenAI 兼容协议的工具结果没有 error 字段，审计表也只有一列 `result`，
 //! 因此不额外造一个无列可落的 `error` 字段。
 
-use framework_proc_auto::{auto_enum, auto_type};
+use framework_proc_auto::auto_type;
 use lib_core::time::now_millis;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -42,27 +42,11 @@ const SECRET_KEYS: [&str; 7] = [
     "cookie",
 ];
 
-/// 一次工具调用的状态。
+/// 一次工具调用的状态：定义在 `agent-core` 的事件契约里，这里只做转发（P3-013）。
 ///
-/// 取值与 Run 事件、审计表共用（`serde` wire 值是 SCREAMING_SNAKE_CASE）：
-/// `PENDING` 只出现在挂起等待确认期间，是审计表里的中间态，不会出现在 `tool_call_completed` 事件里。
-#[auto_enum]
-pub enum ToolCallStatus {
-    /// 执行成功。
-    Ok,
-    /// 执行失败（含可重试失败重试用尽）。
-    Error,
-    /// 权限拒绝或未注册：工具没有被调用。
-    Denied,
-    /// 执行超时。
-    Timeout,
-    /// 执行期间 Run 被取消。
-    Cancelled,
-    /// 参数不合法：工具没有被真正执行。
-    InvalidArguments,
-    /// 等待客户端确认（挂起态）。
-    Pending,
-}
+/// 审计记录、Run 事件与契约快照三处用同一个枚举，因此不存在「审计说 OK、事件说 Ok」的
+/// 二次映射；取值是 `SCREAMING_SNAKE_CASE`，`PENDING` 只出现在挂起等待确认期间。
+pub use agent_core::session::ToolCallStatus;
 
 /// 一次工具调用的审计记录。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

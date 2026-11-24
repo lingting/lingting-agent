@@ -24,9 +24,13 @@ agent-context-core = { workspace = true }
 agent-route = { workspace = true }
 # 执行端口、会话业务与数据库访问入口（落库都经 Service）。
 service-core = { workspace = true }
+# 工具注册表与执行器：运行时不认识具体工具，只按契约使用（P3-014）。
+agent-tool = { workspace = true }
 # `[agent]` 运行参数与模型预算来源。
 types-core = { workspace = true }
 
+# 工具参数是模型给出的 JSON：运行时只做「解析成 Value」这一次转换。
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
