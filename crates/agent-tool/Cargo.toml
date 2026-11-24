@@ -22,6 +22,8 @@ serde_json = { workspace = true }
 # 参数 schema 由类型派生（唯一来源），不做 JSON Schema 校验（D-P3-002）。
 schemars = { workspace = true }
 tokio = { workspace = true }
+# 取消信号：执行器与 `cancel.cancelled()` 并列 `select!`，命中即 drop 工具 future（D-P3-019）。
+tokio-util = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 # 仅 `http_request` 使用；本 Crate 不直接依赖 reqwest（D-P3-018）。

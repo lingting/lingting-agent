@@ -1,6 +1,6 @@
 # P3：Tool System
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档，未执行用例）；Batch B ~ H 未开工。** 32 个任务 / 8 个批次已细化，26 项决策全部定案。任务与批次见 [tasks.md](tasks.md)，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C ~ H 未开工。** 32 个任务 / 8 个批次已细化，26 项决策全部定案。任务与批次见 [tasks.md](tasks.md)，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 > 依据：P2 与 P2.2 的验收结论（[`docs/reports/p2-032-acceptance.md`](../../docs/reports/p2-032-acceptance.md)、[`docs/reports/p2.2-016-acceptance.md`](../../docs/reports/p2.2-016-acceptance.md)）、`docs/workspace.md` 的 `agent-tool` 职责、`docs/develop.md` 的 API 契约规范，以及仓库实际代码（`crates/agent-runtime`、`crates/agent-context*`、`crates/agent-route`、`crates/service-core`、`crates/lib-db`、`crates/lib-web`、`crates/lib-bin-*`、`crates/bin-tests`）。凡文档与代码不一致之处，以代码为准并记入 [decisions.md](decisions.md)。
 >

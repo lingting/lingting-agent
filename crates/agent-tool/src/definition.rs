@@ -5,6 +5,7 @@
 
 use framework_proc_auto::{auto_enum, auto_type};
 
+use crate::permission::ToolPermission;
 use crate::schema::ToolSchema;
 use crate::tool::Tool;
 
@@ -17,6 +18,19 @@ pub enum ToolRisk {
     Network,
     /// 会写本地文件。
     Write,
+}
+
+impl ToolRisk {
+    /// 权限判定的缺省等级（D-P3-005）：只有只读能力默认允许。
+    ///
+    /// 会触网（`Network`）或会写本地文件（`Write`）的能力默认拒绝，必须由 `[tools.permissions]`
+    /// 显式写 `allow` 才可用——`http_request` 默认拒绝就来自这里（它的风险等级是 `Network`）。
+    pub fn default_permission(self) -> ToolPermission {
+        match self {
+            Self::ReadOnly => ToolPermission::Allow,
+            Self::Network | Self::Write => ToolPermission::Deny,
+        }
+    }
 }
 
 /// 本地文件操作声明：`None`（不操作）/ `Read`（只读）/ `Write`（只写）/ `ReadWrite`（读写）。

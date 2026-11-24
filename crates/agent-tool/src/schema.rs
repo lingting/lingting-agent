@@ -45,8 +45,9 @@ pub fn of<A: JsonSchema>() -> ToolSchema {
 
 /// 用 serde 反序列化校验参数。
 ///
-/// 失败一律是 [`ToolError::InvalidArguments`]，文本里保留字段名与原因，去掉 serde 的
-/// `at line x column y` 噪声（模型拿不到位置信息，也不需要）。
+/// 失败一律是 [`ToolError::InvalidArguments`]，只保留字段名与原因（`参数不合法：` 前缀由
+/// `ToolError` 的 `Display` 统一加，固定文案只有一个产点），去掉 serde 的 `at line x column y`
+/// 噪声（模型拿不到位置信息，也不需要）。
 pub fn parse<A: DeserializeOwned>(args: Value) -> Result<A, ToolError> {
     serde_json::from_value(args).map_err(|error| ToolError::InvalidArguments(explain(&error)))
 }
@@ -57,5 +58,5 @@ fn explain(error: &serde_json::Error) -> String {
         Some(position) => &text[..position],
         None => &text[..],
     };
-    format!("参数不合法：{reason}")
+    reason.to_owned()
 }

@@ -93,6 +93,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

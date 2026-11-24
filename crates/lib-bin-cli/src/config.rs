@@ -28,6 +28,24 @@
 //!
 //! [agent]
 //! max_concurrent_runs = "3C"
+//! max_tool_rounds = 8
+//!
+//! [tools]
+//! timeout_ms = 15000
+//! max_result_chars = 8000
+//! max_parallel_calls = 8
+//! max_retries = 0
+//!
+//! [tools.permissions]
+//! http_request = "deny"
+//!
+//! [tools.file]
+//! allow_dirs = ["D:/code/lingting/lingting-agent"]
+//! max_bytes = 1048576
+//!
+//! [tools.http]
+//! allow_hosts = []
+//! max_bytes = 262144
 //! ```
 //!
 //! 配置只来自命令行与这个文件（应用根目录本身由 `AGENT_HOME` 决定），不为任何配置项读环境变量。
@@ -37,6 +55,9 @@
 //!
 //! `[provider]` 段可以整体缺省：此时视为「Provider 未配置」，服务端照常启动，首次调用模型才失败。
 //! 段一旦存在，缺字段、未知 `kind` 与非法取值都是启动期硬错误（退出码 2）。
+//!
+//! `[tools]` 段同理：整段可缺省（取 `types-core` 的缺省值），写下的每一项都要自洽——
+//! 未知工具名、`0` 上限、相对路径与空 host 都是启动期硬错误（P3-005）。
 use crate::command::ServerArgs;
 use anyhow::{Context, Result, anyhow};
 use lib_core::directorys::directorys;
@@ -46,7 +67,8 @@ use std::fs;
 use std::io;
 use std::str::FromStr;
 use tracing_subscriber::filter::LevelFilter;
-use types_core::config::{AgentConfig, Concurrency, ProviderConfig};
+use types_core::config::tools::BUILTIN_TOOL_NAMES;
+use types_core::config::{AgentConfig, Concurrency, ProviderConfig, ToolConfig};
 use url::Url;
 
 /// 默认监听地址。
@@ -91,6 +113,8 @@ pub struct LlmConfig {
     pub provider: Option<ProviderConfig>,
     /// Agent 运行参数；缺省值见 `types-core`。
     pub agent: AgentConfig,
+    /// 工具执行参数与权限（`[tools]`）；缺省值见 `types-core`。
+    pub tools: ToolConfig,
 }
 
 /// 客户端连接配置。
@@ -247,6 +271,8 @@ struct FileConfig {
     provider: Option<ProviderConfig>,
     /// `[agent]`：整段与单个字段都可缺省，缺的取 `AgentConfig::default`。
     agent: AgentConfig,
+    /// `[tools]`：整段与单个字段都可缺省，缺的取 `ToolConfig::default`。
+    tools: ToolConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -277,15 +303,17 @@ pub fn parse_llm(text: &str) -> Result<LlmConfig> {
     llm_from(&file)
 }
 
-/// 从已解析的文件配置里取出并校验 Provider / Agent 段。
+/// 从已解析的文件配置里取出并校验 Provider / Agent / Tools 段。
 fn llm_from(file: &FileConfig) -> Result<LlmConfig> {
     if let Some(provider) = file.provider.as_ref() {
         validate_provider(provider)?;
     }
     validate_agent(&file.agent)?;
+    validate_tools(&file.tools)?;
     Ok(LlmConfig {
         provider: file.provider.clone(),
         agent: file.agent.clone(),
+        tools: file.tools.clone(),
     })
 }
 
@@ -348,7 +376,55 @@ fn validate_agent(agent: &AgentConfig) -> Result<()> {
     require_positive("[agent] run_queue_timeout_ms", agent.run_queue_timeout_ms)?;
     require_positive("[agent] llm_idle_timeout_ms", agent.llm_idle_timeout_ms)?;
     require_positive("[agent] context_max_messages", agent.context_max_messages as u64)?;
-    require_positive("[agent] context_safety_tokens", agent.context_safety_tokens as u64)
+    require_positive("[agent] context_safety_tokens", agent.context_safety_tokens as u64)?;
+    require_positive("[agent] max_tool_rounds", agent.max_tool_rounds as u64)
+}
+
+/// 工具配置校验：数值上限都要大于 0，白名单要么是绝对目录，要么是 host（P3-005）。
+fn validate_tools(tools: &ToolConfig) -> Result<()> {
+    require_positive("[tools] timeout_ms", tools.timeout_ms)?;
+    require_positive("[tools] max_result_chars", tools.max_result_chars as u64)?;
+    require_positive("[tools] max_parallel_calls", tools.max_parallel_calls as u64)?;
+    // `max_retries = 0` 是「不重试」，属于缺省行为，不校验。
+
+    validate_permissions(tools)?;
+
+    for directory in &tools.file.allow_dirs {
+        if !directory.is_absolute() {
+            return Err(anyhow!(
+                "[tools.file] allow_dirs 必须是绝对路径：{}",
+                directory.display()
+            ));
+        }
+    }
+    require_positive("[tools.file] max_bytes", tools.file.max_bytes)?;
+
+    for host in &tools.http.allow_hosts {
+        validate_allow_host(host)?;
+    }
+    require_positive("[tools.http] max_bytes", tools.http.max_bytes)
+}
+
+/// 权限表校验：未知工具名不会被静默忽略，否则「我明明配了 deny」会变成一句空话。
+fn validate_permissions(tools: &ToolConfig) -> Result<()> {
+    for name in tools.permissions.keys() {
+        if !BUILTIN_TOOL_NAMES.contains(&name.as_str()) {
+            return Err(anyhow!("[tools.permissions] 未知的工具名：{name}"));
+        }
+    }
+    Ok(())
+}
+
+/// 白名单 host 校验：只接受 `host` 或 `host:port`，不写协议、端口与路径。
+fn validate_allow_host(host: &str) -> Result<()> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(anyhow!("[tools.http] allow_hosts 不能包含空 host"));
+    }
+    if host.contains("://") || host.contains('/') {
+        return Err(anyhow!("[tools.http] allow_hosts 只能写 host 或 host:port：{host}"));
+    }
+    Ok(())
 }
 
 /// 并发上限校验：绝对值与核数倍数都要求正数，且不超过 `Semaphore` 的可用上限（P2.1-015）。

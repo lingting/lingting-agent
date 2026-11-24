@@ -63,6 +63,11 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
+    /// 权限表：执行器据此做「执行期二次判定」（`deny` 的工具仍可能被模型凭空调用）。
+    pub fn policy(&self) -> &ToolPolicy {
+        &self.policy
+    }
+
     /// 发给模型的工具清单。
     ///
     /// 顺序只由名字字典序决定（与注册顺序无关），同一份配置两次运行产出同序清单；

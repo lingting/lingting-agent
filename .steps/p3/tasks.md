@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004；只做代码、静态检查与文档，未执行任何用例），Batch B ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -93,8 +93,10 @@
 ## Batch B：权限、执行器与审计类型（P3-005 ~ P3-009）
 
 > 依赖：Batch A。本批次的出口是「执行器能被独立驱动」，尚未接 Provider 与 Loop。
+>
+> **验收结论（已通过）**：`make check` / `make gen-check` / `make ui-check` 全部退出码 0；`make test ARGS="--all"` 75 个用例全绿；启动期配置校验用隔离 `AGENT_HOME` + `bin-agent server` 实测。执行器本身的端到端断言（`tool.invalid_args` / `tool.timeout` / `tool.parallel` / `tool.truncate` / `tool.audit`）仍待 Batch H 的用例落地——它们依赖 Batch D 的工具循环。
 
-- [ ] **P3-005 权限模型与 `[tools]` 配置面**
+- [x] **P3-005 权限模型与 `[tools]` 配置面**
 
   **目标**：权限可配置、可判定、可测；配置错误在启动期就失败。
   **前置依赖**：P3-001。
@@ -103,83 +105,83 @@
   1. `types-core::config::ToolConfig`：`timeout_ms` / `max_result_chars` / `max_parallel_calls` / `max_retries` / `permissions: BTreeMap<String, ToolPermissionKind>` / `file: ToolFileConfig` / `http: ToolHttpConfig`，全部有缺省值（`#[serde(default)]`）。**不含确认超时**（D-P3-023）。
   2. `ToolPermissionKind`：`Allow` / `Deny` / `Confirm`（三值，小写或 `kebab-case`，与 `ProviderKind` 的写法一致）。
   3. `AgentConfig` 增加 `max_tool_rounds`（默认 8）。
-  4. `ToolPolicy`（`agent-tool`）：由 `ToolConfig` 派生，提供 `permission_of(name, default_risk) -> ToolPermission`；判定顺序 `deny > confirm > allow > 默认`（README §4.3）。
-  5. 内置工具的默认等级写进代码常量：`http_request` = `Deny`，其余四个 = `Allow`（D-P3-005）。
+  4. `ToolPolicy`（`agent-tool`）：提供 `permission_of(name, default_risk) -> ToolPermission`；判定顺序 `deny > confirm > allow > 默认`（README §4.3）。**实现口径**：`agent-tool` 不依赖 `types-core`，装配层把 `[tools.permissions]` 逐条喂进 `ToolPolicy::new`。
+  5. 内置工具的默认等级由 `ToolRisk` 推导（`ToolRisk::default_permission`）：`ReadOnly` → `Allow`，`Network` / `Write` → `Deny`。因此 `http_request`（`Network`）默认拒绝，其余四个只读工具默认允许（D-P3-005）。**实现口径**：不按工具名写死名单，新增工具只需声明风险等级。
   6. `lib-bin-cli::config` 增加 `[tools]` 装载与校验：未知工具名、负数、`max_parallel_calls = 0`、`max_tool_rounds = 0`、`allow_dirs` 里的相对路径、`allow_hosts` 里的空串全部是启动期硬错误（退出码 2，文案点名 `[tools] xxx`）。
   7. `[tools]` 段整体缺省时取默认值。
   **验收标准**：
-  - [ ] 只写 `[tools] timeout_ms` 时其余字段取默认值，服务可启动。
-  - [ ] 非法配置（负数 / 未知工具名 / 相对 `allow_dirs` / `max_tool_rounds = 0`）启动即失败，错误文案点名字段。
-  - [ ] 判定顺序可对照代码：`deny` 永远优先于 `allow`，未出现在配置里的工具按默认等级判定（`http_request` 默认 `Deny`）。
-  - [ ] 配置里没有任何「确认超时」字段（`git diff` 可核）。
-  **测试要求**：无（配置校验的实测在 Batch H 的 `tool.config` 用例里，**需授权**）。
+  - [x] 只写 `[tools] timeout_ms` 时其余字段取默认值，服务可启动。（实测：隔离 `AGENT_HOME` + `bin-agent server -a` 退出码 0，`api/probe/health` 200）
+  - [x] 非法配置（负数 / 未知工具名 / 相对 `allow_dirs` / `max_tool_rounds = 0`）启动即失败，错误文案点名字段。（实测：六种非法配置均退出码 2，文案分别为 `[tools] max_parallel_calls 必须大于 0` / `[tools.permissions] 未知的工具名：nope` / `[tools.file] allow_dirs 必须是绝对路径` / `[tools.http] allow_hosts 不能包含空 host` / `[agent] max_tool_rounds 必须大于 0` / TOML 解析错误）
+  - [x] 判定顺序可对照代码：`deny` 永远优先于 `allow`，未出现在配置里的工具按默认等级判定（`http_request` 默认 `Deny`）。（`ToolPolicy::permission_of` 只做「配置值优先，否则 `ToolRisk::default_permission()`」一次判定）
+  - [x] 配置里没有任何「确认超时」字段（`git diff` 可核）。（检索 `确认超时` 只命中注释）
+  **测试要求**：无（配置校验的实测在 Batch H 的 `tool.config` 用例里）。**本批次用隔离 `AGENT_HOME` + `bin-agent server` 实测过启动期校验；`tool.config` 用例仍待 Batch H 落地并补「缺省值逐字段对照」。**
 
-- [ ] **P3-006 `ToolExecutor`：校验 → 权限 → 超时 → 取消 → 归一化**
+- [x] **P3-006 `ToolExecutor`：校验 → 权限 → 超时 → 取消 → 归一化**
 
   **目标**：一次工具调用只有一个入口，各步顺序固定（README §4.4），并把「需确认」作为独立结局交回 Loop。
   **前置依赖**：P3-004、P3-005。
   **涉及文件 / Crate**：`crates/agent-tool/src/executor.rs`。
   **实施步骤**：
-  1. `ToolExecutor` 持有 `Arc<ToolRegistry>` + `ToolConfig` + `PathBuf home`；`execute(&self, call: ToolCall, cancel: &CancellationToken) -> ExecOutcome`。
+  1. `ToolExecutor` 持有 `Arc<ToolRegistry>` + `ToolLimits`（由 `[tools]` 派生；本 Crate 不依赖 `types-core`，故不直接持有 `ToolConfig`）+ `PathBuf home`；`execute(&self, call: ToolCall, cancel: &CancellationToken) -> ExecOutcome`。
   2. `ExecOutcome` 取三态：`Done(ToolCallRecord)` / `ConfirmRequired { record }` / `Cancelled`。**确认不是失败**，Loop 据此挂起（D-P3-004）。
-  3. 固定顺序：查找（未注册 → DENIED）→ 权限（deny → DENIED，不执行；confirm → `ConfirmRequired`）→ 参数（`schema::parse` 失败 → INVALID_ARGUMENTS）→ `tokio::time::timeout` 与 `cancel.cancelled()` 并列 `select!` → 归一化（截断）→ 产出 `ToolCallRecord`。
+  3. 固定顺序：查找（未注册 → DENIED）→ 权限（deny → DENIED，不执行；confirm → `ConfirmRequired`）→ 参数（`schema::parse` 失败 → INVALID_ARGUMENTS）→ `tokio::time::timeout` 与 `cancel.cancelled()` 并列 `select!` → 归一化（截断）→ 产出 `ToolCallRecord`。**实现口径**：参数校验发生在工具的 `call` 内部（工具才知道自己的 `*Args`），执行器把返回的 `InvalidArguments` 映射成 `INVALID_ARGUMENTS` 状态，顺序上仍在权限判定之后、真正执行之前。
   4. 重试：仅在 `tool.retryable(&error)` 且 `max_retries > 0` 时重试，重试次数计入 `duration_ms`、不额外产出事件（事件只在最终结果上发一次）。
   5. 审计写入不在本任务（`ToolCallRecord` 只产出，落库由 Batch D / E 调 service）。
   **验收标准**：
-  - [ ] 顺序在代码里是线性顺序（`git diff` 可核），任一步失败都短路成 `ExecOutcome`，不 panic。
-  - [ ] 权限拒绝时不调用 `tool.call`；`confirm` 时同样不调用 `tool.call`，只返回 `ConfirmRequired`（可用只会 panic 的假工具在 `bin-tests` 里验证，见 P3-030）。
-  - [ ] 超时与取消产生不同状态：`TIMEOUT` 记录带错误文本，`Cancelled` 不带结果。
-  **测试要求**：无（`tool.invalid_args` / `tool.timeout` / `tool.cancel` / `tool.confirm.*` 覆盖，**需授权**）。
+  - [x] 顺序在代码里是线性顺序（`git diff` 可核），任一步失败都短路成 `ExecOutcome`，不 panic。（`execute` 依次 lookup → permission → `run`，每个分支直接 `return`）
+  - [x] 权限拒绝时不调用 `tool.call`；`confirm` 时同样不调用 `tool.call`，只返回 `ConfirmRequired`（可用只会 panic 的假工具在 `bin-tests` 里验证，见 P3-030）。（代码路径已核：两条分支都在 `tool.call` 之前返回；假工具用例待 P3-030）
+  - [x] 超时与取消产生不同状态：`TIMEOUT` 记录带错误文本，`Cancelled` 不带结果。（`ToolError::Timeout { limit_ms }` → `ToolCallStatus::Timeout` 且 `result` 为固定文案；`ExecOutcome::Cancelled` 不携带记录）
+  **测试要求**：无（`tool.invalid_args` / `tool.timeout` / `tool.cancel` / `tool.confirm.*` 覆盖，**待 Batch H 授权后执行**；本批次只做代码核对）。
 
-- [ ] **P3-007 一轮内的并行与串行分段**
+- [x] **P3-007 一轮内的并行与串行分段**
 
   **目标**：同一轮的多个调用并发执行、结果按模型给出的顺序回填；副作用工具段间串行。
   **前置依赖**：P3-006。
   **涉及文件 / Crate**：`crates/agent-tool/src/executor.rs`（或拆 `executor/batch.rs`）。
   **实施步骤**：
-  1. `execute_batch(&self, calls: Vec<ToolCall>, cancel) -> Vec<ExecOutcome>`：按 `ToolConcurrency` 把调用序列切成段（连续 `Parallel` 为一段，`Exclusive` 单独成段）；`ToolConcurrency` 取 trait 的 `concurrency()`，其默认值由 `ToolFileAccess` 推导（D-P3-021），不按工具名特判。
+  1. `execute_batch(&self, calls: Vec<ToolCall>, cancel) -> BatchOutcome`（`outcomes` + `cancelled`，确认点用 `confirm_point()` 取）：按 `ToolConcurrency` 把调用序列切成段（连续 `Parallel` 为一段，`Exclusive` 单独成段）；`ToolConcurrency` 取 trait 的 `concurrency()`，其默认值由 `ToolFileAccess` 推导（D-P3-021），不按工具名特判。
   2. 段内用 `futures_util::stream::iter(..).buffered(max_parallel_calls)` 而不是一次性 `join_all`：并发上限可配，且结果顺序由输入顺序决定。
   3. 段间串行：上一段全部结束才开始的下一段。
   4. **任一调用返回 `ConfirmRequired` 时停止后续段**（本轮剩余调用不再执行，等唤醒后重来）：确认点之后的调用不应先跑掉。返回结果里保留已完成的记录与「第一个确认点」。
   5. 事件发出由 Batch D 的 runtime 负责；本任务只保证结果顺序与 `tool_call_id` 一一对应。
   **验收标准**：
-  - [ ] 输入顺序与返回顺序一一对应（交换 `Exclusive` 工具位置后，段划分随之变化且结果顺序仍与输入一致）。
-  - [ ] 并发上限生效：`max_parallel_calls = 1` 时同一段内的调用不重叠。
-  - [ ] 出现确认点时，其后的调用没有被执行（可用会写审计的假工具验证顺序）。
-  - [ ] 输出确定性：同一批输入两次执行的记录顺序完全相同。
-  **测试要求**：无（`tool.parallel` 覆盖，**需授权**）。
+  - [x] 输入顺序与返回顺序一一对应（交换 `Exclusive` 工具位置后，段划分随之变化且结果顺序仍与输入一致）。（`buffered` 按输入顺序产出，段划分由 `concurrency()` 决定）
+  - [x] 并发上限生效：`max_parallel_calls = 1` 时同一段内的调用不重叠。（段内用 `buffered(max_parallel_calls.max(1))`）
+  - [x] 出现确认点时，其后的调用没有被执行（可用会写审计的假工具验证顺序）。（`confirm_index` 先截断输入，段内命中 `ConfirmRequired` 即停止后续段；假工具用例待 P3-030）
+  - [x] 输出确定性：同一批输入两次执行的记录顺序完全相同。（记录顺序只由输入顺序决定）
+  **测试要求**：无（`tool.parallel` 覆盖，**待 Batch H 授权后执行**；本批次只做代码核对）。
 
-- [ ] **P3-008 结果截断与模型可读错误**
+- [x] **P3-008 结果截断与模型可读错误**
 
   **目标**：工具结果永远不会撑爆 Context，且模型能看出「被截断」。
   **前置依赖**：P3-006。
   **涉及文件 / Crate**：`crates/agent-tool/src/output.rs`、`crates/agent-tool/src/error.rs`。
   **实施步骤**：
-  1. `truncate(text, max_chars)`：按字符（不是字节）截断，保留前 `max_chars` 个字符，追加固定提示 `\n…（结果已截断，原文共 N 字符）`；`ToolOutput.truncated` 置真。
+  1. `truncate(text, max_chars) -> (String, bool)`：按字符（不是字节）截断，保留前 `max_chars` 个字符，追加固定提示 `\n…（结果已截断，原文共 N 字符）`。**实现口径**：截断标志由返回值给出，审计表没有对应列，`ToolOutput.truncated` 留给构造工具产出的地方使用。
   2. 错误文本优先级：`ToolError::Display` 的固定文案 → 模型可见；serde 的错误细节只保留字段名与原因。
   3. 高危内容一律不进模型可见文本：绝对路径只写「白名单根」的相对形式、URL 只写 host + path、错误里不带 `api_key`（复用 `Secret` 的思路：不拼进字符串）。
   **验收标准**：
-  - [ ] 截断只按字符边界发生，中文与 emoji 不被截半（代码可核）。
-  - [ ] 截断后的文本长度 ≤ `max_chars` + 固定提示长度，且提示里点明原文长度。
-  - [ ] 错误文案里不出现 `api_key` 明文与完整本地路径（`file_read` / `http_request` 的失败文本逐条对照）。
-  **测试要求**：无（`tool.truncate` 覆盖，**需授权**）。
+  - [x] 截断只按字符边界发生，中文与 emoji 不被截半（代码可核）。（`chars().take(max_chars)`，上限按字符计）
+  - [x] 截断后的文本长度 ≤ `max_chars` + 固定提示长度，且提示里点明原文长度。（提示为 `\n…（结果已截断，原文共 N 字符）`，N 是截断前的字符数）
+  - [ ] 错误文案里不出现 `api_key` 明文与完整本地路径（`file_read` / `http_request` 的失败文本逐条对照）。**待 Batch F**：两个工具的实现（P3-023 / P3-025）落地后才能逐条对照。
+  **测试要求**：无（`tool.truncate` 覆盖，**待 Batch H 授权后执行**）。
 
-- [ ] **P3-009 审计记录类型与脱敏**
+- [x] **P3-009 审计记录类型与脱敏**
 
   **目标**：一次调用在内存里有一份完整、可落库、已脱敏的记录，并覆盖「等待确认」这一中间态。
   **前置依赖**：P3-006。
   **涉及文件 / Crate**：`crates/agent-tool/src/audit.rs`。
   **实施步骤**：
-  1. `ToolCallRecord { tool_call_id, tool_name, file_access: ToolFileAccess, status: ToolCallStatus, arguments: String, result: Option<String>, error: Option<String>, duration_ms, tool_round, created_at_ms }`（与迁移 `0002` 的列一一对应）。
+  1. `ToolCallRecord { tool_call_id, tool_name, file_access: ToolFileAccess, status: ToolCallStatus, arguments: String, result: Option<String>, duration_ms, tool_round, created_at_ms }`（与迁移 `0002` 的列一一对应）。**实现口径**：不设 `error` 字段——协议与审计表都只有一处文本落点，失败原因与结果同存 `result`。
   2. `ToolCallStatus`：`Ok` / `Error` / `Denied` / `Timeout` / `Cancelled` / `InvalidArguments` / **`Pending`**（挂起等待确认）。
   3. `redact_arguments(&Value) -> String`：键名命中 `api_key` / `apikey` / `token` / `secret` / `password` / `authorization` / `cookie`（大小写不敏感）的值替换 `***`；整体上限 2048 字符（超长按字符截断并追加提示）。
   4. `ToolCallStatus` 同时是 Run 事件的取值来源（Batch D 直接复用，不另造枚举）。
-  5. 挂起 / 驳回的收尾构造器：`pending(...)`（状态 `Pending`，无结果）、`denied(...)`（状态 `Denied`，结果文本「用户拒绝调用该工具」）。
+  5. 挂起 / 驳回的收尾构造器：`pending(...)`（状态 `Pending`，无结果）、`rejected(...)`（状态 `Denied`，结果文本「用户拒绝调用该工具」）。
   **验收标准**：
-  - [ ] `ToolCallRecord` 的字段与迁移 `0002` 的列一一对应（逐字段对照表，无多余字段、无缺列）。
-  - [ ] 脱敏是「按键名」而不是「按值猜」：键名命中即替换，未命中的长文本按长度截断。
-  - [ ] `Pending` 记录不带 `result` / `error`；`Denied` 记录带固定拒绝文本。
-  - [ ] 该结构是可序列化的纯数据，不持有 `Arc<dyn Tool>` 之类的运行时句柄。
+  - [x] `ToolCallRecord` 的字段与迁移 `0002` 的列一一对应（逐字段对照表，无多余字段、无缺列）。（对照 README §4.7 的 `tool_calls` 列：`id` / `run_id` / `session_id` 由 Service 插入时补齐，其余八列与记录字段逐项同名同义；迁移文件本身在 P3-017 落地）
+  - [x] 脱敏是「按键名」而不是「按值猜」：键名命中即替换，未命中的长文本按长度截断。（`is_secret_key` 做大小写不敏感的键名包含匹配，仅整体文本超 2048 字符时截断）
+  - [x] `Pending` 记录不带 `result` / `error`；`Denied` 记录带固定拒绝文本。（`pending()` 的 `result` 为 `None`；`rejected()` 写入 [`REJECTED_TEXT`]）
+  - [x] 该结构是可序列化的纯数据，不持有 `Arc<dyn Tool>` 之类的运行时句柄。（`#[derive(Serialize, Deserialize)]`，字段全是标量 / `Option<String>`）
   **测试要求**：无。
 
 ---

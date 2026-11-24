@@ -6,7 +6,8 @@
 //! 各项的语义与使用点：`max_concurrent_runs` 是全局 `Semaphore` 的许可数（P2-025），写法见
 //! [`Concurrency`]（P2.1-015）；`run_queue_timeout_ms` 是排队超时（超时落 `FAILED`「执行排队超时」）；
 //! `llm_idle_timeout_ms` 是模型流的空闲超时（P2-016）；`context_max_messages` / `context_safety_tokens`
-//! 是 Context 预算的两个可调项（D-P2-012 / D-P2-013）。
+//! 是 Context 预算的两个可调项（D-P2-012 / D-P2-013）；`max_tool_rounds` 是一次 Run 内最多
+//! 几轮 Provider 请求（工具轮次的终止条件，D-P3-009）。
 
 use std::fmt;
 
@@ -23,6 +24,8 @@ pub const DEFAULT_LLM_IDLE_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_CONTEXT_MAX_MESSAGES: usize = 40;
 /// Context 预算预留的缺省值（token 数）。
 pub const DEFAULT_CONTEXT_SAFETY_TOKENS: usize = 256;
+/// 一次 Run 内工具轮次上限的缺省值（D-P3-009）。
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
 
 /// 配置字段名：解析与校验的错误文案统一点名该字段。
 const FIELD: &str = "[agent] max_concurrent_runs";
@@ -144,6 +147,8 @@ pub struct AgentConfig {
     pub context_max_messages: usize,
     /// Context 预算的安全余量（token 数）。
     pub context_safety_tokens: usize,
+    /// 一次 Run 内最多几轮 Provider 请求（第一轮也算一轮）：用尽且仍要求调用工具即落 `FAILED`。
+    pub max_tool_rounds: usize,
 }
 
 impl Default for AgentConfig {
@@ -154,6 +159,7 @@ impl Default for AgentConfig {
             llm_idle_timeout_ms: DEFAULT_LLM_IDLE_TIMEOUT_MS,
             context_max_messages: DEFAULT_CONTEXT_MAX_MESSAGES,
             context_safety_tokens: DEFAULT_CONTEXT_SAFETY_TOKENS,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
         }
     }
 }
