@@ -50,7 +50,7 @@
 
 ## KI-P2.2-002 `stress.boundary` 在 `--all` 并发下偶发破「② 总耗时」上界
 
-- **状态**：待处置（P2.2-016 回归基线前需定口径；与 Batch D 改动无关）
+- **状态**：已结案（P2.2-016 前定口径：按 D-P2.2-016 给内边界总耗时上界加收尾余量，`N` 与公式不动；与 Batch D 改动无关）
 - **发现时间**：2026-11-24，P2.2 Batch D 验收复跑 `--all` 时
 - **现象**：`make test ARGS="--all"` 中 `stress.boundary` 判红，失败原因：
 
@@ -73,8 +73,43 @@
 | `make test ARGS="stress"` 连续 3 次 | 全绿（9.5s / 9.4s / 9.4s） |
 
 - **影响**：`--all` 回归会偶发红灯，容易被当成功能回归；单跑与低并发稳定。
+- **处置方向（已按 D-P2.2-016 定案）**：
+  1. ~~把 `assert_inner` 的上界改成 `T + L0 + 收尾余量`~~ → **采纳**：上界改为
+     `T + max(L0 × 2, 500ms)`，由 `bin-tests::util::stress::inner_ceiling` 唯一给出；
+     `N`、`limit.timeouts == 0`、`wait_max < T`、`running_max == 1` 一律不动，仍符合 D-P2.2-009 的口径。
+  2. 让 `self` 型用例独占运行（调度层串行化）——未采纳，代价是 `--all` 墙钟变长。
+  3. 不改，接受偶发红并在阶段报告里注明「单跑为准」——未采纳，会把偶发红变成常态。
+- **落地证据**：见阶段报告 `docs/reports/p2.2-016-acceptance.md` 的回归基线一节。
+
+---
+
+## KI-P2.2-003 `chat.multiturn` 的 Mock 观测偶发 404（`/mock/last-request`）
+
+- **状态**：待处置（与本阶段改动无关；单次复现，未再复现）
+- **发现时间**：2026-11-24，P2.2 Batch E 的 `--all` 回归（第 1 次）
+- **现象**：`make test ARGS="--all"` 里 `chat.multiturn` 判红，用例耗时仅 507ms，失败原因：
+
+  ```text
+  GET http://127.0.0.1:49297/mock/last-request 应返回 200，实际 404
+  ```
+
+  Mock 侧 404 的文案是「还没有收到 chat 请求」（`crates/bin-tests/src/mock/llm/handler.rs`），
+  即用例读观测时 `MockState::last_request()` 仍为空。
+- **证据**：
+
+  | 命令 | 结果 |
+  |---|---|
+  | `make test ARGS="--all"`（Batch E 第 1 次） | 75 条中 1 红（报告 `target/tests/run-1795483844805-21732`） |
+  | `make test ARGS="--all"`（Batch E 第 2 ~ 5 次） | 75 条全绿 |
+  | `make test ARGS="stress"` 连续 3 次 | 全绿（9339ms / 9381ms / 9465ms） |
+
+- **判断**：与本阶段的任何改动无关——`chat.*` 只用自起的服务端与私有 Mock，读取的是 `/mock/stats` 与
+  `/mock/last-request`；Batch E 只改了 `stress.boundary` 的耗时上界、`AGENTS.md` 条款与四份文档。
+  失败发生在「终态已到、Mock 尚未记录 chat 请求」这一窗口，或本次请求根本没走到 Provider（用例未断言该分支，
+  现状下无法区分——日志仅可用于人工排查，不作数据来源）。
+- **影响**：`--all` 偶发红灯，容易被误判为功能回归；单跑与后续 `--all` 稳定。
 - **处置方向（待决策）**：
-  1. 把 `assert_inner` 的上界改成 `T + L0 + 收尾余量`，余量按「并发下末段被拉长的量级」定并写进
-     `decisions.md`（`N` 不动，仍符合 D-P2.2-009 的口径）；
-  2. 让 `self` 型用例独占运行（调度层串行化），代价是墙钟变长；
-  3. 不改，接受偶发红并在阶段报告里注明「单跑为准」。
+  1. 读观测前先等 `/mock/stats` 的 `chatRequests >= 1`（或复用 `mock/llm/observe.rs` 的轮询口径），
+     代价是给三条 `chat.*` 用例加一次有超时的等待；
+  2. 让用例在 404 时补一次终态与 `run/get` 的对照信息，把「请求没到 Provider」与「记录滞后」区分开；
+  3. 不改，等下一次复现再定位（需要更多证据才能定性）。

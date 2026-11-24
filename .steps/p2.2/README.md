@@ -1,6 +1,6 @@
 # P2.2：边界压力用例、后台服务端与测试数据通道收敛
 
-**状态：已规划，未开工。** 任务与批次见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)，判据见本文 §六。
+**状态：已完成（2026-11-24）。** 结论与证据见 [`docs/reports/p2.2-016-acceptance.md`](../../docs/reports/p2.2-016-acceptance.md)；任务与批次见 [tasks.md](tasks.md)，决策见 [decisions.md](decisions.md)，判据见本文 §六，遗留问题见 [known-issues.md](known-issues.md)。
 
 > 依据：P2.1 验收结论（[`docs/reports/p2.1-014-acceptance.md`](../../docs/reports/p2.1-014-acceptance.md)）、`docs/develop.md` 的测试约定、仓库根 `AGENTS.md` 的现有条款，以及仓库实际代码（`crates/bin-tests`、`crates/manager-agent`、`crates/agent-runtime`、`crates/lib-db`、`crates/lib-bin-cli`、`crates/lib-core`、`crates/lib-web`）。凡文档与代码不一致之处，以代码为准并记入 `decisions.md`。
 >
@@ -210,10 +210,10 @@ D ──────────────┘
 | **G-1-1** | `bin-tests --list` 可查 `stress.boundary`；`make test ARGS="stress"` 可单跑 |
 | **G-1-2** | 用例自带服务端配置里 `max_concurrent_runs = 1`、`run_queue_timeout_ms = 3000`，且报告打印生效配置 |
 | **G-1-3** | 客户端数量由标定得出：报告给出 `L0`、`T`、`N = floor(T / L0) + 1` 与推导过程；代码中不存在固化的客户端数量（可核） |
-| **G-1-4** | ②阶段全部成功且总耗时 ≤ `T`；`N < 8` 时用例以「参数不足以形成边界」失败并点明原因 |
+| **G-1-4** | ②阶段全部成功且总耗时 ≤ 上界（`T + max(L0 × 2, 500ms)`，D-P2.2-013 定下「加上末段」、D-P2.2-016 定下收尾余量）；`N < 8` 时用例以「参数不足以形成边界」失败并点明原因 |
 | **G-1-5** | ③阶段（`2N`）稳定出现 `FAILED`「执行排队超时」，超时条数写入报告 |
 | **G-1-6** | 证据全部来自内存：客户端事件 + 测试进程计时 + 服务端快照；用例不读日志、不读 `server.log` |
-| **G-1-7** | 用例是 `Isolated`（私有服务端 + 私有 Mock），不占用共享服务端；连续 3 次同一配置全绿 |
+| **G-1-7** | 用例是 `SelfServed`（私有服务端 + 私有 Mock，D-P2.2-013），不占用共享服务端；连续 3 次同一配置全绿 |
 | **G-1-8** | 默认并发下 `--all` 仍全绿（回归判据，不是压力收益的证据） |
 
 ### G-2 `server --async`
@@ -260,7 +260,7 @@ D ──────────────┘
 8. **`--async` 的孤儿进程**：没有 `--stop` 时，用户只能靠 PID 文件或任务管理器收尾。本阶段只保证「不乱杀、不留守护进程」，不承诺进程治理。
 9. **`--async` 的 Unix 语义弱于 Windows**：没有 `setsid` 时终端关闭可能带回 SIGHUP。已在帮助文案与文档写明；需要更强语义时再引入依赖（D-P2.2-005）。
 10. **报告口径变化会改变历史可比性**：P2.1 的报告数字来自日志阈值行，本阶段之后同一指标改由快照给出。跨阶段对比时必须注明来源不同，不能直接相减。
-11. **测试执行受授权约束**：G-1-7 / G-1-8 / G-2 的实测条目、任何 `make test` 都需要明确授权；未授权时本阶段只推进代码与文档部分，相关判据保持未勾选。
+11. **测试执行受授权约束**：G-1-7 / G-1-8 / G-2 的实测条目与任何 `make test` 都需要明确授权。本次验收经授权执行了 `--all` × 6、`stress` × 3、`cli` × 1；未授权时本阶段只推进代码与文档部分，相关判据保持未勾选。
 
 ---
 
@@ -268,13 +268,13 @@ D ──────────────┘
 
 | 编号 | 事项 | 状态 |
 |---|---|---|
-| D-P2.2-001 | 快照出口：debug 探针端点 / 关闭时写 JSON / 两者并存 | 倾向端点，见 [decisions.md](decisions.md) |
-| D-P2.2-002 | 是否允许为审计层给 `framework-core` 的 `LoggingConfig` 增加 `layers` | 倾向允许 |
-| D-P2.2-003 | `stress.boundary` 是否默认纳入 `--all` | 倾向纳入 |
-| D-P2.2-004 | `--async` 是否提供 `--stop` / PID 文件语义 | 倾向只写 PID 文件 |
-| D-P2.2-005 | Unix 是否为 `setsid` 引入 `libc` | 倾向不引入 |
-| D-P2.2-006 | canary 用例的保留口径（内存审计 / 删除） | 倾向内存审计 |
-| D-P2.2-007 | 边界外阶段（`2N`）是否默认启用 | 倾向默认启用 |
-| D-P2.2-008 | `docs/*` 与 `.steps/README.md` 的同步授权与时机 | 待确认 |
-
+| D-P2.2-001 | 快照出口：debug 探针端点 / 关闭时写 JSON / 两者并存 | 已定案：探针端点（见 [decisions.md](decisions.md)） |
+| D-P2.2-002 | 是否允许为审计层给 `framework-core` 的 `LoggingConfig` 增加 `layers` | 已定案：允许，且已落地 |
+| D-P2.2-003 | `stress.boundary` 是否默认纳入 `--all` | 已定案：纳入 |
+| D-P2.2-004 | `--async` 是否提供 `--stop` / PID 文件语义 | 已定案：只写 PID 文件 |
+| D-P2.2-005 | Unix 是否为 `setsid` 引入 `libc` | 已定案：不引入 |
+| D-P2.2-006 | canary 用例的保留口径（内存审计 / 删除） | 已定案：内存审计 |
+| D-P2.2-007 | 边界外阶段（`2N`）是否默认启用 | 已定案：默认启用 |
+| D-P2.2-008 | `docs/*` 与 `.steps/README.md` 的同步授权与时机 | 已定案：授权全量四份，Batch E 一次性同步 |
+| D-P2.2-009 ~ D-P2.2-016 | 公式口径、日志删除范围、收尾口径、`--async` 落地细节、内边界收尾余量 | 已定案并落地（见 [decisions.md](decisions.md)） |
 各项的候选方案与理由见 [decisions.md](decisions.md)。

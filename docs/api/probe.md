@@ -3,7 +3,7 @@
 `probe` 不是业务领域，它承担三件事：验证 `web_api` 宏的能力边界、提供错误响应与错误码的回归基线、提供客户端探活入口。通用约定（地址、响应包装、错误体、字段类型）见 [readme.md](readme.md)。
 
 - 定义位置：`crates/lib-web/src/probe/{api.rs,dto.rs}`
-- 默认鉴权：`typed` / `health` / `version` / `shutdown` 显式声明 `AuthRule::anonymous()`，其余沿用 `auth` 默认值（P1 未启用鉴权，对本地客户端无影响）
+- 默认鉴权：`typed` / `health` / `version` / `metrics` / `shutdown` 显式声明 `AuthRule::anonymous()`，其余沿用 `auth` 默认值（P1 未启用鉴权，对本地客户端无影响）
 - 探针服务启动：`cargo run -p lib-web --example api_probe_server`（默认 `127.0.0.1:20103`，可用 `AGENT_PROBE_PORT` 改端口），启动日志打印收集到的路由数
 - 结论与实测记录：`docs/reports/p1-004-api-probe.md`、`.steps/p1/decisions.md` D-024
 
@@ -22,9 +22,12 @@
 | GET | `api/probe/panic` | 无 | `ProbeQueryVO` | panic 兜底后响应体不含堆栈 |
 | GET | `api/probe/health` | 无 | `ProbeHealthVO` | 客户端探活 |
 | GET | `api/probe/version` | 无 | `ProbeVersionVO` | 版本与协议版本核对 |
+| GET | `api/probe/metrics` | 无 | `MetricsSnapshot` | 进程内运行时指标快照；**仅 debug + `metrics` 特性构建注册**（常规构建与 release 返回 404） |
 | POST | `api/probe/shutdown` | 无 | 无（204） | 优雅关闭联调；**仅 debug 构建注册**（release 返回 404） |
 
 > `api/probe/shutdown` 只记录关闭请求（`lib_core::lifecycle::request_shutdown()`），真正的关闭动作由 `lib-bin-web` 注册的钩子完成：先进入 200ms 拒绝窗口（此期间新请求返回 `503 {"code":503,"message":"服务正在关闭，请稍后重试"}`），再停止监听并排空进行中的请求。它用于关闭流程联调，不是对外契约，P2 前可删除；`make gen` 在 debug 下生成，因此两份 SDK 会包含该 path。语义见 `.steps/p1/decisions.md` D-028。
+
+> `api/probe/metrics` 是**测试数据出口**，不是业务接口（D-P2.2-001）：服务端跑在子进程里，端到端用例要拿它的运行时指标只能走这条结构化出口，返回的就是 `manager-agent` 的聚合 DTO（`MetricsSnapshot`），用例侧反序列化同一个类型，不复制字段。注册条件是 `debug_assertions` **且** `metrics` 特性：`cargo check -p bin-agent` / `make build` / `make release` 都不带该特性，因此常规构建与发布产物的路由表里没有这条路径，`make gen` 生成的 SDK 也不包含它；`make test` 构建的 `bin-agent` 打开 `metrics`，用例才能取到数据。
 
 ## 参数与载荷
 
@@ -74,6 +77,33 @@
 
 `startedAtMs` 由服务端启动时的 `mark_startup()` 记录；未显式记录时退化为首次访问时刻。
 `runningRunCount` 取 `service-core` 的会话 Mock 存储计数（`SessionService::running_run_count`），P2 换成 Repository 后统计口径不变。
+
+### MetricsSnapshot（运行时指标快照，仅 `metrics` 构建）
+
+载荷是 `crates/manager-agent/src/runtime/metrics.rs` 的聚合 DTO：各层在自己的 Crate 里累加原子量，这里只做转写。字段为 snake_case 的扁平数值，累计值自进程启动起算，取一次不重置。
+
+| 段 | 字段 | 含义 |
+|---|---|---|
+| `chain` | `runs` / `total_millis` / `max_millis` / `concurrent_max` / `clients` | 断连清理链：次数、累计与单次最长耗时、同时进入的峰值、清理的客户端数 |
+| `stop` | `calls` / `total_millis` / `max_millis` / `database_millis` / `executor_millis` / `writer_millis` | 会话停止：总耗时与落终态 / 执行队列收尾 / 写者收尾三段 |
+| `journal` | `appends` / `total_millis` / `max_millis` | 事件落盘帧数与耗时 |
+| `downlink_dropped` | 数值 | 下行通道满或已断导致丢弃的事件数 |
+| `session_locks` | `entries` / `entries_max` | 会话锁表条目数（最近一次 / 峰值） |
+| `session_lock_hold` | `calls` / `total_millis` / `max_millis` | 会话锁临界区持有时间（不含锁外收尾） |
+| `session_lock_wait` | `calls` / `total_millis` / `max_millis` | 取会话锁的等待时间 |
+| `registry_lock` | `reads` / `read_wait_millis` / `read_wait_max_millis` / `writes` / `write_wait_millis` / `write_wait_max_millis` / `forwards` / `forward_max_millis` | 注册表整表锁的读写等待与下行转发临界区 |
+| `database` | `calls` / `total_millis` / `max_millis` / `errors` | 取连接等待；`errors` 是 `database is locked` / `SQLITE_BUSY` 次数 |
+| `limit` | `queued` / `timeouts` / `cancelled` / `wait_total_millis` / `wait_max_millis` / `queued_max` / `running_max` / `running_now` | Run 排队与执行：排队超时、取消、最长排队、排队与执行峰值 |
+| `audit` | `total` / `error` / `warn` / `secret_hits` / `panics` | 日志审计：事件总数与级别计数、敏感串命中数、进程内 panic 数 |
+
+```text
+GET api/probe/metrics
+
+HTTP/1.1 200 OK
+{"code":200,"message":"Success","data":{"chain":{"runs":12,"total_millis":34,...},"limit":{"queued":59,"timeouts":0,"queued_max":54,"running_max":1,...},"audit":{"total":213,"error":0,"secret_hits":0,...}}}
+```
+
+> 未启用采集的构建里该路径不存在，用例侧把「404 / 连接失败 / 字段不匹配」都记作「未采集：原因」并显式报告，不静默跳过断言。
 
 ## 响应样例
 

@@ -8,7 +8,7 @@
 
 | 文档 | 领域 | 内容 |
 |---|---|---|
-| [probe.md](probe.md) | probe（探针与探活） | 技术验证探针、错误响应样例、`health` / `version` 探活，共 11 条 |
+| [probe.md](probe.md) | probe（探针与探活） | 技术验证探针、错误响应样例、`health` / `version` 探活、`metrics` 运行时指标快照，共 13 条（其中 `metrics` 仅 debug + `metrics` 特性构建注册，其余 12 条在所有构建存在） |
 | [session.md](session.md) | session（会话） | 会话 / 消息 / Run 业务接口（P2 起真实执行），共 6 条 |
 | [runtime.md](runtime.md) | runtime（客户端连接） | 注册、心跳 / 问询应答、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |

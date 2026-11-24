@@ -58,6 +58,27 @@ pub(crate) const OUTER_FACTOR: usize = 2;
 /// 只影响这条诊断断言的容差，**不影响** `N` 的取值（D-P2.2-009 禁止对 `N` 放水）。
 pub(crate) const QUEUE_PEAK_SLACK: usize = 4;
 
+/// 内边界「② 总耗时」上界里，末个 Run 自身串行段的允许放大倍数：上界按 `T + L0 × TAIL_FACTOR`。
+///
+/// `L0` 是在用例独占服务端时标定的，`--all` 下 CPU 被其他用例抢占，末个 Run 自己跑的那一段会被拉长，
+/// 因此不能直接按 `T + L0` 卡（KI-P2.2-002：实测超出 51ms，而 `L0` 只有 54ms）。
+pub(crate) const TAIL_FACTOR: u32 = 2;
+
+/// 并发下末段还会被调度延迟与 CPU 抢占拉长，量级与 `L0` 无关，因此上界另设一个托底余量。
+///
+/// 取 500ms 的依据：`--all`（默认并发）下实测 `L0 = 54ms` 的用例超出 `T + L0` 达 51ms，
+/// 托底余量覆盖同一量级的抖动；它只放宽「总耗时」这条诊断断言，**不影响** `N` 的取值。
+pub(crate) const TAIL_FLOOR: Duration = Duration::from_millis(500);
+
+/// 内边界的总耗时上界：`T + max(L0 × TAIL_FACTOR, TAIL_FLOOR)`（D-P2.2-016）。
+///
+/// 被排队预算约束的只有「等许可」那一段（最长排队 ≤ `T`）；末个 Run 拿到许可后还要自己跑完一个串行段，
+/// 因此末个终态必然落在 `T` 之后，最多再晚一个「并发下被拉长的串行段」。
+pub(crate) fn inner_ceiling(per_run: Duration, budget: Duration) -> Duration {
+    let tail = per_run.saturating_mul(TAIL_FACTOR).max(TAIL_FLOOR);
+    budget.saturating_add(tail)
+}
+
 /// 标定的合计死线（预热轮 + 标定轮共用）。
 pub(crate) const CALIBRATION_DEADLINE: Duration = Duration::from_secs(10);
 

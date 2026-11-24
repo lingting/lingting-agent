@@ -30,7 +30,7 @@
 | 开发环境 WebUI | 20101 | 开发环境 WebUI 端口 |
 | 开发环境服务端 | 20102 | 开发环境服务端端口 |
 | API 探针服务端 | 20103 | API 探针服务端端口 |
-| 测试共享服务端 | 20104 | 测试入口启动的唯一共享服务端端口；隔离用例使用动态空闲端口 |
+| 测试共享服务端 | 20104 | 测试入口启动的唯一共享服务端端口；隔离用例与自管用例（`stress.boundary` / `cli.async_server`）使用动态空闲端口 |
 
 约定：
 
@@ -50,6 +50,7 @@
 | 并发 | 默认取 CPU 内核数，`--concurrency N` 覆盖；单个用例失败不中断其余用例，结束后汇总 |
 | 共享服务端 | 用例注册为 `Shared` 时复用入口启动的唯一服务端，固定端口 20104；写用例时必须自建会话、不得断言全局计数 |
 | 隔离服务端 | 用例注册为 `Isolated` 时自起 `bin-agent server` 子进程，端口动态取空闲端口，适合有副作用（如触发关闭）或需要干净状态的用例 |
+| 自管服务端 | 用例注册为 `SelfServed` 时自己决定服务端与 Mock 的启停与配置（入口只给目录与端口），适合需要注入 `[agent]` 参数或私有 Mock 的用例（`stress.boundary`、`cli.async_server`）；端口动态取空闲端口，不占用 20104 |
 | 子进程文件 | 根目录为系统临时目录下的 `lingting-agent-tests/<运行 ID>/`：共享服务端用 `shard-shared/`，隔离用例用 `<用例名>/`；`server.log` 是子进程输出，`data/`、`config.toml`、`logs*/` 来自 `AGENT_HOME` |
 | 服务端二进制 | 默认取测试入口同目录的 `bin-agent`，可用 `AGENT_TEST_SERVER_BIN` 覆盖；缺失时提示先执行 `make build` |
 | 前端用例 | `web.ui` 转发 `pnpm exec vp test run --maxWorkers 4`（jsdom 单元用例），`web.e2e` 转发 `pnpm exec playwright test`（真实 Chromium）；两者都在 `lingting-agent-ui/` 内执行，命令写在 Rust 侧 `frontend` 模块，不依赖 package.json scripts |
@@ -65,6 +66,21 @@
 - 前端用例分两层：`lingting-agent-ui/tests/*.test.ts(x)` 是 jsdom 单元用例（Transport、SSE 切帧、`useChat`、首屏渲染），`lingting-agent-ui/tests/e2e/*.spec.ts` 是 Playwright 端到端用例（真实浏览器 + 真实服务端）。前端命令由 `bin-tests` 的 `util::frontend` 模块执行，不在 `package.json` 里另设 `test` 脚本。
 - 测试进程只作为客户端，不进程内启动服务端：`lifecycle` 关闭标记与日志初始化都是进程级单例，多实例会互相干扰。
 - 一次性测试与临时脚本不进入仓库，回归用例一律登记到测试入口。
+
+## 测试数据采集
+
+端到端用例的数据只允许来自「编译期特性 + 进程内内存采集 + 结构化快照」（P2.2 起；约束条款见仓库根 `AGENTS.md` 的「测试数据采集」一节）。
+
+| 项 | 说明 |
+|---|---|
+| 采集开关 | `metrics` 特性：`bin-agent` → `lib-bin-web` → `{agent-runtime, manager-agent, lib-web}` → `{lib-db, lib-core}`。`make test` 构建的 `bin-agent` 打开它；`cargo check -p bin-agent` / `make build` / `make release` 不开，此时采集代码是空实现，不占静态内存、不做原子操作 |
+| 出口 | `GET api/probe/metrics`，`debug_assertions` + `metrics` 双限定，返回 `manager-agent` 的 `MetricsSnapshot`；用例侧由 `util::server::capture` 反序列化同一个类型，不复制 DTO |
+| 采集点 | 各层在自己的 Crate 里累加原子量：清理链 / 会话停止 / 落盘 / 下行丢弃 / 会话锁 / 注册表 / 数据库取连接在 `manager-agent` 与 `lib-db`，Run 排队与执行在 `agent-runtime`（由 `lib-bin-web` 装配时以函数指针注册进 `manager-agent`），日志审计在 `lib-core` |
+| 渲染点 | `bin-tests` 的 `util::observability`：本进程快照 + 用例自己的服务端快照 → 报告章节；全仓只有这一个渲染点 |
+| 缺失 | 404（构建未开特性）/ 进程已退出 / 字段不匹配都记作「未采集：原因」写进报告；用例要么显式失败并点名缺失字段，要么在报告里写原因，不静默跳过断言 |
+| 禁止 | 读取、解析或文本检索 `server.log` 与日志目录来断言或出报告；为采集而打的阈值日志（`warn!` / `debug!`）不得重新引入，日志只保留带 `run_id` / `session_id` 的运行期流程事件 |
+
+快照字段清单见 `docs/api/probe.md` 的「MetricsSnapshot」一节。
 
 ## 配置装载
 
@@ -95,6 +111,7 @@
 - 服务端与 CLI 同时输出控制台；TUI 只写文件（控制台日志会破坏界面）。
 - 归档保留 2 天，不写 `combined.log`。
 - 文件日志为纯文本，控制台带 ANSI 颜色，两者除颜色外文字一致。
+- `agent server -a` / `--async` 派生的常驻进程：其 `stdout` / `stderr` 追加写 `<应用根目录>/logs/stdout.log`，PID 与服务地址写在 `<应用根目录>/server.pid`（两行 `pid = …` / `address = …`，探活通过后才写）。本阶段不提供 `--stop`（D-P2.2-004），Windows 用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` 脱钩，Unix 只做 stdio 重定向，终端关闭可能收到 SIGHUP（D-P2.2-005）。
 
 ## 退出码
 
@@ -111,7 +128,7 @@
 | 命令 | 说明 |
 |---|---|
 | `agent` / `agent tui [--server]` | 进入终端界面（无子命令时的默认行为，界面由 P1-015 实现） |
-| `agent server [--addr] [--port] [--log-level]` | 启动 HTTP 服务（前台常驻） |
+| `agent server [--addr] [--port] [--log-level] [-a\|--async]` | 启动 HTTP 服务（前台常驻）；`-a` / `--async` 改为派生一个常驻服务进程，探活通过后打印 PID、服务地址、日志目录与 PID 文件后退出 |
 | `agent run <TASK> [--stream\|--json] [--server]` | 注册客户端 → 建下行流 → 创建会话 → 占用会话 → 发消息 → 消费下行流 → 释放占用 → 反注册；`--stream` 逐段打印回复，`--json` 打印 `{sessionId, runId, status, content}` |
 | `agent status [--server]` | 探活：服务地址、健康状态、版本与协议版本、运行时长、运行中 Run 数 |
 

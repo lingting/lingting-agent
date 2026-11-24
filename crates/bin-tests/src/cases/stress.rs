@@ -10,7 +10,8 @@
 //!    串行化；注册 / 会话 / 占用 / 订阅是每个客户端各自的准备开销，计进 `L0` 会把边界算小
 //!    （实测过一次，`2N` 全部完成）；
 //! 2. **② 内边界**：`N = floor(T / L0) + 1` 个客户端同时发起，必须全部 `run_completed`；
-//!    且末个终态不晚于 `T + L0`（末个 Run 拿到许可后还要自己跑完一个串行段）；
+//!    且末个终态不晚于 `T + L0 × 2`（末个 Run 拿到许可后还要自己跑完一个串行段，并发下会被拉长，
+//!    见 `stress::inner_ceiling`）；
 //! 3. **③ 外边界**：`2N` 个客户端同时发起，必须出现排队超时——门槛因此自证存在。
 //!
 //! 数据口径（G-1-6）：全部来自内存——客户端收到的 `RunEvent`、测试进程计时、服务端快照
@@ -211,10 +212,12 @@ async fn boundary_body(context: &TestContext) -> Result<Vec<String>> {
     Ok(vec![
         format!("① 标定：{}", calibration.render()),
         format!(
-            "② N = {} 个客户端全部 run_completed，总耗时 {} ≤ T + L0 = {}；最长排队 {inner_wait}ms < T = {}",
+            "② N = {} 个客户端全部 run_completed，总耗时 {} ≤ T + max(L0 × {}, {}) = {}；最长排队 {inner_wait}ms < T = {}",
             inner_phase.clients,
             stress::millis(inner_total),
-            stress::millis(budget.saturating_add(l0)),
+            stress::TAIL_FACTOR,
+            stress::millis(stress::TAIL_FLOOR),
+            stress::millis(stress::inner_ceiling(l0, budget)),
             stress::millis(budget)
         ),
         format!("② 服务端快照：{}", inner_phase.limit_line()),
@@ -580,9 +583,10 @@ fn phase_distribution(phase: &Phase) -> Result<Distribution> {
 /// 内边界断言（README §4.1）：全部完成、总耗时不超过「预算 + 一个串行段」、
 /// `running_max == 1`、在跑 + 排队的峰值够深、`limit.timeouts == 0`。
 ///
-/// 总耗时的上界是 `T + L0` 而不是 `T`：被排队预算约束的是**等许可**那一段（最长排队 ≤ `T`），
-/// 最后一个 Run 拿到许可后还要自己跑完一个串行段，因此末个终态必然落在 `T` 之后最多 `L0` 处。
-/// 按 `≤ T` 断言与 `N = floor(T / L0) + 1` 的公式自相矛盾（`N × L0 > T`）。
+/// 总耗时的上界是 `T + max(L0 × 2, 500ms)` 而不是 `T`：被排队预算约束的是**等许可**那一段
+/// （最长排队 ≤ `T`），最后一个 Run 拿到许可后还要自己跑完一个串行段，因此末个终态必然落在 `T` 之后。
+/// 按 `≤ T` 断言与 `N = floor(T / L0) + 1` 的公式自相矛盾（`N × L0 > T`）；只按 `T + L0` 卡又会在
+/// `--all` 并发下被 CPU 抢占打红（KI-P2.2-002），故上界统一由 [`stress::inner_ceiling`] 给出（D-P2.2-016）。
 fn assert_inner(phase: &Phase, budget: Duration, per_run: Duration) -> Result<()> {
     let limit = phase.limit_line();
     for (index, outcome) in phase.outcomes.iter().enumerate() {
@@ -601,10 +605,12 @@ fn assert_inner(phase: &Phase, budget: Duration, per_run: Duration) -> Result<()
     }
 
     let total = phase_total(phase)?;
-    let ceiling = budget.saturating_add(per_run);
+    let ceiling = stress::inner_ceiling(per_run, budget);
     ensure!(
         total <= ceiling,
-        "阶段 {INNER_TAG}：期望最后一个终态不晚于 T + L0 = {}（T = {}、L0 = {}），实际 {}（超出 {}）；{limit}",
+        "阶段 {INNER_TAG}：期望最后一个终态不晚于 T + max(L0 × {}, {}) = {}（T = {}、L0 = {}），实际 {}（超出 {}）；{limit}",
+        stress::TAIL_FACTOR,
+        stress::millis(stress::TAIL_FLOOR),
         stress::millis(ceiling),
         stress::millis(budget),
         stress::millis(per_run),
