@@ -15,6 +15,7 @@ members = [
     "crates/agent-context",
     "crates/agent-route",
     "crates/agent-runtime",
+    "crates/agent-tool",
     "crates/lib-db",
     "crates/manager-agent",
     "crates/bin-tests",
@@ -46,6 +47,7 @@ agent-context-core = { path = "crates/agent-context-core" }
 agent-context = { path = "crates/agent-context" }
 agent-route = { path = "crates/agent-route" }
 agent-runtime = { path = "crates/agent-runtime" }
+agent-tool = { path = "crates/agent-tool" }
 lib-db = { path = "crates/lib-db" }
 manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
@@ -70,6 +72,7 @@ base64 = { version = "0.22" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 serde_with = { version = "3.21" }
+schemars = { version = "1.2" }
 specta = { version = "=2.0.0-rc.25", features = ["derive", "function", "bytes"] }
 specta-typescript = { version = "0.0.12" }
 specta-serde = { version = "0.0.12" }

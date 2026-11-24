@@ -1,6 +1,6 @@
 # P3 验收清单
 
-**状态：规划期（未开工）。** 判据已展开，尚未取证。结论与证据将汇总为 `docs/reports/p3-032-acceptance.md`。
+**状态：Batch A（P3-001 ~ P3-004）已完成，A-1 / A-5 / A-6 与 S-1 的静态部分已核对通过（`cargo clippy -p agent-tool --all-targets -- -D warnings` 无告警）；其余条目待后续批次取证。** 判据已展开，用例相关条目尚未取证。结论与证据将汇总为 `docs/reports/p3-032-acceptance.md`。
 
 每条都要能实际验证；**任一条不通过，P3 不视为完成**。
 

@@ -1,0 +1,40 @@
+[package]
+name = "agent-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "统一 Tool System：Tool Trait、定义、Schema、注册表、执行器与内置工具"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lib-core = { workspace = true }
+# 工具执行上下文沿用 Agent 领域的标识类型，本 Crate 不自造一套。
+agent-core = { workspace = true }
+# Tool 定义（尤其是 P5 的 Skill 声明所需工具）遵循 Context 侧的抽象，避免两套模型。
+agent-context-core = { workspace = true }
+
+# 工具结果的文本归一化与参数 JSON 都走 serde。
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 参数 schema 由类型派生（唯一来源），不做 JSON Schema 校验（D-P3-002）。
+schemars = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+# 仅 `http_request` 使用；本 Crate 不直接依赖 reqwest（D-P3-018）。
+framework-http = { workspace = true, features = ["reqwest"] }
+
+# 契约 DTO（`ToolDefinitionVO`）用 `auto_type` 标注参与 SDK 生成；宏展开使用绝对路径，
+# 因此这些 crate 必须直接声明，`collect` 让生成的类型元数据可被导出器看到（同 `types-core`）。
+framework-proc-auto = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect"] }
+serde_with = { workspace = true }
+specta = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+
+[lints]
+workspace = true

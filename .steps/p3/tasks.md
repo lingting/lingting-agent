@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：规划期（未开工）。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004；只做代码、静态检查与文档，未执行任何用例），Batch B ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -17,7 +17,7 @@
 
 > 依赖：无。本批次只造「抽象 + 注册表」，没有任何执行路径，也不接 Provider。
 
-- [ ] **P3-001 新增 Crate `agent-tool` 与依赖边界**
+- [x] **P3-001 新增 Crate `agent-tool` 与依赖边界**
 
   **目标**：让工具系统有一个自己的领域 Crate，依赖方向从一开始就锁死。
   **前置依赖**：无。
@@ -28,12 +28,12 @@
   3. `docs/workspace.md` 的 `agent-tool` 段：去掉「阶段：P3」的规划口吻，补「内置工具位于 `builtin` 子模块」「依赖 `framework-http` 仅为 `http_request`」「`service-core` 依赖它（审计记录与查询载荷）」三条。
   4. 全局检索 `agent-tool` 的既有引用（`.steps/p2/acceptance.md` A-7 的历史记录不改）确认没有其它文档需要同步。
   **验收标准**：
-  - [ ] `cargo check -p agent-tool` 通过；`cargo tree -p agent-tool` 里没有 `agent-runtime` / `agent-route` / `rig-core` / `service-core` / `lib-web` / `bin-*`。
-  - [ ] `cargo tree -i agent-tool` 只有 `agent-runtime` / `service-core` / `bin-tests`，没有反向边。
-  - [ ] `docs/workspace.md` 的成员清单与 `Cargo.toml` 的 members 一致（两处可逐条对照）。
+  - [x] `cargo check -p agent-tool` 通过；`cargo tree -p agent-tool` 里没有 `agent-runtime` / `agent-route` / `rig-core` / `service-core` / `lib-web` / `bin-*`。
+  - [x] `cargo tree -i agent-tool` 只有 `agent-runtime` / `service-core` / `bin-tests`，没有反向边。（Batch A 尚无消费方，当前反查只命中自身。）
+  - [x] `docs/workspace.md` 的成员清单与 `Cargo.toml` 的 members 一致（两处可逐条对照）。
   **测试要求**：无（不写测试代码）。检查方式为 `cargo check`、`cargo tree` 与 `git diff`。
 
-- [ ] **P3-002 Tool 契约类型**
+- [x] **P3-002 Tool 契约类型**
 
   **目标**：定义 Tool Trait、Definition、风险等级、本地文件操作声明、并发语义、错误与结果类型、执行上下文。
   **前置依赖**：P3-001。
@@ -47,14 +47,14 @@
   6. `ToolContext`：执行期只读参数（`home` 应用根目录、`session_id`、`run_id`、`tool_call_id`、`deadline`），**不含** registry / service / provider；工具不得从上下文里拿到超出自己职责的东西。
   7. 工具名规则集中在一个 `validate_name` 函数里（`^[a-z][a-z0-9_]{1,63}$`），注册期调用。
   **验收标准**：
-  - [ ] `ToolFileAccess` 四个取值都有对应说明，且 `default_concurrency()` 的映射可逐项对照（`None` / `Read` → `Parallel`，`Write` / `ReadWrite` → `Exclusive`）。
+  - [x] `ToolFileAccess` 四个取值都有对应说明，且 `default_concurrency()` 的映射可逐项对照（`None` / `Read` → `Parallel`，`Write` / `ReadWrite` → `Exclusive`）。
   - [ ] `ToolDefinition` 带 `file_access`，但发给模型的请求里不包含它（`LlmToolDefinition` 只有 name / description / parameters）。
-  - [ ] `Tool` 能被 `Arc<dyn Tool>` 持有（`Send + Sync`，无泛型参数出现在 trait 方法签名里）。
-  - [ ] `ToolContext` 的字段可逐项对照 README §4.4：工具拿不到 registry / 数据库 / Provider。
-  - [ ] `cargo clippy -p agent-tool --all-targets -- -D warnings` 通过。
+  - [x] `Tool` 能被 `Arc<dyn Tool>` 持有（`Send + Sync`，无泛型参数出现在 trait 方法签名里）。
+  - [x] `ToolContext` 的字段可逐项对照 README §4.4：工具拿不到 registry / 数据库 / Provider。
+  - [x] `cargo clippy -p agent-tool --all-targets -- -D warnings` 通过。
   **测试要求**：无。
 
-- [ ] **P3-003 Schema 单一来源（schemars 派生 + serde 校验）**
+- [x] **P3-003 Schema 单一来源（schemars 派生 + serde 校验）**
 
   **目标**：参数类型是 schema 与校验的唯一来源，不存在手写 JSON Schema。
   **前置依赖**：P3-002。
@@ -65,12 +65,12 @@
   3. `ToolSchema` 同时导出 `auto_type` 的契约 DTO（`ToolDefinitionVO`），让「有哪些工具、参数长什么样」能被 SDK 与前端消费。
   4. 记录一条口径：`schemars` 只负责生成，不做校验；校验一律走 `parse`（README §4.2）。
   **验收标准**：
-  - [ ] 全仓检索不到手写的 `"type": "object"` 参数 schema（`builtin` 之外应为零命中；`builtin` 内也没有）。
+  - [x] 全仓检索不到手写的 `"type": "object"` 参数 schema（`builtin` 之外应为零命中；`builtin` 内也没有）。
   - [ ] `schema::of::<A>()` 对「必填 + 可选 + 枚举 + 数字」四类字段的输出与 `serde` 的接受/拒绝行为一致（同一份 `*Args` 上对照可核）。
-  - [ ] `schemars` 版本与 `Cargo.lock` 里已有的 1.2.3 一致，没有引入第二份（`cargo tree -d` 无新增重复）。
+  - [x] `schemars` 版本与 `Cargo.lock` 里已有的 1.2.3 一致，没有引入第二份（`cargo tree -d` 无新增重复）。
   **测试要求**：无（Batch H 的 `tool.schema` 用例在 `bin-tests` 里覆盖同一口径）。
 
-- [ ] **P3-004 `ToolRegistry` 与模型可见清单**
+- [x] **P3-004 `ToolRegistry` 与模型可见清单**
 
   **目标**：注册与查找的唯一入口；「哪些工具能发给模型」由权限过滤后的清单决定。
   **前置依赖**：P3-002、P3-003。
@@ -83,9 +83,9 @@
   5. `lookup(name) -> Option<&Arc<dyn Tool>>`：执行期查找。
   6. 空清单是合法状态（全部 deny 或未注册任何工具），此时请求里不带 `tools`。
   **验收标准**：
-  - [ ] 重名注册返回错误，不覆盖先注册的实现。
-  - [ ] `model_definitions()` 的顺序只由名字决定，与注册顺序无关。
-  - [ ] 被 `Deny` 的工具不出现在 `model_definitions()`，但 `lookup` 仍能命中（供 DENIED 回灌）；被 `Confirm` 的工具**在**清单里。
+  - [x] 重名注册返回错误，不覆盖先注册的实现。
+  - [x] `model_definitions()` 的顺序只由名字决定，与注册顺序无关。
+  - [x] 被 `Deny` 的工具不出现在 `model_definitions()`，但 `lookup` 仍能命中（供 DENIED 回灌）；被 `Confirm` 的工具**在**清单里。
   **测试要求**：无（Batch H 用 `tool.denied` / `tool.confirm.*` 覆盖）。
 
 ---

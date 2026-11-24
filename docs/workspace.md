@@ -257,7 +257,7 @@ Agent Skills 能力（阶段：P5）。
 
 #### agent-tool
 
-统一 Tool System（阶段：P3）。
+统一 Tool System（P3 起落地）。
 
 职责：
 
@@ -276,6 +276,9 @@ Agent Skills 能力（阶段：P5）。
 - **Tool 不等于 Context**：Tool 提供模型可调用的执行能力，Context 负责组织模型输入。
 - 同时遵循 `agent-context-core` 的相关抽象，以便把 Tool Definition 等能力提供给 Context / Completion 请求的准备流程。
 - 不依赖 `agent-runtime`；工具模块不得反向依赖运行时。
+- 内置工具（`calculator` / `current_time` / `file_read` / `file_search` / `http_request`）位于 `builtin` 子模块，与 Tool 抽象同处本 Crate，不新建 `agent-tool-builtin`（`.steps/p3/decisions.md` D-P3-001）。
+- 依赖 `framework-http` 仅为 `http_request`，本 Crate 不直接依赖 `reqwest`；契约 DTO 的 `auto_type` 依赖 `framework-proc-auto` / `framework-proc-core`（`collect` 特性，同 `types-core`）。
+- P3 起 `service-core` 依赖本 Crate 承载审计记录与查询载荷（D-P3-011）；反向边不成立。
 
 #### agent-mcp
 
@@ -669,12 +672,12 @@ manager-agent -> service-agent
 | `lib-core` | 无 | framework 基础能力 | 任何业务 / Agent / Web / Binary Crate |
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
-| `service-core` | `agent-core`（仅类型层，P2 起）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
+| `service-core` | `agent-core`（仅类型层，P2 起）、`agent-tool`（仅类型层，P3 起：审计记录与查询载荷，D-P3-011）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` / `agent-tool` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
 | `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
-| `agent-tool` | `agent-context-core`、`lib-core` | JSON Schema 相关库 | `agent-runtime`、`agent-mcp` |
+| `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
 | `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
 | `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
@@ -892,7 +895,7 @@ embed-ui = ["dep:rust-embed"]
 
 目标架构包含的 Crate **不要求一次性创建**。创建顺序严格跟随 `.steps/` 路线图。
 
-### 8.1 当前实际实现范围（P1 / P1.1 / P2）
+### 8.1 当前实际实现范围（P1 / P1.1 / P2 / P3）
 
 | Crate | 阶段 | 说明 |
 |---|---|---|
@@ -912,6 +915,7 @@ embed-ui = ["dep:rust-embed"]
 | `agent-context-core` | P2 | Context 抽象 |
 | `agent-context` | P2 | Context 组装与裁剪 |
 | `agent-runtime` | P2 | Agent Loop、执行端口实现与全局并发限制 |
+| `agent-tool` | P3 | Tool Trait / 定义 / Schema / 注册表 / 执行器与内置工具 |
 | `bin-tests` | P1 | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
 P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_sdk`；生成逻辑与其共用输出处理在 `examples/support/`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
@@ -946,7 +950,7 @@ P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-cont
 
 | 阶段 | 新增 Crate | 状态 |
 |---|---|---|
-| P3 | `agent-tool` | 未创建 |
+| P3 | `agent-tool` | 已创建（P3-001） |
 | P4 | `agent-mcp` | 未创建 |
 | P5 | `agent-skill` | 未创建 |
 | P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
@@ -1010,6 +1014,6 @@ P2 已明确的 Non-goals（Tool / MCP / Skills / Memory）意味着 `agent-cont
 1. **客户端 SDK 生成物的落位（P1-006 落定，P1-007 已复核：维持不建独立 crate、不入库）**：Rust SDK 生成物放 `packages/sdk-rust`，由 `lib-bin-cli` 用 `#[path]` 作为自身模块引入（不建独立 crate、不加 path 依赖、不入库）；TS SDK 放 `packages/sdk-ts`，由 `lingting-agent-ui/` 内的 pnpm workspace 引入。若后续要把生成物变成独立 Crate，必须同时解决「path 依赖的 manifest 先于生成存在」的引导死锁（方案：入库该 crate，见 `docs/reports/p1-006-rust-sdk.md` 第 2 节），属架构变更，须先更新本文档。
 2. **`lib-bin-tui -> lib-bin-cli` 依赖**：为保证 TUI 复用同一套 SDK 接入与连接管理，此处补充了该依赖。若后续希望 TUI 不依赖 CLI 命名下的 Crate，需要调整命名或拆分客户端共享层。
 3. **`lib-web-core` 依赖 `types-core`**：用于承载跨端错误契约等通用类型。若希望 `lib-web-core` 完全不依赖业务类型层，需要把这些契约类型另行归位。
-4. **`agent-tool` 是否依赖 `agent-core`**：当前不依赖，以保持 Tool 层与 Agent 领域类型解耦；若 Tool 执行上下文确需引用 Run / Turn 等类型，需重新评估。
+4. **`agent-tool` 是否依赖 `agent-core`**：P3-001 定稿**依赖**（仅类型层）——工具轨迹最终要与 Agent 领域的 Run / Message 契约共用同一套类型来源，本 Crate 不自造；Batch A 尚无引用点，且仍禁止依赖 `agent-runtime` / `agent-route` / `rig-core`。
 5. **`bin-mock-server` 的依赖面**：当前限定为 `lib-web-core` + `lib-core`，明确不得依赖 `agent-runtime` 与 `service-core`。
 6. **feature 裁剪的真实效果**：`embed-ui` 的实际裁剪效果必须在依赖图确定后验证，不能只依据声明推断。
