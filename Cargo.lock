@@ -53,6 +53,7 @@ dependencies = [
  "futures-util",
  "lib-core",
  "rig-core",
+ "serde_json",
  "types-core",
 ]
 

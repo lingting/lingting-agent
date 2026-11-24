@@ -18,4 +18,7 @@ pub mod rig;
 
 pub use error::LlmError;
 pub use model::ModelRoute;
-pub use provider::{LlmMessage, LlmProvider, LlmRequest, LlmStream, LlmStreamEvent, LlmStreamFuture, ProviderService};
+pub use provider::{
+    LlmMessage, LlmProvider, LlmRequest, LlmStream, LlmStreamEvent, LlmStreamFuture, LlmToolCall, LlmToolDefinition,
+    ProviderService,
+};

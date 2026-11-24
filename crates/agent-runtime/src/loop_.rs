@@ -85,6 +85,8 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     let request = LlmRequest {
         model: run.model.clone(),
         messages: prepared.messages,
+        // 工具定义由 Batch D 的工具循环提供：Batch C 只把「能带工具、能收到调用」表达进契约。
+        tools: Vec::new(),
         max_output_tokens: Some(prepared.max_output_tokens),
     };
     let mut stream = match llm.stream(request).await {
@@ -114,6 +116,8 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
                 Some(Ok(LlmStreamEvent::Usage { input_tokens, output_tokens })) => {
                     usage = Some((input_tokens, output_tokens));
                 }
+                // 工具调用由 Batch D 的多轮循环接管：Batch C 的请求不带工具定义，不会出现。
+                Some(Ok(LlmStreamEvent::ToolCall { .. })) | Some(Ok(LlmStreamEvent::ToolCallsDone)) => {}
                 Some(Ok(LlmStreamEvent::Done)) | None => break,
                 Some(Err(error)) => {
                     drop(stream);
@@ -169,11 +173,9 @@ async fn prepare(runtime: &AgentRuntime, run: &Run, prompt: &str) -> Result<Prep
         messages: context
             .items()
             .iter()
-            .map(|item| LlmMessage {
-                role: item.role,
-                content: item.content.clone(),
-            })
-            .collect(),
+            .map(|item| LlmMessage::text(item.role, item.content.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| logged(error.public_message(), error))?,
         max_output_tokens: model.max_output_tokens as u64,
         input_tokens: context.metadata().estimated_tokens as i64,
     })

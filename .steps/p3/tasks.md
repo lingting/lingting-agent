@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 部分完成（P3-010 / P3-011 代码 + 静态检查，P3-012 按需求方决定推迟到 Batch E 之后）；Batch D ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -189,8 +189,10 @@
 ## Batch C：Provider 与 Context 扩展（P3-010 ~ P3-012）
 
 > 依赖：Batch A。本批次不碰执行循环，只把「工具」这件事表达进请求与 Context。
+>
+> **状态**：P3-010 / P3-011 已完成（代码 + `make check` 通过，未执行用例）；**P3-012 未开工**——它要读 `Message` 的 `tool_calls` / `tool_call_id`，而这三个字段由 P3-018（Batch E）追加，经需求方确认推迟到 Batch E 之后落地，本节其余验收项保持未勾选。
 
-- [ ] **P3-010 `LlmProvider` 契约扩展**
+- [x] **P3-010 `LlmProvider` 契约扩展**
 
   **目标**：抽象层能表达工具定义、工具调用与工具结果，且不泄漏 Rig 类型。
   **前置依赖**：P3-002。
@@ -202,13 +204,13 @@
   4. `LlmStreamEvent` 增加 `ToolCall { id, name, arguments }`（一次调用一条，arguments 是完整 JSON 文本）与 `ToolCallsDone`（本轮工具调用清单结束，可继续消费或结束）。
   5. 现有 `Delta` / `Usage` / `Done` 的语义与顺序不变。
   **验收标准**：
-  - [ ] `agent-route` 的公开签名里没有 `rig_core::*` 类型（`grep` 可核）。
-  - [ ] 无工具时 `LlmRequest.tools` 为空，既有调用方编译期只需补一个字段。
-  - [ ] `TOOL` 消息缺 `tool_call_id` 时在构造处就拒绝（返回 `LlmError::InvalidRequest`），不会把非法历史发给上游。
-  - [ ] `LlmToolDefinition` 的字段清单恰好是 name / description / parameters（逐字段核对）。
+  - [x] `agent-route` 的公开签名里没有 `rig_core::*` 类型（`grep` 可核：`crates/agent-route/src` 下除 `src/rig/` 外无任何 `rig_core` 引用）。
+  - [x] 无工具时 `LlmRequest.tools` 为空，既有调用方编译期只需补一个字段。
+  - [x] `TOOL` 消息缺 `tool_call_id` 时在构造处就拒绝（返回 `LlmError::InvalidRequest`），不会把非法历史发给上游（`LlmMessage::text` 拒绝 `Tool` 角色，`LlmMessage::tool_result` 拒绝空标识）。
+  - [x] `LlmToolDefinition` 的字段清单恰好是 name / description / parameters（逐字段核对）。
   **测试要求**：无。
 
-- [ ] **P3-011 Rig Adapter：工具定义翻译与工具调用聚合**
+- [x] **P3-011 Rig Adapter：工具定义翻译与工具调用聚合**
 
   **目标**：Rig 的工具能力被完整接进项目事件流，且 Rig 类型不出 `rig` 子模块。
   **前置依赖**：P3-010。
@@ -220,13 +222,15 @@
   4. 聚合完成后产出一条 `LlmStreamEvent::ToolCall`，全部工具调用结束后产出 `ToolCallsDone`；`Done` 仍然只在流真正结束时产出。
   5. 保持 P2 的既有行为：纯文本流不受影响，`StreamEvent::Reasoning` 仍然忽略。
   **验收标准**：
-  - [ ] 无工具请求的请求体与 P2 一致（`/mock/last-request` 对照可核：没有 `tools` 键）。
-  - [ ] 分片拼接正确：三次 `Arguments` 分片拼成完整 JSON；缺 `End` 时返回错误而不是半截 JSON。
-  - [ ] `grep -rn "rig" crates --include=*.rs` 仍只命中 `crates/agent-route/src/rig/`。
+  - [x] 无工具请求的请求体与 P2 一致：`tools` 为空时根本不调用 `.tools()`，请求体里不出现 `tools` 键（`/mock/last-request` 对照用例待 Batch H 授权）。
+  - [x] 分片拼接正确：`Arguments` 分片按 `part` 拼接后整体解析；缺 `End`、分片不是 JSON 对象、`End` 内容不是工具调用时返回 `InvalidRequest` 而不是半截 JSON。
+  - [x] `grep -n "rig_core" crates/agent-route/src` 只命中 `src/rig/`；`crates` 里其余 `rig` 字样仅出现在文档注释与 `agent-route` 的 `pub mod rig` 声明。
+  - [x] 工具结果的工具名按 `tool_call_id` 回查历史里的助手调用补齐（Rig 的 `ToolResult` 要求工具名，而结果消息只带标识）；查不到按 `InvalidRequest` 拒绝。
   **测试要求**：无（`tool.stream` 用例覆盖，**需授权**）。
 
 - [ ] **P3-012 Context：工具轨迹进历史，按组裁剪**
 
+  **未开工**：前置数据缺失——`history_item` 要读 `Message` 的 `tool_calls` / `tool_call_id`，这三个字段由 P3-018 追加；经需求方确认推迟到 Batch E 之后落地，下面的步骤与验收标准保持原样。
   **目标**：工具轨迹成为历史的一部分（D-P3-003），裁剪以「工具调用组」为单位（D-P3-025）。
   **前置依赖**：P3-010。
   **涉及文件 / Crate**：`crates/agent-context-core/src/{source.rs,item.rs}`、`crates/agent-context/src/{builder.rs,trim.rs}`。
