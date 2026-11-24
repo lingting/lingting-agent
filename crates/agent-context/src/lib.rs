@@ -6,6 +6,7 @@
 //! - 只组装数据，不读数据库、不感知 Run、不发起 LLM 请求（D-P2-018 的抽象层划分）。
 //! - 历史由调用方按 `seq` 升序传入，且不含本次输入；本次输入单独经 `prompt` 传入。
 //! - 系统提示词来自 [`ContextBuilder`] 持有目录下的 `AGENTS.md`，每次组装现场读取。
+//! - 工具轨迹随历史进入请求；裁剪以「工具调用组」为单位，整组保留或整组丢弃（D-P3-025）。
 //!
 //! 依赖方向：`agent-context -> agent-context-core / agent-core`；不依赖 `agent-route` /
 //! `service-core` / `lib-web*`。

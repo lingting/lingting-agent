@@ -2,8 +2,10 @@
 //!
 //! 顺序固定（D-P2-013）：系统提示词（存在时）→ 历史（按 `seq` 升序）→ 本次用户输入。
 //! 裁剪同样固定：先按 `max_messages` 截断最旧，再按预算逐条丢弃最旧；系统提示词与本次输入
-//! 不参与裁剪。本次输入单条即超预算时返回 [`ContextError::PromptTooLarge`]，由调用方落 `FAILED`。
+//! 不参与裁剪。裁剪的单位是「段」，工具调用组整组保留或整组丢弃（D-P3-025）。本次输入单条即
+//! 超预算时返回 [`ContextError::PromptTooLarge`]，由调用方落 `FAILED`。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -71,12 +73,16 @@ impl ContextBuilder {
             });
         }
 
-        let history_items: Vec<ContextItem> = history.iter().filter_map(history_item).collect();
-        let dropped_by_count = trim::dropped_by_count(history_items.len(), policy.max_messages);
-        let remainder = &history_items[dropped_by_count..];
-        let dropped_by_budget = trim::dropped_by_budget(remainder, estimator, available);
-        let kept = &remainder[dropped_by_budget..];
-
+        let history_items = history_items(history)?;
+        let chunks = trim::chunks(&history_items);
+        let dropped_by_count = trim::dropped_by_count(&chunks, policy.max_messages);
+        let remainder = &chunks[dropped_by_count..];
+        let dropped_by_budget = trim::dropped_by_budget(remainder, &history_items, estimator, available);
+        // 裁剪只丢最旧的一端，因此「保留的第一段起点」同时就是被裁掉的消息条数。
+        let kept_start = chunks
+            .get(dropped_by_count + dropped_by_budget)
+            .map_or(history_items.len(), |(start, _)| *start);
+        let kept = &history_items[kept_start..];
         let mut items: Vec<ContextItem> = Vec::with_capacity(kept.len() + 2);
         if let Some(item) = system_item {
             items.push(item);
@@ -87,7 +93,7 @@ impl ContextBuilder {
         let metadata = ContextMetadata {
             session_id: session.id.clone(),
             model: model.to_owned(),
-            trimmed_messages: dropped_by_count + dropped_by_budget,
+            trimmed_messages: kept_start,
             estimated_tokens: items.iter().map(|item| item_tokens(estimator, &item.content)).sum(),
         };
         tracing::info!(
@@ -116,14 +122,54 @@ impl ContextBuilder {
     }
 }
 
-/// 历史消息 → Context Item：只保留用户与助手两类，`SYSTEM` / `TOOL` 不进请求（D-P2-013）。
-fn history_item(message: &Message) -> Option<ContextItem> {
-    match message.role {
-        MessageRole::User | MessageRole::Assistant => Some(ContextItem::new(
-            ContextSource::History,
-            message.role,
-            message.content.as_str(),
-        )),
-        MessageRole::System | MessageRole::Tool => None,
+/// 历史消息 → Context Item：`SYSTEM` 不进请求，其余角色逐条映射（D-P3-003）。
+///
+/// 助手消息带 `tool_calls` 时保留调用清单，工具结果消息带 `tool_call_id`，两者共用「助手消息
+/// ID」作为组标识（D-P3-025）。工具结果找不到对应的助手调用属于被写坏的历史，组装直接失败。
+fn history_items(history: &[Message]) -> Result<Vec<ContextItem>, ContextError> {
+    // 调用标识 → 所属助手消息 ID；助手调用总在结果之前，因此单趟扫描足够。
+    let mut owners: HashMap<&str, &str> = HashMap::new();
+    let mut items: Vec<ContextItem> = Vec::with_capacity(history.len());
+    for message in history {
+        match message.role {
+            MessageRole::System => {}
+            MessageRole::User => items.push(ContextItem::new(
+                ContextSource::History,
+                MessageRole::User,
+                message.content.as_str(),
+            )),
+            MessageRole::Assistant => match message.tool_calls.as_deref() {
+                Some(calls) if !calls.is_empty() => {
+                    for call in calls {
+                        owners.insert(call.id.as_str(), message.id.as_str());
+                    }
+                    items.push(ContextItem::assistant_tools(
+                        message.id.as_str(),
+                        calls.to_vec(),
+                        message.content.as_str(),
+                    ));
+                }
+                _ => items.push(ContextItem::new(
+                    ContextSource::History,
+                    MessageRole::Assistant,
+                    message.content.as_str(),
+                )),
+            },
+            MessageRole::Tool => {
+                let tool_call_id = message.tool_call_id.as_deref();
+                let owner = tool_call_id.and_then(|call_id| owners.get(call_id).copied());
+                match (owner, tool_call_id) {
+                    (Some(owner), Some(call_id)) => {
+                        items.push(ContextItem::tool_result(owner, call_id, message.content.as_str()));
+                    }
+                    _ => {
+                        return Err(ContextError::ToolPairing {
+                            tool_call_id: tool_call_id.map(str::to_owned),
+                        });
+                    }
+                }
+            }
+        }
     }
+    Ok(items)
 }

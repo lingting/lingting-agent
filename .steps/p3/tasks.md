@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 部分完成（P3-010 / P3-011 代码 + 静态检查，P3-012 按需求方决定推迟到 Batch E 之后）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch D / F ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch D / F ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -190,7 +190,7 @@
 
 > 依赖：Batch A。本批次不碰执行循环，只把「工具」这件事表达进请求与 Context。
 >
-> **状态**：P3-010 / P3-011 已完成（代码 + `make check` 通过，未执行用例）；**P3-012 未开工**——它要读 `Message` 的 `tool_calls` / `tool_call_id`，而这三个字段由 P3-018（Batch E）追加，经需求方确认推迟到 Batch E 之后落地，本节其余验收项保持未勾选。
+> **状态**：P3-010 / P3-011 / P3-012 已完成（代码 + 静态检查通过，未执行用例）。P3-012 依赖的 `Message` 三个工具字段随 Batch E（P3-018 / P3-019）落地，本节因此在本批次之后补齐。
 
 - [x] **P3-010 `LlmProvider` 契约扩展**
 
@@ -228,9 +228,9 @@
   - [x] 工具结果的工具名按 `tool_call_id` 回查历史里的助手调用补齐（Rig 的 `ToolResult` 要求工具名，而结果消息只带标识）；查不到按 `InvalidRequest` 拒绝。
   **测试要求**：无（`tool.stream` 用例覆盖，**需授权**）。
 
-- [ ] **P3-012 Context：工具轨迹进历史，按组裁剪**
+- [x] **P3-012 Context：工具轨迹进历史，按组裁剪**
 
-  **未开工**：前置数据缺失——`history_item` 要读 `Message` 的 `tool_calls` / `tool_call_id`，这三个字段由 P3-018 追加；经需求方确认推迟到 Batch E 之后落地，下面的步骤与验收标准保持原样。
+  **已完成**：前置数据（`Message` 的 `tool_calls` / `tool_call_id`）随 P3-018 / P3-019 落地后补齐。**实现口径**：`ContextItem` 除 `tool_call_id` 与组标识（`group_id`）外还带 `tool_calls`（助手调用清单），否则助手侧的工具调用无法进入下一轮请求；`ContextSource::Tool` 仍只标记工具结果项。
   **目标**：工具轨迹成为历史的一部分（D-P3-003），裁剪以「工具调用组」为单位（D-P3-025）。
   **前置依赖**：P3-010。
   **涉及文件 / Crate**：`crates/agent-context-core/src/{source.rs,item.rs}`、`crates/agent-context/src/{builder.rs,trim.rs}`。
@@ -242,11 +242,11 @@
   5. 配对校验：`TOOL` 的 `tool_call_id` 找不到对应 assistant 调用时返回 `ContextError`（数据损坏）。
   6. `metadata.trimmed_messages` 语义改为「被裁掉的消息条数」，注释写清。
   **验收标准**：
-  - [ ] 无工具时 `build` 的输出与 P2 完全一致（同样的 Item 序列与 metadata）。
-  - [ ] 有工具轨迹时顺序为「系统 → 历史（含工具组）→ 本次输入」，组始终完整。
-  - [ ] 裁剪只发生在组边界：结果里不存在「有 assistant `tool_calls` 却缺 TOOL 结果」或「孤儿 TOOL」。
-  - [ ] `SYSTEM` 仍被过滤，系统提示词仍来自 `AGENTS.md`。
-  **测试要求**：无（`tool.context` 覆盖，**需授权**）。
+  - [x] 无工具时 `build` 的输出与 P2 完全一致（同样的 Item 序列与 metadata）。（静态核对：没有工具轨迹时每个 Item 自成一段，`chunks` / `dropped_by_count` / `dropped_by_budget` 退化为 P2 的逐条算法；`trimmed_messages` 仍等于被丢弃的消息条数）
+  - [x] 有工具轨迹时顺序为「系统 → 历史（含工具组）→ 本次输入」，组始终完整。（历史按传入顺序逐条映射，组内 assistant 与 TOOL 项的 `group_id` 相同，裁剪只按段整段丢弃）
+  - [x] 裁剪只发生在组边界：结果里不存在「有 assistant `tool_calls` 却缺 TOOL 结果」或「孤儿 TOOL」。（段由相邻同组 Item 组成，切点只在段边界；孤儿 TOOL 在组装阶段即返回 `ContextError::ToolPairing`，不会进入裁剪）
+  - [x] `SYSTEM` 仍被过滤，系统提示词仍来自 `AGENTS.md`。（`history_items` 跳过 `MessageRole::System`，系统项仍由 `SystemPrompt` 读取 `AGENTS.md`）
+  **测试要求**：无（`tool.context` 覆盖，**需授权**；本批次只做代码与静态核对）。
 
 ---
 

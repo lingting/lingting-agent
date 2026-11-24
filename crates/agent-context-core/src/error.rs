@@ -1,6 +1,7 @@
 //! Context 组装错误。
 //!
-//! 两个变体对应两类「组装阶段就没法继续」的情况：本次输入自身超预算、系统提示词读不出来。
+//! 三个变体对应三类「组装阶段就没法继续」的情况：本次输入自身超预算、系统提示词读不出来、
+//! 工具轨迹配对损坏。
 //! `Display` 只输出可直接展示的结论，不含正文、估算明细以外的内部细节；原始 IO 错误经
 //! [`std::error::Error::source`] 交给日志。
 
@@ -25,6 +26,13 @@ pub enum ContextError {
         /// 原始 IO 错误，不对外。
         source: std::io::Error,
     },
+    /// 工具轨迹配对损坏：工具结果消息的 `tool_call_id` 找不到对应的助手调用（D-P3-025）。
+    ///
+    /// 只可能来自被写坏的历史，不属于模型或用户的用法问题；调用方按 `FAILED` 收尾。
+    ToolPairing {
+        /// 出问题的调用标识；消息本身没有标识时为 `None`。
+        tool_call_id: Option<String>,
+    },
 }
 
 impl Display for ContextError {
@@ -34,6 +42,7 @@ impl Display for ContextError {
             Self::SystemPrompt { path, .. } => {
                 write!(formatter, "读取系统提示词失败：{}", path.display())
             }
+            Self::ToolPairing { .. } => formatter.write_str("工具轨迹配对损坏"),
         }
     }
 }
@@ -41,7 +50,7 @@ impl Display for ContextError {
 impl Error for ContextError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::PromptTooLarge { .. } => None,
+            Self::PromptTooLarge { .. } | Self::ToolPairing { .. } => None,
             Self::SystemPrompt { source, .. } => Some(source),
         }
     }

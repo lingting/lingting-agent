@@ -45,7 +45,9 @@ pub struct ContextMetadata {
     pub session_id: String,
     /// 本次执行使用的模型标识。
     pub model: String,
-    /// 因条数上限或预算被丢弃的历史消息条数。
+    /// 因条数上限或预算被裁掉的历史**消息**条数。
+    ///
+    /// 裁剪以「工具调用组」为单位（D-P3-025），被整组丢弃时组内每条消息都计入这里。
     pub trimmed_messages: usize,
     /// 全部 Item 的估算 token 数。
     pub estimated_tokens: usize,
