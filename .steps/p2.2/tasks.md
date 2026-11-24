@@ -1,6 +1,6 @@
 # P2.2 任务清单
 
-**状态：Batch A / B 已落地并按实测验收；Batch C（P2.2-008 ~ P2.2-010）已落地并按实测验收；Batch D 及之后未开始。** 阶段目标、边界、技术方案与判据见 [README.md](README.md)，决策见 [decisions.md](decisions.md)。Batch A / B / C 的证据为一次性实测（无新增用例代码之外的产物），待 P2.2-016 汇总进阶段报告。
+**状态：Batch A / B 已落地并按实测验收；Batch C（P2.2-008 ~ P2.2-010）已落地并按实测验收；Batch D（P2.2-011 ~ P2.2-013）已落地并按实测验收（含验收后追加的输出转发与句柄隔离调整）；Batch E 及之后未开始。** 阶段目标、边界、技术方案与判据见 [README.md](README.md)，决策见 [decisions.md](decisions.md)。Batch A / B / C 的证据为一次性实测（无新增用例代码之外的产物），待 P2.2-016 汇总进阶段报告。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -93,135 +93,27 @@
 
 > 依赖：Batch A。本批次只改 `crates/bin-tests`：数据进来、报告出去，中间不经过日志。
 >
-> **进度**：三个任务已落地并按实测验收。`cargo fmt --check` 与 `cargo clippy --workspace --all-targets -- -D warnings` 通过；`make test ARGS="llm persist run"` 19 个用例全绿；`make test ARGS="--all"` 73 个用例全绿（报告 `target/tests/run-1795428485492-31504`）。自管用例里在用例内停掉服务端的三条 `persist.*` 与 `web.e2e`、以及触发优雅关闭的 5 条用例，其「运行数据」显式写「未采集：原因」。
-
-- [x] **P2.2-005 快照采集入口**
-
-  **目标**：`bin-tests` 能用一份代码取到「本进程快照」与「子进程快照」，并区分「未采集」。
-  **前置依赖**：P2.2-002（接口）、P2.2-001（DTO）。
-  **涉及文件 / Crate**：`crates/bin-tests/src/util/server.rs`、`crates/bin-tests/src/util/observability.rs`、`crates/bin-tests/src/util/support.rs`（进程内装配的快照读取）。
-  **实施步骤**：
-  1. `util/server.rs` 增加 `Server::metrics()`：在服务端仍存活时 `GET api/probe/metrics`，反序列化成 `manager_agent::runtime::metrics::Snapshot`；404 / 连接失败返回「未采集 + 原因」，不 panic。
-  2. `util/observability.rs` 从「渲染固定几段」改为「入参一份或多份快照 + 渲染」，渲染函数本身不认识日志。
-  3. 明确两种来源的标注：`本进程（holder 装配）` 与 `子进程（<用例> 的服务端）`。
-  4. 保留 `lib_bin_tui::testing::blocking_snapshot()` 一段（它是测试进程内存计数，不涉及日志）。
-  **验收标准**：
-  - [x] 隔离 / 自管用例执行完能拿到服务端快照（实测 `run.queue_timeout` 的「运行数据」有完整限流段）；构建未开特性时得到「未采集：接口不存在（用 make test 构建）」（实测非 `metrics` 的 `bin-agent` + `llm.config`）。
-  - [x] `util/observability.rs` 内不出现任何文件读取（`fs::read*`）。
-  - [x] `cargo check -p bin-tests` 无未使用 import。
-  **测试要求**：需要跑一条 isolated 用例观察拿到快照（**需授权**）。
-
-- [x] **P2.2-006 报告结构化：`CaseReport` 增加数据段**
-
-  **目标**：每个用例的报告章节能承载「运行数据」，且与观测数据一节共用同一渲染器。
-  **前置依赖**：P2.2-005。
-  **涉及文件 / Crate**：`crates/bin-tests/src/report.rs`、`crates/bin-tests/src/runner.rs`、`crates/bin-tests/src/util/observability.rs`。
-  **实施步骤**：
-  1. `CaseReport` 增加字段：服务端快照 `Option<Snapshot>`、用例自带度量 `Vec<(String, String)>`（如压力用例的 `T` / `L0` / `N`）。
-  2. `section_lines` 在「结果信息」之后追加「运行数据」小节，由 `observability` 的渲染函数产出；缺失时写「未采集：原因」。
-  3. README 的统计与索引结构保持兼容（行号索引仍可算：新小节计入该用例的行数）。
-  4. `runner` 在用例收尾阶段（服务端停止之前）取快照并填进 `CaseReport`。
-  **验收标准**：
-  - [x] 报告里每个用例章节都有「运行数据」（或显式「未采集」）；README 的行号索引仍指向正确位置（实测 `--all` 73 个用例：73 个「运行数据」小节、9 个显式「未采集」、索引起始行均为 `## <用例名>`）。
-  - [x] 观测数据的 Markdown 只有一处生成逻辑（`git diff` 可核）。
-  - [x] 报告不新增「日志行数」「日志内容」类字段。
-  **测试要求**：跑一条用例后人工读报告（**需授权**）。
-
-- [x] **P2.2-007 四处日志断言的等价替换**
-
-  **目标**：删掉用例对 `server.log` 的读取，换成快照字段断言，且断言的**力度不变**。
-  **前置依赖**：P2.2-003（审计与 DB 计数）、P2.2-005（采集入口）。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/llm/canary.rs`、`crates/bin-tests/src/cases/persist.rs`、`crates/bin-tests/src/cases/run.rs`、`crates/bin-tests/src/util/server.rs`（`start_with_level` 的调用点）。
-  **实施步骤**：
-  1. `llm.canary`：断言改为 `audit.total > 0`（证明日志确实在产出）+ `audit.secret_hits == 0`；失败文案点名 `audit.secret_hits`。删除 `server_log_files()` 与 `read_to_string`。
-  2. `persist.*`（两处）：断言 `audit.panics == 0` 与 `audit.error == 0`；删除日志行数统计与文本扫描。
-  3. `run.*`（一处）：断言 `database.errors == 0`（`database is locked` / `SQLITE_BUSY` 计数为 0），保留原有的「无 panic」断言（改用 `audit.panics`）。
-  4. `start_with_level(…, "trace")` 的用途消失后，检查 `start_with_level` / `serve_once_level` 是否还有调用者；无调用者则删除（避免留下只为日志存在的入口）。
-  5. 全仓检索 `server.log` / `logs` 目录读取：`crates/bin-tests` 内必须归零。
-  **验收标准**：
-  - [x] `crates/bin-tests` 中 `read_to_string` 与日志目录遍历只剩 0 处（`grep` 可核）。
-  - [x] 四个断言点各有对应的快照字段，失败信息点名该字段。
-  - [x] 用例名、断言语义与等待上限不变（除「数据来源」外零口径变化）。
-  - [x] `llm.canary` / `persist.*` / `run.*` 三组用例通过（**已授权**；19 个用例全绿，另跑 `--all` 73 个用例全绿）。
-  **测试要求**：`make test ARGS="llm persist run"`（**需授权**）。
-
----
-
-## Batch C：边界压力用例（P2.2-008 ~ P2.2-010）
-
-> 依赖：Batch B（证据必须来自快照）。本批次只新增用例与支持代码，不改服务端行为。
+> **进度**：三个任务已落地并按实测验收。`cargo fmt --check` 与 `cargo clippy --workspace --all-targets -- -D warnings`
+> （另含 `bin-agent --features metrics`）通过；`bin-tests --list` 出现 `cli.async_server`（`self`）。
+> 人工三条：就绪（`--async` 退出 0、输出 PID / 地址 / 日志目录、`api/probe/health` 200、`agent status` 正常、
+> PID 文件与打印一致）；常驻（CLI 正常退出与父 shell 被强杀两种情形下子进程均存活并被探活）；失败路径
+> （端口被占用退出 1、坏数据库子进程秒退退出 1，两种情况都只有一行原因且不留 PID 文件与残留进程）。
+> `make test ARGS="cli"` 1 个用例全绿（3.7s）；`make test ARGS="--all"` 75 个用例全绿（35.0s，回归）。
 >
-> **进度**：三个任务已落地并按实测验收。与 README §4.1 的三处口径偏差已记入 decisions.md 的
-> D-P2.2-013：用例形态用 `SelfServed`（`Isolated` 注入不了 `[agent]` 配置）、`L0` 取「发消息 → 终态」的
-> 串行段（先跑 1 轮预热丢弃冷启动）、② 的总耗时上界是 `T + L0` 而不是 `T`。
-> 实测：`make test ARGS="stress"` 连续 5 次全绿（`L0` 55.6 ~ 64.6ms、`N` 47 ~ 54、② 总耗时 2722 ~ 3046ms、
-> 排队余量 163 ~ 572ms、③ 超时 39 ~ 51 条、服务端停止 21 ~ 42ms）；`make test ARGS="--all"` 74 个用例全绿，
-> `stress.boundary` 墙钟 9.7s（D-P2.2-003 的增量登记）。
+> 验收中发现并修掉两个缺陷：①端口被占用时探活会命中别人的服务、父进程误判成功（改为派生前端口预检 +
+> 就绪前复核子进程存活）；②用例用管道读 CLI 输出会被「子进程继承父进程可继承句柄」拖住等不到 EOF。
+> 按需求方意见对 ② 追加了两处调整（D-P2.2-015）：CLI 派生后**不立即返回**，就把子进程输出的新增内容
+> 转发到自身 `stderr` 直到探活通过（启动失败的原因直接可见，`stdout` 仍只有四行接入信息）；Windows 分支
+> 经 kernel32 `SetHandleInformation` 把自身标准句柄置为非继承（`unsafe` FFI 已授权）。用例改回管道读取并加
+> 5 秒读取时限，作为句柄隔离的回归哨兵。复核：`server -a … 2>&1 | cat` 立即返回且含转发日志、仅 stdout
+> 接管道时只得到四行接入信息；KI-P2.2-001 已结案。
+>
+> `--all` 第 1 次跑时 `stress.boundary` 判红（② 总耗时 3106ms 超 `T + L0 = 3054ms`；排队未超时
+> `timeouts 0`、`wait_max 2913ms < T`），第 2 次全绿、单跑连续 3 次全绿——已登记为 KI-P2.2-002，
+> 与 Batch D 改动无关，待 P2.2-016 定口径。
+> 落地口径与 README §4.2 的差异见 decisions.md 的 D-P2.2-014、D-P2.2-015。
 
-- [x] **P2.2-008 边界模型与标定（纯计算 + 报告口径）**
-
-  **目标**：把「客户端数量」从拍脑袋变成可复算的公式，并把推导过程写进代码注释与报告。
-  **前置依赖**：P2.2-005。
-  **涉及文件 / Crate**：新增 `crates/bin-tests/src/util/stress.rs`、`crates/bin-tests/src/util/mod.rs`。
-  **实施步骤**：
-  1. `util/stress.rs` 定义常量与纯函数：等待预算 `QUEUE_BUDGET = Duration::from_secs(3)`、`boundary(per_run: Duration, budget: Duration) -> Option<usize>`（返回 `floor(budget/per_run) + 1`；`per_run` 为 0 或结果小于最小样本数时返回 `None`）、`MIN_CLIENTS`（低于它说明参数不足以形成边界）。
-  2. 标定辅助：跑 `k = 3` 次单客户端链路，取最大耗时作 `L0`；记录三次的原始值用于报告（最小 / 中位 / 最大）。
-  3. 单次耗时分布统计（min / 中位 / p95 / max）用一个纯函数实现，压力用例两阶段共用。
-  4. 所有阈值与公式常量集中在 `stress.rs`，用例文件里不出现数字。
-  **验收标准**：
-  - [x] 公式与推导写在模块文档里（含 `N_safe` / `N_bad` 的由来）。
-  - [x] `boundary` 对 `L0 = 10ms, T = 3s` 得 `301`，对 `L0 = 30ms` 得 `101`（用注释示例说明，不写测试代码）。
-  - [x] 用例目录里没有固化的客户端数量（`N` 每次由标定算出，实测 5 次分别是 53 / 50 / 47 / 49 / 54）。
-  **测试要求**：无（不写测试代码）。
-
-- [x] **P2.2-009 `stress.boundary` 用例**
-
-  **目标**：按 README §4.1 的三阶段落地用例：压到串行、摆在内边界、用外边界自证。
-  **前置依赖**：P2.2-008。
-  **落地口径（与下面第 1、2 步的差异见 D-P2.2-013）**：`CaseKind::SelfServed` 自起私有服务端与私有
-  `MockServer`（`Isolated` 的私有服务端配置由调度层固定，注入不了 `[agent]` 参数）；`L0` 取
-  「发消息 → 终态」的串行段，并先跑 1 轮预热丢弃冷启动（完整链路耗时只写进报告做对照）；
-  ② 的耗时断言上界是 `T + L0`（末个 Run 还要自己跑完一个串行段）。
-  **涉及文件 / Crate**：新增 `crates/bin-tests/src/cases/stress.rs`、`crates/bin-tests/src/cases/mod.rs`、`crates/bin-tests/src/util/stress.rs`、`crates/bin-tests/src/util/flow.rs`（复用注册 / 占用 / 终态等待）。
-  **实施步骤**：
-  1. 用例形态：`CaseKind::Isolated`（私有服务端 + 私有 `MockServer`）；配置为 `max_concurrent_runs = 1`、`run_queue_timeout_ms = 3000`，`[provider]` 指向私有 Mock。
-  2. 阶段 ①：标定 `L0`（3 次取最大），算 `N`；`N < MIN_CLIENTS` 时以「参数不足以形成边界」失败并给出 `L0` / `T`。
-  3. 阶段 ②：`N` 个客户端各自「注册 → 建会话 → 占用 → 订阅流 → 发消息」，起始时刻对齐（同批 spawn，先全部注册与占用完成再同一时刻发消息）；收集每条 Run 的终态、耗时与完成时刻；结束时从服务端取快照。
-  4. 阶段 ③：`2 × N` 个客户端重复同一套流程，收集 `FAILED` 条数与原因；再取一次快照。
-  5. 断言按 README §4.1 的表格实现；失败时输出「完成 m/N、最后完成时刻、超出预算多少、快照关键字段」。
-  6. 报告条目：`T` / `L0`（三次原始值 + 取值）/ `N` / `2N` / ②实测总耗时与余量 / 耗时分布 / ③超时条数 / 两阶段快照（`limit` 段：`queued_max` / `running_max` / `wait_max_millis` / `timeouts`）。
-  7. 收尾：不逐个 `client_delete`（避免用 300 条清理链污染收尾时间），直接用例结束由 `runner` 停止服务端；把这一点写进用例注释与报告口径。
-  **验收标准**：
-  - [x] `bin-tests --list` 出现 `stress.boundary`；`make test ARGS="stress"` 可单跑（实测通过，连续 5 次全绿）。
-  - [x] 报告给出 README §4.1 要求的全部字段；数字全部来自内存（客户端事件 + 测试进程计时 + 服务端快照）。
-  - [x] 用例不读任何日志；不占用共享服务端与共享 Mock（`git diff` 可核：`cases/stress.rs` 无任何文件读取，端口取自 `server::free_port()`）。
-  - [x] 缺少快照时用例失败并提示「用 `make test` 构建」（代码路径：`capture()` 对 404 直接以该提示失败，不静默跳过断言）。
-  **测试要求**：`make test ARGS="stress"` 单跑一次并读报告（**已授权并执行**）。
-
-- [x] **P2.2-010 稳定性、收尾与失败诊断**
-
-  **目标**：让这条边缘用例在日常回归里可靠：不会因为收尾、连接泄漏或诊断不足而变成不可解释的红灯。
-  **前置依赖**：P2.2-009。
-  **涉及文件 / Crate**：`crates/bin-tests/src/cases/stress.rs`、`crates/bin-tests/src/util/stress.rs`、`crates/bin-tests/src/runner.rs`（若需按用例调整超时）。
-  **实施步骤**：
-  1. 收尾健壮性：压测结束后关闭全部 SSE 流、放弃未完成的等待，确认没有遗留连接拖住服务端停止；服务端停止耗时写入报告。
-  2. 用例总超时核算：`runner` 的 `CASE_TIMEOUT`（60s）是否覆盖 `①②③` 三段（约 2 × `T` + 标定）；不足则在用例支持层显式申请更长预算，而不是靠猜。
-  3. 失败诊断：断言失败时一次性输出「阶段、期望、实际、快照关键字段」，避免只报一句「超时」。
-  4. 与 `--all` 的关系：按 D-P2.2-003 的结论登记（默认纳入则记录墙钟增量；不纳入则在 README 注明单跑命令）。
-  5. 连续 3 次同一配置全绿，记录每次的 `L0` / `N` / 实测总耗时（用于判断稳定性，而不是为了「调参直到绿」）。
-  **验收标准**：
-  - [x] 连续 3 次全绿，且三次的 `L0` / `N` / 余量写入报告或阶段报告（实测连续 5 次：`L0` 64.6 / 60.2 / 56.6 / 62.0 / 57.4ms，`N` 47 / 50 / 53 / 49 / 54，② 排队余量 572 / 470 / 338 / 450 / 249ms）。
-  - [x] 失败注入（人为把 `run_queue_timeout_ms` 调到 `L0` 以下一次）时，失败信息能点名阶段与字段：一次性核对后立即还原，不提交该改动（实测把 `QUEUE_BUDGET` 临时改成 40ms：失败信息为「阶段 ① 标定：参数不足以形成边界——L0 = 60.1ms、T = 40ms → N = floor(T / L0) + 1 = 1，低于最小客户端数 8」；常量已还原为 3s，还原后重跑通过）。
-  - [x] 用例结束后无遗留进程与连接（`--all` 跑完后共享端口可用；服务端停止耗时 21 ~ 42ms 已进报告）。
-  **测试要求**：`make test ARGS="stress"` × 3 与一次 `make test ARGS="--all"`（**已授权并执行**）。
-
----
-
-## Batch D：`server --async`（P2.2-011 ~ P2.2-013）
-
-> 依赖：无（与 A / B / C 无交集，可并行）。
-
-- [ ] **P2.2-011 CLI 参数与配置解析**
+- [x] **P2.2-011 CLI 参数与配置解析**
 
   **目标**：`agent server -a` / `--async` 可解析，且与现有参数自由组合。
   **前置依赖**：无。
@@ -231,12 +123,12 @@
   2. 确认与 `--addr` / `--port` / `--log-level` 无冲突；不新增配置文件字段、不新增环境变量。
   3. `resolve_server` 的产物增加「是否派生」的标记（或由调用方传入），配置解析本身不变。
   **验收标准**：
-  - [ ] `agent server --help` 含 `-a, --async` 与中英文案一致的一行说明。
-  - [ ] 参数组合矩阵（`--async` 单独、+`--port`、+`--log-level`）都能解析。
-  - [ ] 配置文件面零变化。
+  - [x] `agent server --help` 含 `-a, --async` 与中英文案一致的一行说明。
+  - [x] 参数组合矩阵（`--async` 单独、+`--port`、+`--log-level`）都能解析。
+  - [x] 配置文件面零变化。
   **测试要求**：无（不写测试代码）；`agent server --help` 人工核对。
 
-- [ ] **P2.2-012 派生进程实现与就绪语义**
+- [x] **P2.2-012 派生进程实现与就绪语义**
 
   **目标**：派生一个常驻服务进程，等它就绪后打印信息并退出；失败路径可读。
   **前置依赖**：P2.2-011。
@@ -249,13 +141,13 @@
   5. 失败：子进程秒退（`try_wait` 命中）或超时 → 打印一行原因 + 子进程 PID + 日志路径，退出非 0（参数/配置错误 2，运行期错误 1，与现有 `CommandError` 口径一致）。
   6. 帮助与文档（`docs/*` 的部分归 P2.2-015）里写明 Unix 的 SIGHUP 限制与 PID 文件位置。
   **验收标准**：
-  - [ ] `agent server --async` 返回后：父进程已退出、`api/probe/health` 可用、`agent status` 可用、`<AGENT_HOME>/server.pid` 存在且内容与打印一致。
-  - [ ] 关闭父 shell（或结束父进程）后子进程仍存活并被探活。
-  - [ ] 端口被占用时退出码非 0、只输出一行原因；不 panic、不静默留下半启动进程。
-  - [ ] 不带 `--async` 的前台路径逐字节等价（`git diff` 只新增分支，不改既有流程）。
+  - [x] `agent server --async` 返回后：父进程已退出、`api/probe/health` 可用、`agent status` 可用、`<AGENT_HOME>/server.pid` 存在且内容与打印一致。
+  - [x] 关闭父 shell（或结束父进程）后子进程仍存活并被探活。
+  - [x] 端口被占用时退出码非 0、只输出一行原因；不 panic、不静默留下半启动进程。
+  - [x] 不带 `--async` 的前台路径逐字节等价（`git diff` 只新增分支，不改既有流程）。
   **测试要求**：人工验证三条（就绪 / 常驻 / 端口冲突），结论写进阶段报告（**需授权**执行）。
 
-- [ ] **P2.2-013 用例覆盖 `cli.async_server`**
+- [x] **P2.2-013 用例覆盖 `cli.async_server`**
 
   **目标**：把「派生即返回、子进程常驻」纳入回归，而不是只靠人工验证。
   **前置依赖**：P2.2-012。
@@ -266,9 +158,9 @@
   3. 收尾：按 PID 文件结束子进程（Windows `taskkill /F /PID`，Unix `kill -9`），断言进程消失；用例无论成败都必须走到清理（`Drop` 兜底）。
   4. 断言不得读取任何日志文本；需要的信息全部来自命令行输出、PID 文件与探活接口。
   **验收标准**：
-  - [ ] `make test ARGS="cli"` 可单跑并通过；用例结束后无遗留 `bin-agent` 进程。
-  - [ ] 断言与清理逻辑不依赖日志；失败时报告给出 PID 与端口。
-  - [ ] 用例不占用共享服务端端口（20104）。
+  - [x] `make test ARGS="cli"` 可单跑并通过；用例结束后无遗留 `bin-agent` 进程。
+  - [x] 断言与清理逻辑不依赖日志；失败时报告给出 PID 与端口。
+  - [x] 用例不占用共享服务端端口（20104）。
   **测试要求**：`make test ARGS="cli"`（**需授权**）。用例落地后若要长期保留，必须在 `docs/develop.md` 的端口表与用例清单里登记（归 P2.2-015）。
 
 ---

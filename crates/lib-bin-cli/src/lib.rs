@@ -7,4 +7,5 @@ pub mod result;
 pub mod run;
 pub mod runtime;
 pub mod sdk;
+pub mod server;
 pub mod status;

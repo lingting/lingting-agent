@@ -18,7 +18,7 @@ pub struct Cli {
 pub enum Mode {
     /// 启动终端界面（无子命令时的默认行为）
     Tui(TuiArgs),
-    /// 启动 HTTP 服务（前台常驻）
+    /// 启动 HTTP 服务（默认前台常驻，`-a` / `--async` 派生常驻后台进程）
     Server(ServerArgs),
     /// 执行一次任务并打印助手回复
     Run(RunArgs),
@@ -54,6 +54,10 @@ pub struct ServerArgs {
     /// 日志级别：off / error / warn / info / debug / trace
     #[arg(long, value_name = "LEVEL")]
     pub log_level: Option<String>,
+
+    /// 派生一个常驻服务进程，探活通过后返回（启动输出转发到 stderr；Unix 上终端关闭可能收到 SIGHUP）
+    #[arg(short = 'a', long = "async")]
+    pub asynchronous: bool,
 }
 
 /// `run` 子命令参数。

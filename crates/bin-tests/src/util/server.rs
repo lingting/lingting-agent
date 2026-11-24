@@ -257,7 +257,7 @@ pub(crate) async fn capture(base_url: &str) -> Capture {
 }
 
 /// 服务端二进制：默认与测试入口同目录，可用 `AGENT_TEST_SERVER_BIN` 覆盖。
-fn server_binary() -> Result<PathBuf> {
+pub(crate) fn server_binary() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("AGENT_TEST_SERVER_BIN") {
         return Ok(PathBuf::from(path));
     }

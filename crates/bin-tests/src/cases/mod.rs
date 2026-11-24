@@ -1,6 +1,7 @@
 //! 用例注册：新增领域时在这里汇总。
 
 mod chat;
+mod cli;
 mod client;
 mod disconnect;
 mod journal;
@@ -24,6 +25,7 @@ use crate::case::Case;
 pub fn all() -> Vec<Case> {
     let mut cases = Vec::new();
     cases.extend(chat::cases());
+    cases.extend(cli::cases());
     cases.extend(client::cases());
     cases.extend(disconnect::cases());
     cases.extend(journal::cases());

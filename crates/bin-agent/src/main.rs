@@ -42,6 +42,12 @@ fn server(args: &ServerArgs) -> ExitCode {
         }
     };
 
+    // `--async`：派生常驻服务进程后立即返回，本进程不初始化日志、不装配服务（P2.2-012）。
+    // 前台路径在下方，逐行保持原样。
+    if args.asynchronous {
+        return command_result(lib_bin_cli::server::spawn_async(&config));
+    }
+
     // 日志审计（P2.2-003）：把本次配置的密钥登记为「不许进日志」，命中即计数。
     // 必须在日志初始化之前完成——审计层在构造时取一次快照；正式构建里这段不编译。
     #[cfg(feature = "metrics")]

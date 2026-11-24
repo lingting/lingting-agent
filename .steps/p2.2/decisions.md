@@ -35,6 +35,8 @@
 | D-P2.2-011 | 压力用例的收尾：不逐个 `client_delete` | DECIDED |
 | D-P2.2-012 | 不为扩大压力规模改 Mock 节奏参数 | DECIDED |
 | D-P2.2-013 | 边界用例落地的三处口径：`SelfServed` 形态、`L0` 取串行段（含预热轮）、内边界断言的上界与容差 | DECIDED |
+| D-P2.2-014 | `--async` 的落地口径：只还原 `--addr` / `--port` / `--log-level`，输出与 PID 文件的位置与格式 | DECIDED |
+| D-P2.2-015 | `--async` 的输出转发与 Windows 标准句柄非继承（授权引入 `unsafe` FFI） | DECIDED |
 
 ---
 
@@ -319,3 +321,54 @@
   - 标定的预热轮与串行段口径必须与报告里的 `L0` 一致（报告同时给出完整链路耗时供对照）；
   - ③ 必须稳定出现「执行排队超时」（实测 39 ~ 51 条 / 94 ~ 108 个客户端）。
 - **承接任务**：P2.2-008、P2.2-009、P2.2-010。
+
+---
+
+## D-P2.2-014 `--async` 的落地口径：还原参数子集、输出与 PID 文件位置
+
+- **状态**：`DECIDED`
+- **问题**：README §4.2 只给了方向（「重新执行当前可执行文件、参数由配置反向构造」「日志 `<AGENT_HOME>/logs-server`」）；落地时必须确定还原哪些参数、输出文件与 PID 文件的确切位置与格式，否则用例与文档无处对齐。
+- **背景与证据**：
+  - `ServerConfig` 里只有 `host` / `port` / `log_level` 能还原成命令行；`runtime_events` 与 `[provider]` / `[agent]` 只能从 `AGENT_HOME/config.toml` 读。子进程继承同一个 `AGENT_HOME`，把它们摊成参数既多余又会造出第二份配置来源。
+  - 服务端日志目录的实际名称是 `logs`（`lib-core::directorys` 的 `AppDirectories::logs_server`）；README 里的 `logs-server` 指的就是它，以代码为准。
+  - 应用根目录只能由 `config_file`（`<root>/config.toml`）反推：`AppDirectories` 不单独暴露 root。
+- **决策**：
+  1. 子进程命令行只还原 `--addr` / `--port` / `--log-level`，其余配置仍由子进程从 `<AGENT_HOME>/config.toml` 读；
+  2. 派生进程的 `stdout` / `stderr` 追加写 `<AGENT_HOME>/logs/stdout.log`（即 `logs_server` 目录下的 `stdout.log`）；
+  3. PID 文件为 `<AGENT_HOME>/server.pid`，内容两行 `pid = <进程号>` 与 `address = <服务地址>`；写入发生在探活成功之后（D-P2.2-004）；
+  4. 文件名常量在 `lib-bin-cli::server` 公开（`PID_FILE` / `STDOUT_FILE`），`bin-tests` 直接引用，不重复字面量；
+  5. 用例收尾走 `bin-tests::util::process`（Windows `taskkill /F` + `tasklist`，其他平台 `kill -9` / `kill -0`）：`Drop` 兜底结束进程，`stop` 断言它真的消失。
+- **理由**：可还原的只有这三项；多还原一项就要在配置面与命令行之间维护第二条同步路径，与「地址只有一个来源」冲突。PID 文件用两行 `key = value`，人工可读、用例可解析。
+- **约束**：不新增配置字段与环境变量；`--async` 不进入配置解析（由调用方读 `ServerArgs::asynchronous` 分支）；PID 文件与输出文件的路径与格式一旦写进用例，改动需同步 P2.2-015 的文档。
+- **承接任务**：P2.2-011、P2.2-012、P2.2-013、P2.2-015。
+
+---
+
+## D-P2.2-015 `--async` 的输出转发与 Windows 标准句柄非继承
+
+- **状态**：`DECIDED`
+- **问题**：`--async` 派生后 CLI 立刻退出，用户与应用都看不到子进程启动过程；且 Windows 上常驻进程会继承
+  CLI 的可继承句柄，把 CLI 的输出管道写端一直握着，`| grep`、`$(…)` 这类用法会挂到服务端退出（KI-P2.2-001）。
+- **背景与证据**：
+  - 实测 `AGENT_HOME=… bin-agent server --async --port 20204 | cat` 20 秒不返回（`timeout` 退出码 124）；
+    `bin-tests` 的 `cli.async_server` 也因此被拖到 60 秒用例超时，随后 `make … | tail` 因同一句柄挂住 20 分钟以上。
+  - Windows 的 `CreateProcess` 默认把父进程所有可继承句柄传给子进程；把子进程 `stdin` / `stdout` / `stderr`
+    重定向到 `null` / 文件**不能**阻止**其它**可继承句柄一并被继承。
+  - `std::os::windows::process::CommandExt::inherit_handles` 仍是 unstable
+    （`windows_process_extensions_inherit_handles`），稳定版没有等价开关。
+- **决策**（按需求方调整意见落地）：
+  1. **转发**：派生后 CLI 不立即返回；在轮询探活接口期间，把子进程输出文件里**本次派生之后新增**的内容
+     （按派生前文件长度作起点）转发到自身 `stderr`，探活通过或失败后再各泵一次，然后才打印接入信息或报错。
+     转发写 `stderr`，保证 `stdout` 上只有 `PID` / 服务地址 / 日志目录 / PID 文件这四行，脚本可解析。
+  2. **句柄隔离**：Windows 分支新增 `hide_standard_handles()`，在派生前调用 kernel32 的
+     `GetStdHandle` + `SetHandleInformation(HANDLE_FLAG_INHERIT, 0)`，把本进程的标准输入 / 输出 / 错误
+     三个句柄置为非继承。**授权引入 `unsafe` FFI**：仅两个系统调用、不新增第三方依赖，`unsafe` 块附
+     SAFETY 说明且只操作自身标准句柄（不解引用、不转移所有权）。Unix 分支为空实现。
+  3. `cli.async_server` 改回**管道读取**并给读取加 5 秒时限：句柄隔离一旦被去掉，用例以
+     「CLI 的 stdout 管道在 5s 内没有到 EOF」失败，而不是挂到用例超时——用例因此成为该修复的回归哨兵。
+- **理由**：转发解决「看不到启动过程」，句柄隔离解决「管道不关闭」——两者缺一，`| grep` / `$(…)` 仍然不可用。
+  把转发写 `stderr` 是为了不破坏「`stdout` 四行接入信息」这一可解析契约。
+- **约束**：转发是尽力而为（下游管道已关闭时不得让父进程失败）；转发只覆盖就绪之前，常驻期间输出仍只落文件；
+  正式构建的 `--async` 行为与非 `metrics` 构建一致（与特性无关）。
+- **替代方案（未采纳）**：仅记已知限制（管道场景挂住）；仅做句柄隔离、不转发（看不到启动失败原因）。
+- **承接任务**：P2.2-012、P2.2-013、P2.2-015（文档同步）。

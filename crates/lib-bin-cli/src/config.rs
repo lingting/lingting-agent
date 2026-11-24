@@ -103,6 +103,9 @@ pub struct ClientConfig {
 }
 
 /// 按优先级装载 Server 配置。
+///
+/// `--async` 不参与配置解析：它只决定「派生后台进程还是前台常驻」，由调用方读取
+/// [`ServerArgs::asynchronous`] 自行分支（P2.2-011）。
 pub fn resolve_server(args: &ServerArgs) -> Result<ServerConfig> {
     let file = load_file()?;
     let (host, port) = AddressSources::load(args.addr.as_deref(), args.port, &file)?.resolve()?;
