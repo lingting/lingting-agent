@@ -10,7 +10,7 @@
 |---|---|---|
 | [probe.md](probe.md) | probe（探针与探活） | 技术验证探针、错误响应样例、`health` / `version` 探活、`metrics` 运行时指标快照，共 13 条（其中 `metrics` 仅 debug + `metrics` 特性构建注册，其余 12 条在所有构建存在） |
 | [session.md](session.md) | session（会话） | 会话 / 消息 / Run 业务接口（P2 起真实执行），共 6 条 |
-| [runtime.md](runtime.md) | runtime（客户端连接） | 注册、心跳 / 问询应答、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
+| [runtime.md](runtime.md) | runtime（客户端连接） | 注册、上行消息（心跳 / 问询应答 / 工具确认）、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
 | [tool.md](tool.md) | tool（工具审计） | 按 Run 查询工具调用审计记录（只读），共 1 条 |
 
@@ -23,7 +23,7 @@
 | 项 | 约定 |
 |---|---|
 | 基础地址 | 未显式配置时的默认端口按构建形态切换（D-022）：release 构建 `http://127.0.0.1:20100`，debug 构建 `http://127.0.0.1:20102`（开发环境服务端）；探针服务 `20103`（见 `docs/develop.md` 端口表） |
-| path | 统一 `api/` 开头，**不带版本段**；资源段小写单数，动作段只用 `create` / `update` / `delete` / `get` / `list` / `cancel` / `stream` |
+| path | 统一 `api/` 开头，**不带版本段**；资源段小写单数，动作段只用 `create` / `update` / `delete` / `get` / `list` / `cancel` / `stream` / `post` |
 | 路径参数 | 无路径占位符（D-008）：会话、Run 等 ID 只能走查询参数或请求体 |
 | 方法错配 | 与路径不存在同为 404，**没有 405**，调用方无法从状态码区分「路径错」与「方法错」 |
 | 大小写 | path 与查询参数名大小写敏感，查询参数名为 camelCase 字段名 |
@@ -59,10 +59,14 @@
 
 | 状态 | 固定 `message` | 场景 |
 |---|---|---|
-| 400 | `客户端未注册，请重新连接` | 已反注册的 `clientId` 调用 `client/update`、`client/delete`、`client/stream`、`occupancy/*` |
+| 400 | `客户端未注册，请重新连接` | 已反注册的 `clientId` 调用 `client/post`、`client/delete`、`client/stream`、`occupancy/*` |
 | 400 | `会话已被其他客户端占用` | 第二个客户端占用同一会话 |
 | 400 | `客户端已占用其他会话` | 已占一个会话的客户端再占第二个 |
 | 404 | `会话未被占用` | `occupancy/get` 查询无人占用的会话 |
+| 400 | `客户端未占用会话` | 未占用任何会话的客户端提交 `client/post { TOOL_CONFIRM }` |
+| 400 | `待确认的工具调用不存在或已处理` | 重复确认、过期 `toolCallId`，或该 Run 已不在 `WAITING` |
+| 400 | `工具确认缺少 toolCallId` / `工具确认缺少 decision` | `TOOL_CONFIRM` 的两个确认字段缺一 |
+| 400 | `心跳与问询应答不得携带工具确认字段` | `PING` / `INQUIRY_ACK` 带了 `toolCallId` 或 `decision` |
 
 ### 字段类型
 

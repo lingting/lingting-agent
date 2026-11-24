@@ -14,8 +14,8 @@ use anyhow::{Context, ensure};
 use framework_http::{HttpClient, HttpRequest};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
-    ApiClient, ApiError, CLIENT_STREAM, CLIENT_UPDATE, ClientCloseReason, ClientCreatePO, ClientEvent, ClientEventKind,
-    ClientUpdateKind, ClientUpdatePO, OccupancyVO, RunEvent, RunEventKind, RunStatus,
+    ApiClient, ApiError, CLIENT_POST, CLIENT_STREAM, ClientCloseReason, ClientCreatePO, ClientEvent, ClientEventKind,
+    ClientPostKind, ClientPostPO, OccupancyVO, RunEvent, RunEventKind, RunStatus,
 };
 use manager_agent::runtime::{
     CLIENT_TTL_MS, ClientRecord, ClientState, INQUIRY_AFTER_MS, INQUIRY_WINDOW_MS, RuntimeState, SCAN_INTERVAL_MS, scan,
@@ -24,7 +24,6 @@ use serde_json::{Value, json};
 use tokio::time::sleep;
 use types_core::runtime::ClientCloseReason as ContractClientCloseReason;
 use types_core::runtime::ClientEventKind as ContractClientEventKind;
-use types_core::runtime::ClientUpdateKind as ContractClientUpdateKind;
 use types_core::runtime::OccupancyVO as ContractOccupancyVO;
 
 use crate::util::support::session_service;
@@ -82,18 +81,18 @@ fn contract(_context: &TestContext) -> CaseFuture<'_> {
         let mut notes = Vec::new();
 
         // 上行：字段 camelCase，枚举 wire 值是 SCREAMING_SNAKE_CASE。
-        let update: ClientUpdatePO = serde_json::from_str(r#"{"clientId":"c-1","kind":"INQUIRY_ACK"}"#)?;
+        let update: ClientPostPO = serde_json::from_str(r#"{"clientId":"c-1","kind":"INQUIRY_ACK"}"#)?;
         ensure!(update.client_id == "c-1", "请求体字段名应为 camelCase");
         ensure!(
-            update.kind == ClientUpdateKind::InquiryAck,
+            update.kind == ClientPostKind::InquiryAck,
             "INQUIRY_ACK 未解析成 InquiryAck"
         );
         ensure!(
-            serde_json::to_value(ClientUpdateKind::Ping)? == "PING",
+            serde_json::to_value(ClientPostKind::Ping)? == "PING",
             "Ping 的 wire 值应为 PING"
         );
         ensure!(
-            serde_json::to_value(ClientUpdateKind::InquiryAck)? == "INQUIRY_ACK",
+            serde_json::to_value(ClientPostKind::InquiryAck)? == "INQUIRY_ACK",
             "InquiryAck 的 wire 值应为 INQUIRY_ACK"
         );
         notes.push("上行：{\"clientId\":\"c-1\",\"kind\":\"INQUIRY_ACK\"}".to_string());
@@ -416,9 +415,11 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
         sleep(Duration::from_millis(5)).await;
         let pong = context
             .client()
-            .client_update(ClientUpdatePO {
+            .client_post(ClientPostPO {
                 client_id: created.client_id.clone(),
-                kind: ClientUpdateKind::Ping,
+                kind: ClientPostKind::Ping,
+                tool_call_id: None,
+                decision: None,
             })
             .await
             .map_err(ClientError::from_call)?;
@@ -431,7 +432,7 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
 
         let response = HttpClient::new()
             .post(
-                HttpRequest::new(url(context, CLIENT_UPDATE.path))
+                HttpRequest::new(url(context, CLIENT_POST.path))
                     .with_content_type("application/json")
                     .with_body(r#"{"clientId":"client-missing","kind":"PING"}"#),
             )
@@ -453,9 +454,7 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
         let registered = state.client(client_id).expect("记录仍在").last_seen_ms;
 
         sleep(Duration::from_millis(5)).await;
-        let pong_at_ms = state
-            .heartbeat(client_id, ContractClientUpdateKind::Ping)
-            .expect("已注册的客户端心跳应成功");
+        let pong_at_ms = state.refresh_heartbeat(client_id).expect("已注册的客户端心跳应成功");
         let seen = state.client(client_id).expect("记录仍在").last_seen_ms;
         ensure!(seen > registered, "ping 应前进 lastSeen：{seen} <= {registered}");
         ensure!(
@@ -464,18 +463,14 @@ fn heartbeat(context: &TestContext) -> CaseFuture<'_> {
         );
 
         sleep(Duration::from_millis(5)).await;
-        state
-            .heartbeat(client_id, ContractClientUpdateKind::InquiryAck)
-            .expect("问询应答应成功");
+        state.answer_inquiry(client_id).expect("问询应答应成功");
         ensure!(
             state.client(client_id).expect("记录仍在").last_seen_ms == seen,
             "问询应答不应刷新 lastSeen"
         );
         ensure!(state.take_marks().is_empty(), "心跳路径不应产生标记");
         ensure!(
-            state
-                .heartbeat("client-missing", ContractClientUpdateKind::Ping)
-                .is_err(),
+            state.refresh_heartbeat("client-missing").is_err(),
             "未注册的客户端心跳应失败"
         );
 
@@ -539,9 +534,7 @@ fn inquiry(_context: &TestContext) -> CaseFuture<'_> {
         ensure!(state.take_marks().is_empty(), "问询本身不应产生标记");
 
         // 有应答：清掉待答状态，且不刷新 `lastSeen`。
-        let pong_at_ms = state
-            .heartbeat(client_id, ContractClientUpdateKind::InquiryAck)
-            .expect("问询应答应成功");
+        let pong_at_ms = state.answer_inquiry(client_id).expect("问询应答应成功");
         let record = state.client(client_id).expect("记录仍在");
         ensure!(record.inquiry.is_none(), "应答后不应再有待答问询");
         ensure!(!record.inquiry_expired(pong_at_ms), "应答后不应判定过期：{record:?}");

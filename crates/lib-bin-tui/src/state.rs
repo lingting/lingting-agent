@@ -4,7 +4,7 @@
 //! 两者都返回需要发给工作线程的请求；渲染只读状态，不改状态。
 
 use crate::event::{Command, Update};
-use lib_bin_cli::sdk::{Message, MessageRole, SessionSummary};
+use lib_bin_cli::sdk::{ClientDecision, Message, MessageRole, SessionSummary, ToolCallStatus};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
 use ratatui_textarea::{TextArea, WrapMode};
@@ -14,6 +14,9 @@ const PAGE: u16 = 10;
 
 /// 空闲期连通性巡检的间隔（tick 数）：200ms 一拍，即 5 秒。
 const PROBE_TICKS: u64 = 25;
+
+/// 确认行上参数摘要的最大字符数：一行放得下即可，完整参数不在这里展示。
+const CONFIRM_ARGS_CHARS: usize = 60;
 
 /// 等待响应的进度指示，按 tick 轮换。
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -51,9 +54,9 @@ pub enum Focus {
     Sessions,
 }
 
-/// 一条界面消息。
+/// 一条界面消息（含工具调用行）。
 pub struct ChatMessage {
-    /// 消息角色，直接复用契约类型。
+    /// 消息角色，直接复用契约类型；工具调用行用 [`MessageRole::Tool`]。
     pub role: MessageRole,
     /// 正文。
     pub content: String,
@@ -61,6 +64,18 @@ pub struct ChatMessage {
     pub interrupted: bool,
     /// 附加说明（失败原因等），渲染在正文之后。
     pub note: Option<String>,
+    /// 工具调用行对应的调用标识：开始与结束事件据此落到同一行（D-P3-013）。
+    pub tool_call_id: Option<String>,
+}
+
+/// 一次待确认的工具调用（D-P3-026）：只有它存在时 `y` / `n` 才生效。
+pub struct PendingConfirm {
+    /// 等待确认的调用标识（上行时原样带回）。
+    pub tool_call_id: String,
+    /// 确认行上的「工具名（参数摘要）」，恢复可应答态时据此重建该行。
+    pub summary: String,
+    /// 是否已上行：已提交后不重复上行，等服务端给结果。
+    pub submitted: bool,
 }
 
 impl ChatMessage {
@@ -97,6 +112,8 @@ pub struct App {
     pub phase: Phase,
     /// 进行中的 Run ID；`Esc` 中断时用它调取消接口。
     pub run_id: Option<String>,
+    /// 待确认的工具调用：`None` 时 `y` / `n` 不产生任何上行（D-P3-026）。
+    pub pending: Option<PendingConfirm>,
     /// 一行提示（错误或操作反馈）。
     pub notice: Option<String>,
     /// 消息区距底部的行数：`0` 表示跟随最新内容。
@@ -126,6 +143,7 @@ impl App {
             focus: Focus::Input,
             phase: Phase::Idle,
             run_id: None,
+            pending: None,
             notice: None,
             back: 0,
             tick: 0,
@@ -232,7 +250,42 @@ impl App {
                 self.back = 0;
                 Vec::new()
             }
+            Update::ToolStarted { tool_call_id, name } => {
+                self.upsert_tool_line(&tool_call_id, format!("→ {name}"));
+                self.back = 0;
+                Vec::new()
+            }
+            Update::ToolFinished {
+                tool_call_id,
+                name,
+                status,
+                duration_ms,
+                error,
+            } => {
+                let text = tool_result_line(&name, status, duration_ms, error.as_deref());
+                self.upsert_tool_line(&tool_call_id, text);
+                self.clear_pending(&tool_call_id);
+                self.back = 0;
+                Vec::new()
+            }
+            Update::ToolConfirmRequired {
+                tool_call_id,
+                name,
+                arguments,
+            } => {
+                // 一次调用只占一行：开始行升级成确认行，而不是再追加一条。
+                let summary = format!("{name}（{}）", arguments_summary(&arguments));
+                self.upsert_tool_line(&tool_call_id, confirm_line(&summary, false));
+                self.pending = Some(PendingConfirm {
+                    tool_call_id,
+                    summary,
+                    submitted: false,
+                });
+                self.back = 0;
+                Vec::new()
+            }
             Update::Completed => {
+                self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
                 self.notice = None;
@@ -242,6 +295,7 @@ impl App {
             Update::Failed { reason } => {
                 // 已经有助手占位就直接挂说明；还没开始执行就失败时补一条，界面不会只剩提示行。
                 let started = matches!(self.phase, Phase::Streaming | Phase::Cancelling);
+                self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
                 self.fail_message(started, &reason);
@@ -253,6 +307,7 @@ impl App {
                 Vec::new()
             }
             Update::Interrupted { reason } => {
+                self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
                 self.mark_interrupted();
@@ -267,6 +322,7 @@ impl App {
                     return Vec::new();
                 }
                 let cancelled = self.phase == Phase::Cancelling;
+                self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
                 // 取消可能落在第一段增量之前：没有内容的助手占位整条丢弃，不留半条消息（D-011）。
@@ -289,6 +345,8 @@ impl App {
                     Phase::Cancelling => Phase::Streaming,
                     phase => phase,
                 };
+                // 上行失败时把确认行恢复成可应答：用户不必重连就能重试（见 `reset_confirm`）。
+                self.reset_confirm();
                 self.notice = Some(text);
                 Vec::new()
             }
@@ -308,6 +366,13 @@ impl App {
                 KeyCode::Char('r') => return self.retry(),
                 _ => {}
             }
+        }
+        // 待确认项存在时 `y` / `n` 是应答键，不再落到输入框与会话列表（会话列表里 `n` 是新建）。
+        if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.pending.is_some()
+            && let Some(decision) = confirm_key(key.code)
+        {
+            return self.answer_confirm(decision);
         }
         match self.focus {
             Focus::Input => self.handle_input_key(key),
@@ -422,6 +487,68 @@ impl App {
         vec![Command::Cancel { run_id }]
     }
 
+    /// 应答待确认的工具调用：`y` 批准、`n` 驳回（D-P3-026）。
+    ///
+    /// 发出后进入「已提交，等待结果」态：重复按键不再上行，服务端也不必处理第二次确认。
+    fn answer_confirm(&mut self, decision: ClientDecision) -> Vec<Command> {
+        let Some(pending) = self.pending.as_mut() else {
+            return Vec::new();
+        };
+        if pending.submitted {
+            return Vec::new();
+        }
+        pending.submitted = true;
+        let tool_call_id = pending.tool_call_id.clone();
+        let text = confirm_line(&pending.summary, true);
+        self.upsert_tool_line(&tool_call_id, text);
+        self.notice = Some("已提交确认，等待结果".to_string());
+        vec![Command::Confirm { tool_call_id, decision }]
+    }
+
+    /// 撤销「已提交」态：确认上行失败时把这一行恢复成可应答，用户不必重连就能重试。
+    fn reset_confirm(&mut self) {
+        let Some(pending) = self.pending.as_mut() else {
+            return;
+        };
+        if !pending.submitted {
+            return;
+        }
+        pending.submitted = false;
+        let tool_call_id = pending.tool_call_id.clone();
+        let text = confirm_line(&pending.summary, false);
+        self.upsert_tool_line(&tool_call_id, text);
+    }
+
+    /// 该调用的结果事件已到：待确认项随之结束，`y` / `n` 不再生效。
+    fn clear_pending(&mut self, tool_call_id: &str) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.tool_call_id == tool_call_id)
+        {
+            self.pending = None;
+        }
+    }
+
+    /// 工具调用行：同一 `toolCallId` 只占一行，后到的事件改写这一行的文本。
+    fn upsert_tool_line(&mut self, tool_call_id: &str, text: String) {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.tool_call_id.as_deref() == Some(tool_call_id))
+        {
+            message.content = text;
+            return;
+        }
+        self.messages.push(ChatMessage {
+            role: MessageRole::Tool,
+            content: text,
+            interrupted: false,
+            note: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+        });
+    }
+
     /// 退出：有进行中的回复先发取消请求，服务端不必等连接断开才发现无人接收。
     ///
     /// 已经在中断中的不再重复请求；退出前发出的请求由工作线程在收尾窗口里送出。
@@ -490,6 +617,7 @@ impl App {
             content: String::new(),
             interrupted: false,
             note: None,
+            tool_call_id: None,
         });
     }
 
@@ -563,5 +691,49 @@ fn chat_message(message: &Message) -> ChatMessage {
         content: message.content.clone(),
         interrupted: false,
         note: None,
+        tool_call_id: message.tool_call_id.clone(),
+    }
+}
+
+/// 确认键：`y` 批准、`n` 驳回；其余按键不参与确认（D-P3-026）。
+fn confirm_key(code: KeyCode) -> Option<ClientDecision> {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some(ClientDecision::Approve),
+        KeyCode::Char('n') | KeyCode::Char('N') => Some(ClientDecision::Reject),
+        _ => None,
+    }
+}
+
+/// 确认行：等待应答与已提交两种形态，只差结尾的提示。
+fn confirm_line(summary: &str, submitted: bool) -> String {
+    if submitted {
+        format!("⚠ 需要确认：{summary} 已提交，等待结果")
+    } else {
+        format!("⚠ 需要确认：{summary} [y] 允许 / [n] 拒绝")
+    }
+}
+
+/// 参数摘要：已脱敏的 JSON 文本按字符截断，保证确认行只占一行。
+fn arguments_summary(arguments: &str) -> String {
+    let text = arguments.trim();
+    if text.chars().count() <= CONFIRM_ARGS_CHARS {
+        return text.to_string();
+    }
+    text.chars().take(CONFIRM_ARGS_CHARS).collect::<String>() + "…"
+}
+
+/// 工具结果行：成功带耗时，失败带服务端给的模型可读文本（未授权按固定文案）。
+fn tool_result_line(name: &str, status: ToolCallStatus, duration_ms: i64, error: Option<&str>) -> String {
+    match status {
+        ToolCallStatus::Ok => format!("✓ {name}（{duration_ms}ms）"),
+        ToolCallStatus::Denied => format!("✗ {name}：工具未授权"),
+        ToolCallStatus::Cancelled => format!("⊘ {name}：已取消"),
+        // `PENDING` 不应出现在完成事件里：真的出现时按失败展示，避免界面把未知结果当成功。
+        ToolCallStatus::Error
+        | ToolCallStatus::Timeout
+        | ToolCallStatus::InvalidArguments
+        | ToolCallStatus::Pending => {
+            format!("✗ {name}：{}", error.unwrap_or("工具执行失败"))
+        }
     }
 }

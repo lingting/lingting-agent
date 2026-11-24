@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Instant;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc};
-use types_core::runtime::{ClientCloseReason, ClientEvent, ClientEventKind, ClientUpdateKind, OccupancyVO};
+use types_core::runtime::{ClientCloseReason, ClientEvent, ClientEventKind, OccupancyVO};
 
 use super::RuntimeError;
 use super::client::{ClientChannel, ClientRecord, ClientState, PendingInquiry};
@@ -301,18 +301,30 @@ impl RuntimeState {
         read(&self.inner).clients.values().cloned().collect()
     }
 
-    /// 心跳 / 问询应答记账，返回本次 pong 的时刻。
+    /// 刷新心跳，返回本次 pong 的时刻（心跳与工具确认共用，D-P3-022）。
     ///
     /// 未注册（含已被反注册）的客户端一律返回 [`RuntimeError::ClientNotRegistered`]；
     /// 已标记但尚未被处理链消化的窗口期内仍然成功，且**不解除标记**（D-P1.1-001）。
-    pub fn heartbeat(&self, client_id: &str, kind: ClientUpdateKind) -> Result<i64, RuntimeError> {
+    pub fn refresh_heartbeat(&self, client_id: &str) -> Result<i64, RuntimeError> {
         let mut inner = write(&self.inner);
         let Some(record) = inner.clients.get_mut(client_id) else {
             return Err(RuntimeError::ClientNotRegistered);
         };
         let now = now_millis();
-        record.heartbeat(kind, now);
+        record.refresh(now);
         Ok(now)
+    }
+
+    /// 应答问询：只清待答状态、**不**刷新 `lastSeen`（D-P1.1-006），返回本次 pong 的时刻。
+    ///
+    /// 未注册的客户端与心跳同一口径，返回 [`RuntimeError::ClientNotRegistered`]。
+    pub fn answer_inquiry(&self, client_id: &str) -> Result<i64, RuntimeError> {
+        let mut inner = write(&self.inner);
+        let Some(record) = inner.clients.get_mut(client_id) else {
+            return Err(RuntimeError::ClientNotRegistered);
+        };
+        record.answer_inquiry();
+        Ok(now_millis())
     }
 
     /// 到了问询时机就向下行通道投递一条 `inquiry`。

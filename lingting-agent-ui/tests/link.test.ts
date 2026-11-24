@@ -48,8 +48,8 @@ function fakeClient(chunks: readonly string[] = []) {
       calls.push("clientCreate");
       return { clientId: "c-1", pongAtMs: "1" };
     },
-    clientUpdate: async (po: { kind: string }) => {
-      calls.push(`clientUpdate:${po.kind}`);
+    clientPost: async (po: { kind: string }) => {
+      calls.push(`clientPost:${po.kind}`);
       return { pongAtMs: "2" };
     },
     clientDelete: async () => {
@@ -98,7 +98,7 @@ describe("ChatLink", () => {
 
     // 心跳每 15 秒一拍，与 service-core 的 PING_INTERVAL 一致。
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(calls).toContain("clientUpdate:PING");
+    expect(calls).toContain("clientPost:PING");
   });
 
   it("换会话时先交还旧占用再占用新会话", async () => {
@@ -177,7 +177,7 @@ describe("ChatLink", () => {
     const calls: string[] = [];
     const client = {
       clientCreate: async () => ({ clientId: "c-1", pongAtMs: "1" }),
-      clientUpdate: async () => {
+      clientPost: async () => {
         throw new Error(NOT_REGISTERED);
       },
       clientDelete: async () => undefined,

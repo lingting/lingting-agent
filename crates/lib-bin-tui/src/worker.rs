@@ -15,9 +15,9 @@
 use crate::event::{Command, Update};
 use lib_bin_cli::client::{Client, ClientError, EventStream};
 use lib_bin_cli::sdk::{
-    ApiClient, ClientCreatePO, ClientDeletePO, ClientEvent, ClientEventKind, ClientStreamParams, ClientUpdateKind,
-    ClientUpdatePO, MessageListParams, MessageSendPO, OccupancyCreatePO, OccupancyDeletePO, RunCancelPO, RunEvent,
-    RunEventKind, SessionCreatePO,
+    ApiClient, ClientCreatePO, ClientDecision, ClientDeletePO, ClientEvent, ClientEventKind, ClientPostKind,
+    ClientPostPO, ClientStreamParams, MessageListParams, MessageSendPO, OccupancyCreatePO, OccupancyDeletePO,
+    RunCancelPO, RunEvent, RunEventKind, SessionCreatePO, ToolCallStatus,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -277,9 +277,11 @@ impl Link {
         };
         match self
             .client
-            .client_update(ClientUpdatePO {
+            .client_post(ClientPostPO {
                 client_id,
-                kind: ClientUpdateKind::Ping,
+                kind: ClientPostKind::Ping,
+                tool_call_id: None,
+                decision: None,
             })
             .await
         {
@@ -388,9 +390,11 @@ impl Link {
                 if let Some(client_id) = client_id {
                     let _ = self
                         .client
-                        .client_update(ClientUpdatePO {
+                        .client_post(ClientPostPO {
                             client_id,
-                            kind: ClientUpdateKind::InquiryAck,
+                            kind: ClientPostKind::InquiryAck,
+                            tool_call_id: None,
+                            decision: None,
                         })
                         .await;
                 }
@@ -478,6 +482,13 @@ fn dispatch(link: &Arc<Link>, command: Command, updates: &Sender<Update>, tasks:
             let updates = updates.clone();
             tasks.spawn(async move {
                 cancel(&link, run_id, &updates).await;
+            });
+        }
+        Command::Confirm { tool_call_id, decision } => {
+            let link = Arc::clone(link);
+            let updates = updates.clone();
+            tasks.spawn(async move {
+                confirm(&link, tool_call_id, decision, &updates).await;
             });
         }
         Command::Probe => {
@@ -706,6 +717,38 @@ async fn cancel(link: &Arc<Link>, run_id: String, updates: &Sender<Update>) {
     }
 }
 
+/// 应答一次工具确认：上行 `api/client/post { kind = TOOL_CONFIRM }`，成功后本次响应即 pong。
+///
+/// 失败只报提示：界面在提示到达时把确认行恢复为可应答（见 `App::apply` 的 `Notice` 分支），
+/// 用户因此可以重试或改用 `Esc` 取消 Run。
+async fn confirm(link: &Arc<Link>, tool_call_id: String, decision: ClientDecision, updates: &Sender<Update>) {
+    let Some(client_id) = link.client_id().await else {
+        send(
+            updates,
+            Update::Notice {
+                text: NOT_REGISTERED.to_string(),
+            },
+        );
+        return;
+    };
+    let po = ClientPostPO {
+        client_id,
+        kind: ClientPostKind::ToolConfirm,
+        tool_call_id: Some(tool_call_id),
+        decision: Some(decision),
+    };
+    match link.client.client_post(po).await {
+        // 确认同时被当作一次心跳：pong 计数照记，避免界面上心跳停止前进。
+        Ok(_) => link.count_pong(),
+        Err(error) => send(
+            updates,
+            Update::Notice {
+                text: ClientError::from_call(error).to_string(),
+            },
+        ),
+    }
+}
+
 /// 心跳任务：每 [`PING_INTERVAL`] 一次；服务端反注册后整体重连，其他失败等下一拍再试。
 async fn heartbeat(link: Arc<Link>, generation: u64) {
     let mut ticker = interval(PING_INTERVAL);
@@ -727,9 +770,11 @@ async fn heartbeat(link: Arc<Link>, generation: u64) {
         };
         match link
             .client
-            .client_update(ClientUpdatePO {
+            .client_post(ClientPostPO {
                 client_id,
-                kind: ClientUpdateKind::Ping,
+                kind: ClientPostKind::Ping,
+                tool_call_id: None,
+                decision: None,
             })
             .await
         {
@@ -814,8 +859,34 @@ fn dispatch_run_event(updates: &Sender<Update>, run_event: RunEvent) {
             },
         ),
         RunEventKind::Heartbeat => {}
-        // 工具事件的界面更新由 P3-028 跟进；此处先保证匹配穷尽。
-        RunEventKind::ToolCallStarted | RunEventKind::ToolCallCompleted | RunEventKind::ToolCallConfirmRequired => {}
+        // 三个工具事件各有一条界面更新（P3-028）：开始 / 结束按 `toolCallId` 配对，
+        // 确认请求单独成行并提供 `y` / `n`。缺字段属服务端异常，按空值展示而不是静默丢弃。
+        RunEventKind::ToolCallStarted => send(
+            updates,
+            Update::ToolStarted {
+                tool_call_id: run_event.tool_call_id.unwrap_or_default(),
+                name: run_event.tool_name.unwrap_or_default(),
+            },
+        ),
+        RunEventKind::ToolCallCompleted => send(
+            updates,
+            Update::ToolFinished {
+                tool_call_id: run_event.tool_call_id.unwrap_or_default(),
+                name: run_event.tool_name.unwrap_or_default(),
+                // 没有状态说明服务端漏传：按失败展示，避免界面把未知结果当成功。
+                status: run_event.tool_status.unwrap_or(ToolCallStatus::Error),
+                duration_ms: run_event.tool_duration_ms.unwrap_or_default(),
+                error: run_event.error,
+            },
+        ),
+        RunEventKind::ToolCallConfirmRequired => send(
+            updates,
+            Update::ToolConfirmRequired {
+                tool_call_id: run_event.tool_call_id.unwrap_or_default(),
+                name: run_event.tool_name.unwrap_or_default(),
+                arguments: run_event.tool_arguments.unwrap_or_default(),
+            },
+        ),
     }
 }
 

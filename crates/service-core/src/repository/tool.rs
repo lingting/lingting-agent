@@ -111,6 +111,39 @@ impl Repository {
         Ok(affected > 0)
     }
 
+    /// 取消链路收尾：该 Run 里仍挂着的 `PENDING` 审计一律落 `CANCELLED`（P3-027 第 5 条）。
+    ///
+    /// 与清空 `runs.pending_tool_call_id` 同一事务，不留「挂起列已清、审计还挂着 PENDING」的行。
+    /// Run 已是终态，模型不会从这条记录恢复，因此不写结果文本。
+    pub(super) async fn finish_pending_tool_calls_in(
+        &self,
+        transaction: &mut Transaction,
+        run_id: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE tool_calls SET status = ? WHERE run_id = ? AND status = ?")
+            .bind(ToolCallStatus::Cancelled.to_string())
+            .bind(run_id)
+            .bind(ToolCallStatus::Pending.to_string())
+            .execute(transaction.connection())
+            .await?;
+        Ok(())
+    }
+
+    /// 取消会话时同一口径的批量收尾：该会话里所有 `PENDING` 审计落 `CANCELLED`。
+    pub(super) async fn finish_pending_tool_calls_of_session_in(
+        &self,
+        transaction: &mut Transaction,
+        session_id: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE tool_calls SET status = ? WHERE session_id = ? AND status = ?")
+            .bind(ToolCallStatus::Cancelled.to_string())
+            .bind(session_id)
+            .bind(ToolCallStatus::Pending.to_string())
+            .execute(transaction.connection())
+            .await?;
+        Ok(())
+    }
+
     /// 某个 Run 的全部审计记录：按产生时间、ID 升序（同一毫秒内的顺序也是稳定的）。
     pub async fn tool_calls(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, DbError> {
         let sql = format!("{SELECT_TOOL_CALL} WHERE run_id = ? ORDER BY created_at_ms, id");

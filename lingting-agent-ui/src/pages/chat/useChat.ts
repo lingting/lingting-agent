@@ -1,13 +1,19 @@
-import type { RunEvent } from "@lingting/agent-api";
-import { useCallback, useEffect, useRef, useState } from "react";
+import type { ClientDecision, RunEvent } from "@lingting/agent-api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type LinkEvent, agentApi, ChatLink, errorMessageOf } from "@/api";
 
 import {
+  type ChatItem,
   type ChatMessage,
   type ChatMessageStatus,
   fromServerMessage,
+  isChatMessage,
+  newToolCard,
   nextLocalKey,
+  type ToolCard,
+  toolNoteOf,
+  toolStatusOf,
 } from "./chatMessage";
 
 /** 连接中断时追加在回复末尾的说明，与服务端 TUI 的处理保持一致。 */
@@ -16,19 +22,25 @@ const INTERRUPTED_NOTE = "（连接中断，内容可能不完整）";
 /** 用户主动停止生成时的说明。 */
 const STOPPED_NOTE = "（已停止生成）";
 
+/** 工具卡片没等到结果事件时的说明：宁可显式标未完成，也不留成「调用中」。 */
+const UNFINISHED_NOTE = "Run 已结束，未收到结果";
+
 /** 执行失败时追加在回复末尾的说明：与提示条共用同一份脱敏文案。 */
 function failedNote(reason: string): string {
   return `（执行失败：${reason}）`;
 }
 
 /**
- * 对话状态机：注册连接、占用会话、发送消息、消费下行流、停止生成。
+ * 对话状态机：注册连接、占用会话、发送消息、消费下行流、确认工具调用、停止生成。
  *
  * 事件只有一个来源：`api/client/stream` 的下行流（D-P1.1-004）。Run 由「会话被占用 + 消息创建」
  * 触发执行，因此发送前必须先占用会话。
+ *
+ * 对话流由两类项组成（[`ChatItem`]）：消息气泡与工具卡片，都按到达顺序落在同一个数组里，
+ * 因此工具卡片的位置就是它在对话中真正发生的位置（P3-029）。
  */
 export function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [items, setItems] = useState<ChatItem[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +62,9 @@ export function useChat() {
   /** 是否有进行中的回复（供事件回调读，避免闭包拿到旧值）。 */
   const streamingRef = useRef(false);
 
+  /** 正在上行的确认：同一张卡片在请求落地前不重复上行（D-P3-026）。 */
+  const confirmingRef = useRef<Set<string>>(new Set());
+
   /** 当前连接。 */
   const linkRef = useRef<ChatLink | null>(null);
 
@@ -61,20 +76,62 @@ export function useChat() {
 
   const clearError = useCallback(() => setError(null), []);
 
-  /** 收尾一条消息：可追加说明并更新状态。 */
-  const finishMessage = useCallback((key: string, status: ChatMessageStatus, note = "") => {
-    setMessages((previous) =>
-      previous.map((message) =>
-        message.key === key ? { ...message, status, content: message.content + note } : message,
-      ),
+  /** 只看消息气泡的视图：已有的消息相关调用（用例、提示）继续读它。 */
+  const messages = useMemo(() => items.filter(isChatMessage), [items]);
+
+  /** 改动某条消息项（按 key）。 */
+  const updateMessage = useCallback((key: string, change: (message: ChatMessage) => ChatMessage) => {
+    setItems((previous) =>
+      previous.map((item) => (item.kind === "message" && item.key === key ? change(item) : item)),
     );
   }, []);
 
+  /** 改动某张工具卡片（按 `toolCallId`）；卡片不存在时什么都不做。 */
+  const updateTool = useCallback((toolCallId: string, change: (card: ToolCard) => ToolCard) => {
+    setItems((previous) =>
+      previous.map((item) => (item.kind === "tool" && item.key === toolCallId ? change(item) : item)),
+    );
+  }, []);
+
+  /** 工具卡片：存在就改写，不存在就新建（开始事件先到，确认与结果事件后到）。 */
+  const upsertTool = useCallback((toolCallId: string, name: string, change: (card: ToolCard) => ToolCard) => {
+    setItems((previous) => {
+      const exists = previous.some((item) => item.kind === "tool" && item.key === toolCallId);
+      if (!exists) return [...previous, change(newToolCard(toolCallId, name))];
+      return previous.map((item) =>
+        item.kind === "tool" && item.key === toolCallId ? change(item) : item,
+      );
+    });
+  }, []);
+
+  /** 收尾一条消息：可追加说明并更新状态。 */
+  const finishMessage = useCallback(
+    (key: string, status: ChatMessageStatus, note = "") => {
+      updateMessage(key, (message) => ({
+        ...message,
+        status,
+        content: message.content + note,
+      }));
+    },
+    [updateMessage],
+  );
+
   /** 追加增量文本。 */
-  const pushDelta = useCallback((key: string, delta: string) => {
-    setMessages((previous) =>
-      previous.map((message) =>
-        message.key === key ? { ...message, content: message.content + delta } : message,
+  const pushDelta = useCallback(
+    (key: string, delta: string) => {
+      updateMessage(key, (message) => ({ ...message, content: message.content + delta }));
+    },
+    [updateMessage],
+  );
+
+  /** 本轮结束：仍停在进行中或待确认的卡片标未完成（不允许静默留成「调用中」）。 */
+  const markUnfinished = useCallback(() => {
+    setItems((previous) =>
+      previous.map((item) =>
+        item.kind === "tool" &&
+        (item.status === "running" || item.status === "confirm" || item.status === "submitted")
+          ? { ...item, status: "unfinished", note: item.note ?? UNFINISHED_NOTE }
+          : item,
       ),
     );
   }, []);
@@ -88,9 +145,48 @@ export function useChat() {
     setStreaming(false);
   }, []);
 
-  /** 把一条 Run 事件应用到助手占位消息。 */
+  /** 三个工具事件按 `toolCallId` 配对；处理了就返回 `true`，不再走助手占位分支。 */
+  const applyToolEvent = useCallback(
+    (event: RunEvent): boolean => {
+      const toolCallId = event.toolCallId;
+      if (!toolCallId) return false;
+      const name = event.toolName ?? "";
+      switch (event.event) {
+        case "tool_call_started":
+          upsertTool(toolCallId, name, (card) => ({ ...card, name: card.name || name, status: "running" }));
+          return true;
+        case "tool_call_confirm_required":
+          upsertTool(toolCallId, name, (card) => ({
+            ...card,
+            name: card.name || name,
+            status: card.status === "submitted" ? "submitted" : "confirm",
+            arguments: event.toolArguments ?? "",
+          }));
+          return true;
+        case "tool_call_completed": {
+          const status = toolStatusOf(event.toolStatus);
+          upsertTool(toolCallId, name, (card) => ({
+            ...card,
+            name: card.name || name,
+            status,
+            durationMs: event.toolDurationMs ?? null,
+            note: status === "ok" ? null : toolNoteOf(event.toolStatus, event.error),
+          }));
+          // 结果已到：这张卡片不再需要确认，同标识的重复上行请求也不再放行。
+          confirmingRef.current.delete(toolCallId);
+          return true;
+        }
+        default:
+          return false;
+      }
+    },
+    [upsertTool],
+  );
+
+  /** 把一条 Run 事件应用到对话流。 */
   const applyRunEvent = useCallback(
     (event: RunEvent) => {
+      if (applyToolEvent(event)) return;
       const key = assistantKeyRef.current;
       if (!key) return;
       switch (event.event) {
@@ -101,22 +197,26 @@ export function useChat() {
         }
         case "run_completed":
           finishMessage(key, "done");
+          markUnfinished();
           clearRun();
           break;
         case "run_failed": {
           const reason = event.error ?? "Run 执行失败";
           finishMessage(key, "interrupted", failedNote(reason));
+          markUnfinished();
           setError(reason);
           clearRun();
           break;
         }
         case "run_cancelled":
           finishMessage(key, "interrupted", stoppedRef.current ? STOPPED_NOTE : INTERRUPTED_NOTE);
+          markUnfinished();
           if (!stoppedRef.current) setError(event.error ?? "Run 已取消");
           clearRun();
           break;
         case "server_shutdown":
           finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+          markUnfinished();
           setError(event.error ?? "服务正在关闭，回复已中断");
           clearRun();
           break;
@@ -125,7 +225,7 @@ export function useChat() {
           break;
       }
     },
-    [clearRun, finishMessage, pushDelta],
+    [applyToolEvent, clearRun, finishMessage, markUnfinished, pushDelta],
   );
 
   /** 下行事件入口：只处理本轮 Run，连接关闭时收尾并提示。 */
@@ -134,6 +234,7 @@ export function useChat() {
       if (linkEvent.type === "closed") {
         const key = assistantKeyRef.current;
         if (key) finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+        markUnfinished();
         clearRun();
         setError(`连接中断：${linkEvent.reason}`);
         return;
@@ -148,7 +249,7 @@ export function useChat() {
       if (event.runId !== runIdRef.current) return;
       applyRunEvent(event);
     },
-    [applyRunEvent, clearRun, finishMessage],
+    [applyRunEvent, clearRun, finishMessage, markUnfinished],
   );
 
   useEffect(() => {
@@ -199,10 +300,10 @@ export function useChat() {
         const sent = await agentApi.messageCreate({ content: text, sessionId });
         runIdRef.current = sent.run.id;
         assistantKeyRef.current = assistantKey;
-        setMessages((previous) => [
+        setItems((previous) => [
           ...previous,
           fromServerMessage(sent.message),
-          { key: assistantKey, role: "ASSISTANT", content: "", status: "streaming" },
+          { kind: "message", key: assistantKey, role: "ASSISTANT", content: "", status: "streaming" },
         ]);
 
         // 缓冲里已攒下本轮开头的几条事件：按到达顺序放出。
@@ -215,6 +316,33 @@ export function useChat() {
       }
     },
     [applyRunEvent, clearRun],
+  );
+
+  /**
+   * 确认一次工具调用（D-P3-026）：点即进入「等结果」态，请求落地前不重复上行。
+   *
+   * 上行失败时把卡片退回可确认态：用户换一个决定或重试即可，不必刷新页面。
+   */
+  const confirm = useCallback(
+    async (toolCallId: string, decision: ClientDecision) => {
+      const link = linkRef.current;
+      if (!link) {
+        setError("连接尚未建立，请刷新页面重试");
+        return;
+      }
+      if (confirmingRef.current.has(toolCallId)) return;
+      confirmingRef.current.add(toolCallId);
+      updateTool(toolCallId, (card) => (card.status === "confirm" ? { ...card, status: "submitted" } : card));
+      try {
+        await link.confirm(toolCallId, decision);
+      } catch (failure) {
+        setError(errorMessageOf(failure));
+        updateTool(toolCallId, (card) => (card.status === "submitted" ? { ...card, status: "confirm" } : card));
+      } finally {
+        confirmingRef.current.delete(toolCallId);
+      }
+    },
+    [updateTool],
   );
 
   /**
@@ -232,11 +360,12 @@ export function useChat() {
       setError(errorMessageOf(failure));
     } finally {
       if (key) finishMessage(key, "interrupted", STOPPED_NOTE);
+      markUnfinished();
       clearRun();
     }
-  }, [clearRun, finishMessage]);
+  }, [clearRun, finishMessage, markUnfinished]);
 
-  return { cancel, clearError, error, messages, send, streaming };
+  return { cancel, clearError, confirm, error, items, messages, send, streaming };
 }
 
 /** 首次发送时创建会话：标题取第一条消息，与服务端 CLI 的 `run` 行为一致。 */

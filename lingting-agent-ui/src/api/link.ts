@@ -1,5 +1,6 @@
 import type {
   ClientCloseReason,
+  ClientDecision,
   ClientEvent,
   ClientStreamParams,
   RunEvent,
@@ -71,6 +72,21 @@ export class ChatLink {
     this.sessionId = sessionId;
   }
 
+  /**
+   * 提交一次工具确认（D-P3-022 / D-P3-026）：与心跳共用 `api/client/post`，响应体里同时回 pong。
+   *
+   * 服务端按「占用该会话的客户端 + 待确认标识」鉴权：重复确认或过期标识返回固定 400 文案，
+   * 客户端不做本地去重，只按 `message` 报错。
+   */
+  async confirm(toolCallId: string, decision: ClientDecision): Promise<void> {
+    await this.client.clientPost({
+      clientId: this.requireClientId(),
+      kind: "TOOL_CONFIRM",
+      toolCallId,
+      decision,
+    });
+  }
+
   /** 收尾：先交还占用、再反注册，最后停掉心跳与下行流。 */
   async release(): Promise<void> {
     this.released = true;
@@ -120,7 +136,7 @@ export class ChatLink {
     const clientId = this.clientId;
     if (!clientId) return;
     try {
-      await this.client.clientUpdate({ clientId, kind: "PING" });
+      await this.client.clientPost({ clientId, kind: "PING" });
     } catch (failure) {
       if (errorMessageOf(failure) === NOT_REGISTERED) {
         this.fail(NOT_REGISTERED);
@@ -151,7 +167,7 @@ export class ChatLink {
       case "inquiry":
         // 问询应答不刷新 lastSeen（D-P1.1-006），只清掉待答状态。
         void this.client
-          .clientUpdate({ clientId: this.requireClientId(), kind: "INQUIRY_ACK" })
+          .clientPost({ clientId: this.requireClientId(), kind: "INQUIRY_ACK" })
           .catch(() => undefined);
         break;
       case "client_closed":

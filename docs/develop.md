@@ -135,7 +135,7 @@
 传输与错误处理约定：
 
 - HTTP 收发只经 `framework-http`（`reqwest` 后端，见 `docs/workspace.md` 的依赖表），客户端不直接使用 reqwest 发请求。
-- 两个客户端分工：普通接口带 30 秒总超时；事件流不设总超时——一次回复可能持续很久，总超时会在回复中途截断，连接存活由客户端心跳（每 15 秒 `api/client/update {PING}`，服务端 45 秒无心跳即判超时）与用户中断决定。
+- 两个客户端分工：普通接口带 30 秒总超时；事件流不设总超时——一次回复可能持续很久，总超时会在回复中途截断，连接存活由客户端心跳（每 15 秒 `api/client/post {PING}`，服务端 45 秒无心跳即判超时）与用户中断决定。
 - 成功响应统一是 `R<T>`（`{"code":200,"message":"Success","data":<载荷>}`），Transport 负责解包后交给生成的 SDK；`Void` 的 204 空响应与 `Blob` 的原始响应体原样透传。
 - 错误分类：连接被拒绝 / 超时 / 非 2xx（取 `ApiError.message`）/ 响应解析失败 / 不支持的请求形态。分类不依赖后端具体类型：连接被拒绝看错误链上的 `std::io::ErrorKind::ConnectionRefused`，超时看 `TimedOut` 与 reqwest 固定的 `operation timed out` 文案。
 - 错误呈现统一为一行：非 JSON 错误体会折叠空白并截断到 200 字符，不把 HTML 或多行文本原样写到终端；退出码见上一节。
@@ -185,7 +185,7 @@
 |---|---|
 | path 前缀 | 统一 `api/` 开头，不带版本段（见下） |
 | path 资源段 | 小写单数名词，多词用 `-` 连接，如 `api/probe/echo` |
-| path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel` / `stream`，不造同义动词 |
+| path 动作段 | 固定动词：`create` / `update` / `delete` / `get` / `list` / `cancel` / `stream` / `post`，不造同义动词（`post` 只用于「一条上行通道承载多种无状态动作」，P3 起 `api/client/post`） |
 | 元数据名 | 由 handler 函数名（snake_case）派生，两侧 SDK 的标识符同源派生，不手工改 |
 | 请求 DTO | 请求体 `*PO`，查询参数 `*Params` |
 | handler 参数 | 请求体与查询参数一律解构到 `po`：`Json(po): Json<*PO>`、`Query(po): Query<*Params>`；函数体内直接用 `po`，不引入 `params` / `query` 之类的中间变量，也不写 `.0` 二次取值 |
@@ -222,9 +222,11 @@ P2 起的三处语义变化（字段与接口不变）：
 
 ### 运行时接口（P1.1）
 
-客户端连接与会话占用的接口定义在 `crates/lib-web/src/runtime/{api,occupancy_api,stream}.rs`，业务实现在 `manager-agent` 的 `runtime` 模块（P2-013 起；`service-core` 不再持有进程内运行时），契约类型在 `types-core` 的 `runtime` 模块。接口清单、帧格式与样例见 `docs/api/runtime.md` 与 `docs/api/occupancy.md`；决策与参数见 `.steps/p1.1/decisions.md`。
+客户端连接与会话占用的接口定义在 `crates/lib-web/src/runtime/{api,occupancy_api,stream}.rs`，业务实现在 `manager-agent` 的 `runtime` 模块（P2-013 起；`service-core` 不再持有进程内运行时），契约类型在 `types-core` 的 `runtime` 模块。接口清单、帧格式与样例见 `docs/api/runtime.md` 与 `docs/api/occupancy.md`；决策与参数见 `.steps/p1.1/decisions.md` 与 `.steps/p3/decisions.md` 的 D-P3-022 / D-P3-023。
 
-约定：服务端推送只有 `api/client/stream` 一条通道（`api/run/stream` 已移除）；Run 的执行由「会话被占用 + 消息创建」触发，未被占用的会话里 Run 停在 `QUEUED`；未注册与占用冲突一律 400 + 固定 message（过渡方案，映射集中在 `crates/lib-web/src/runtime/mod.rs` 的一个函数），客户端按 message 识别而不是按 code 猜测。
+约定：服务端推送只有 `api/client/stream` 一条通道（`api/run/stream` 已移除）；上行只有 `api/client/post` 一条通道，按 `kind` 承载心跳（`PING`）、问询应答（`INQUIRY_ACK`）与工具确认（`TOOL_CONFIRM`，D-P3-022）；Run 的执行由「会话被占用 + 消息创建」触发，未被占用的会话里 Run 停在 `QUEUED`；未注册与占用冲突一律 400 + 固定 message（过渡方案，映射集中在 `crates/lib-web/src/runtime/mod.rs` 的一个函数），客户端按 message 识别而不是按 code 猜测。
+
+工具确认走同一条上行通道：请求体带 `toolCallId` + `decision`，服务端校验「客户端已注册且占用该会话」「`toolCallId` 等于某个 Run 的 `pending_tool_call_id`」，命中后把 Run 从 `WAITING` 退回 `QUEUED` 并唤醒会话队列（D-P3-023、D-P3-027）；确认同时刷新 `lastSeen` 并回 pong。`api/client/stream` 建立成功后，服务端对该客户端占用会话下仍在挂起的 Run 各补发一次 `tool_call_confirm_required`（同一 `toolCallId`），因此确认入口不会随断流永久丢失。
 
 ### API 版本管理
 

@@ -160,6 +160,9 @@ impl Repository {
     }
 
     /// 把未结束的 Run 落成 `CANCELLED`；返回是否真的推进（0 行表示已终态）。
+    ///
+    /// 清空待确认列与收尾 `PENDING` 审计在同一事务里（P3-027 第 5 条）：不允许出现
+    /// 「挂起列已清、审计还挂着 PENDING」的中间态。
     pub async fn cancel_run(&self, run_id: &str, error: Option<&str>, now_ms: i64) -> Result<bool, DbError> {
         let status = RunStatus::Cancelled.to_string();
         let sql = format!(
@@ -168,19 +171,26 @@ impl Repository {
              WHERE id = ? AND status IN ({})",
             Self::open_statuses()
         );
+        let mut transaction = self.begin().await?;
         let affected = sqlx::query(&sql)
             .bind(&status)
             .bind(error)
             .bind(now_ms)
             .bind(now_ms)
             .bind(run_id)
-            .execute(self.pool())
+            .execute(transaction.connection())
             .await?
             .rows_affected();
+        if affected > 0 {
+            self.finish_pending_tool_calls_in(&mut transaction, run_id).await?;
+        }
+        transaction.commit().await?;
         Ok(affected > 0)
     }
 
     /// 取消某个会话的全部未结束 Run，返回被取消的数量（释放占用时使用）。
+    ///
+    /// 与 [`Repository::cancel_run`] 同一口径：待确认列与 `PENDING` 审计一起收尾。
     pub async fn cancel_session_runs(
         &self,
         session_id: &str,
@@ -194,15 +204,21 @@ impl Repository {
              WHERE session_id = ? AND status IN ({})",
             Self::open_statuses()
         );
+        let mut transaction = self.begin().await?;
         let affected = sqlx::query(&sql)
             .bind(&status)
             .bind(error)
             .bind(now_ms)
             .bind(now_ms)
             .bind(session_id)
-            .execute(self.pool())
+            .execute(transaction.connection())
             .await?
             .rows_affected();
+        if affected > 0 {
+            self.finish_pending_tool_calls_of_session_in(&mut transaction, session_id)
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(usize::try_from(affected).unwrap_or(usize::MAX))
     }
 

@@ -12,6 +12,7 @@
 //! 定时任务通过同一处登记的 `'static` 引用取注册表。
 
 mod client;
+mod confirm;
 pub mod handler;
 pub mod journal;
 /// 运行时的进程内指标：清理链、会话停止、事件落盘与锁表。
@@ -45,6 +46,10 @@ pub enum RuntimeError {
     SessionNotFound(String),
     /// 会话当前无人占用。
     NotOccupied,
+    /// 该客户端当前没有占用任何会话：工具确认必须来自占用该会话的客户端（D-P3-023）。
+    NoOccupancy,
+    /// 待确认的工具调用不存在或已处理：重复确认、过期 `toolCallId` 与并发竞争都落这里。
+    PendingToolCallNotFound,
     /// 内部失败（建目录 / 开事件文件 / 起运行时会话）：对外只给固定文案，细节只进日志。
     Internal(String),
 }
@@ -57,6 +62,8 @@ impl fmt::Display for RuntimeError {
             Self::ClientBusy => formatter.write_str("客户端已占用其他会话"),
             Self::SessionNotFound(session_id) => write!(formatter, "会话不存在：{session_id}"),
             Self::NotOccupied => formatter.write_str("会话未被占用"),
+            Self::NoOccupancy => formatter.write_str("客户端未占用会话"),
+            Self::PendingToolCallNotFound => formatter.write_str("待确认的工具调用不存在或已处理"),
             Self::Internal(detail) => write!(formatter, "运行时内部错误：{detail}"),
         }
     }

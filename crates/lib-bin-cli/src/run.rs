@@ -12,7 +12,7 @@ use crate::config;
 use crate::result::CommandError;
 use crate::runtime;
 use crate::sdk::{
-    ApiClient, ClientCreatePO, ClientDeletePO, ClientEventKind, ClientStreamParams, ClientUpdateKind, ClientUpdatePO,
+    ApiClient, ClientCreatePO, ClientDeletePO, ClientEventKind, ClientPostKind, ClientPostPO, ClientStreamParams,
     MessageSendPO, OccupancyCreatePO, OccupancyDeletePO, RunEventKind, RunStatus, SessionCreatePO,
 };
 use anyhow::{Result, anyhow};
@@ -96,9 +96,11 @@ async fn execute_async(args: &RunArgs, client: &Client) -> Result<()> {
             // 心跳优先：长回复期间也保持连接不被判超时（应答不刷新 lastSeen，见 D-P1.1-006）。
             _ = heartbeat.tick() => {
                 let _ = client
-                    .client_update(ClientUpdatePO {
+                    .client_post(ClientPostPO {
                         client_id: client_id.clone(),
-                        kind: ClientUpdateKind::Ping,
+                        kind: ClientPostKind::Ping,
+                        tool_call_id: None,
+                        decision: None,
                     })
                     .await;
             }
@@ -155,9 +157,11 @@ async fn execute_async(args: &RunArgs, client: &Client) -> Result<()> {
                     // 问询：应答一次即可，短任务不必等超时判定。
                     ClientEventKind::Inquiry => {
                         let _ = client
-                            .client_update(ClientUpdatePO {
+                            .client_post(ClientPostPO {
                                 client_id: client_id.clone(),
-                                kind: ClientUpdateKind::InquiryAck,
+                                kind: ClientPostKind::InquiryAck,
+                                tool_call_id: None,
+                                decision: None,
                             })
                             .await;
                     }

@@ -4,7 +4,7 @@
 //! 两条通道都无界：界面 `try_recv` 永不阻塞事件循环，工作线程的异步任务也不会因为界面
 //! 短暂繁忙而被卡住。
 
-use lib_bin_cli::sdk::{Message, SessionSummary};
+use lib_bin_cli::sdk::{ClientDecision, Message, SessionSummary, ToolCallStatus};
 
 /// 工作线程推给界面的事件。
 #[derive(Debug)]
@@ -29,6 +29,22 @@ pub enum Update {
     RunStarted,
     /// 助手回复的增量文本。
     Delta(String),
+    /// 一次工具调用开始执行（参数已脱敏，界面只展示工具名）。
+    ToolStarted { tool_call_id: String, name: String },
+    /// 一次工具调用结束：状态、耗时与失败文本都在这一条上。
+    ToolFinished {
+        tool_call_id: String,
+        name: String,
+        status: ToolCallStatus,
+        duration_ms: i64,
+        error: Option<String>,
+    },
+    /// 需要用户确认一次工具调用（D-P3-026）：Run 已挂起，等 `y` / `n`。
+    ToolConfirmRequired {
+        tool_call_id: String,
+        name: String,
+        arguments: String,
+    },
     /// Run 正常结束，助手消息已落库。
     Completed,
     /// Run 执行失败。
@@ -59,6 +75,11 @@ pub enum Command {
     },
     /// 取消正在执行的 Run。
     Cancel { run_id: String },
+    /// 应答一次工具确认：上行 `api/client/post { kind = TOOL_CONFIRM }`。
+    Confirm {
+        tool_call_id: String,
+        decision: ClientDecision,
+    },
     /// 空闲期的连通性巡检：只在失败时报 `Offline`，成功不产生更新。
     Probe,
 }

@@ -1,11 +1,12 @@
 //! 客户端记录：注册表里的一条客户端实体与它的连接状态（D-P1.1-001）。
 //!
 //! 记录只保存状态与时间戳；下行通道的服务端句柄由 [`ClientChannel`] 承载，心跳记账见
-//! [`ClientRecord::heartbeat`]，问询的时机与应答窗口见 [`ClientRecord::inquiry_due`] 等判定方法。
+//! [`ClientRecord::refresh`] / [`ClientRecord::answer_inquiry`]，问询的时机与应答窗口见
+//! [`ClientRecord::inquiry_due`] 等判定方法。
 
 use lib_core::time::now_millis;
 use tokio::sync::mpsc;
-use types_core::runtime::{ClientEvent, ClientUpdateKind};
+use types_core::runtime::ClientEvent;
 
 /// 问询触发：`lastSeen` 超过该时长没有前进就投递一条问询（D-P1.1-006）。
 pub const INQUIRY_AFTER_MS: i64 = 30_000;
@@ -75,13 +76,14 @@ impl ClientRecord {
         }
     }
 
-    /// 心跳记账：`PING` 刷新最后活跃时刻；问询应答**不**刷新 `lastSeen`，否则超时判定失效。
-    pub fn heartbeat(&mut self, kind: ClientUpdateKind, at_ms: i64) {
-        match kind {
-            ClientUpdateKind::Ping => self.last_seen_ms = at_ms,
-            // 问询应答只清待答状态：不刷新 `lastSeen`，否则超时判定失效。
-            ClientUpdateKind::InquiryAck => self.inquiry = None,
-        }
+    /// 刷新最后活跃时刻：心跳与工具确认都算「客户端还在」（一次确认同时当心跳）。
+    pub fn refresh(&mut self, at_ms: i64) {
+        self.last_seen_ms = at_ms;
+    }
+
+    /// 应答问询：只清待答状态，**不**刷新 `lastSeen`，否则超时判定失效（D-P1.1-006）。
+    pub fn answer_inquiry(&mut self) {
+        self.inquiry = None;
     }
 
     /// 分配一个新的下行事件序号：按客户端从 0 单调递增，与 `RunEvent.seq` 不同源。

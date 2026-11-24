@@ -121,7 +121,7 @@
 | `run_failed` | 执行失败（P2 起真实产出）：认证 / 上游 / 空闲超时 / 上下文超预算 / 排队超时 | `error`（固定脱敏文案） |
 | `run_cancelled` | 会话停止（占用释放 / 客户端断连）导致 Run 被取消 | `status`、`error`（固定原因文本） |
 | `server_shutdown` | 服务关闭导致 Run 终止（Run 已落成 `CANCELLED`） | `status`、`error` |
-| `heartbeat` | 保留值：Run 事件流的空闲保活；P1.1 起客户端心跳（`api/client/update`）承担保活，运行时会话暂不产出 | 仅公共字段 |
+| `heartbeat` | 保留值：Run 事件流的空闲保活；P1.1 起客户端心跳（`api/client/post`）承担保活，运行时会话暂不产出 | 仅公共字段 |
 
 P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事件的字段语义。
 

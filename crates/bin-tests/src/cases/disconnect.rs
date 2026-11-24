@@ -9,8 +9,8 @@ use agent_core::session::{RunEvent, RunEventKind, SessionCreatePO as ContractSes
 use anyhow::{Context, Result, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
-    ApiClient, ApiError, CLIENT_DELETE, CLIENT_UPDATE, ClientCreatePO, ClientDeletePO, ClientUpdateKind,
-    ClientUpdatePO, OCCUPANCY_CREATE, OCCUPANCY_DELETE, OccupancyCreatePO, OccupancyDeletePO, SessionCreatePO,
+    ApiClient, ApiError, CLIENT_DELETE, CLIENT_POST, ClientCreatePO, ClientDeletePO, ClientPostKind, ClientPostPO,
+    OCCUPANCY_CREATE, OCCUPANCY_DELETE, OccupancyCreatePO, OccupancyDeletePO, SessionCreatePO,
 };
 use lib_core::time;
 use manager_agent::runtime::{ClientRecord, RuntimeState, handler, journal};
@@ -222,9 +222,11 @@ fn unregister(context: &TestContext) -> CaseFuture<'_> {
         for _ in 0..100 {
             if context
                 .client()
-                .client_update(ClientUpdatePO {
+                .client_post(ClientPostPO {
                     client_id: created.client_id.clone(),
-                    kind: ClientUpdateKind::Ping,
+                    kind: ClientPostKind::Ping,
+                    tool_call_id: None,
+                    decision: None,
                 })
                 .await
                 .is_err()
@@ -239,7 +241,7 @@ fn unregister(context: &TestContext) -> CaseFuture<'_> {
         // 三条固定 message：update / delete / occupancy 都按「未注册」拒绝。
         let message = post_error(
             context,
-            CLIENT_UPDATE.path,
+            CLIENT_POST.path,
             serde_json::json!({ "clientId": created.client_id.clone(), "kind": "PING" }),
         )
         .await?;

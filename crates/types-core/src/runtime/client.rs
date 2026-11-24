@@ -1,10 +1,11 @@
-//! 客户端连接契约：注册、心跳 / 问询应答、主动断开与下行事件（D-P1.1-001）。
+//! 客户端连接契约：注册、上行消息、主动断开与下行事件（D-P1.1-001 / D-P3-022）。
 //!
-//! 传输形态固定为「SSE 下行 + POST 上行」：注册、心跳、问询应答、主动断开全部走 `POST`，
+//! 传输形态固定为「SSE 下行 + POST 上行」：注册、上行消息、主动断开全部走 `POST`，
 //! 服务端推送只有 `api/client/stream` 一条通道。本模块只描述入参与载荷，不涉及帧编码。
 //!
-//! `pong` 只出现在 `client/create` 与 `client/update` 的同步响应体里，不进入下行事件；
-//! 下行事件的判别字段为 `event`，取值 snake_case，与 SSE 的 `event:` 行同值。
+//! 上行只有一条通道 `api/client/post`，按 `kind` 承载三种无状态动作：心跳、问询应答、
+//! 工具确认（D-P3-022）。`pong` 只出现在 `client/create` 与 `client/post` 的同步响应体里，
+//! 不进入下行事件；下行事件的判别字段为 `event`，取值 snake_case，与 SSE 的 `event:` 行同值。
 
 use framework_proc_auto::{auto_enum, auto_type};
 
@@ -25,25 +26,42 @@ pub struct ClientCreateVO {
 
 /// 上行请求的种类。
 #[auto_enum]
-pub enum ClientUpdateKind {
+pub enum ClientPostKind {
     /// 心跳：刷新 `lastSeen`，响应体里回 pong。
     Ping,
     /// 问询应答：清掉待答状态；按约定不刷新 `lastSeen`，否则超时判定会失效。
     InquiryAck,
+    /// 工具确认：对一次挂起的工具调用给出批准或驳回（D-P3-023）。
+    ToolConfirm,
 }
 
-/// 心跳与问询应答的请求体。
+/// 工具确认的决定：只有两个取值，没有「总是允许」（D-P3-026）。
+#[auto_enum]
+pub enum ClientDecision {
+    /// 批准：恢复后执行这次调用。
+    Approve,
+    /// 驳回：恢复后不再执行，把固定文案回灌给模型。
+    Reject,
+}
+
+/// 上行请求的请求体：心跳、问询应答与工具确认共用，按 `kind` 决定哪些字段有效（D-P3-022）。
 #[auto_type(default = false)]
-pub struct ClientUpdatePO {
+pub struct ClientPostPO {
     /// 目标客户端 ID。
     pub client_id: String,
     /// 上行请求的种类。
-    pub kind: ClientUpdateKind,
+    pub kind: ClientPostKind,
+    /// 待确认的调用标识：只有 `TOOL_CONFIRM` 允许非空。
+    pub tool_call_id: Option<String>,
+    /// 对挂起调用的决定：只有 `TOOL_CONFIRM` 允许非空。
+    pub decision: Option<ClientDecision>,
 }
 
-/// 心跳与问询应答的响应：同步返回 pong，不进入下行事件。
+/// 上行请求的响应：同步返回 pong，不进入下行事件。
+///
+/// 工具确认同样刷新 `lastSeen` 并回 pong（一次确认同时被当作心跳，避免确认期间心跳被误判超时）。
 #[auto_type]
-pub struct ClientUpdateVO {
+pub struct ClientPostVO {
     /// 本次 pong 的产生时间（Unix 毫秒）。
     pub pong_at_ms: i64,
 }

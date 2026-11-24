@@ -5,6 +5,7 @@
 
 use crate::state::{App, Connection, Focus, Phase};
 use crate::text;
+use lib_bin_cli::sdk::MessageRole;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -116,6 +117,13 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
 
     for message in &app.messages {
+        // 工具调用一行一条：不带角色标签，前缀字符（→ / ✓ / ✗ / ⊘ / ⚠）自解释。
+        if message.role == MessageRole::Tool {
+            for line in text::wrap(&message.content, content_width) {
+                lines.push(Line::from(format!("{:INDENT$}{line}", "")).style(tool_style(&message.content)));
+            }
+            continue;
+        }
         lines.push(Line::from(message.label()).style(role_style(message.role)));
         for line in text::wrap(&message.content, content_width) {
             lines.push(Line::from(format!("{:INDENT$}{line}", "")));
@@ -170,11 +178,16 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 
 /// 底部快捷键提示：随焦点切换。
 fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
-    let hint = match app.focus {
-        Focus::Input => {
-            "Enter 发送 · Shift+Enter 换行 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+D 退出"
+    // 有待确认项时把应答键放在最前面：此刻 `y` / `n` 优先于其它按键（D-P3-026）。
+    let hint = if app.pending.is_some() {
+        "y 允许 · n 拒绝 · Esc 中断 · Ctrl+D 退出"
+    } else {
+        match app.focus {
+            Focus::Input => {
+                "Enter 发送 · Shift+Enter 换行 · Esc 中断 · PgUp/PgDn 滚动 · Tab 会话区 · Ctrl+N 新建 · Ctrl+R 重试 · Ctrl+D 退出"
+            }
+            Focus::Sessions => "↑↓ 选择 · Enter 打开 · n 新建 · q 退出 · Tab/Esc 回到输入",
         }
-        Focus::Sessions => "↑↓ 选择 · Enter 打开 · n 新建 · q 退出 · Tab/Esc 回到输入",
     };
     frame.render_widget(Span::styled(format!(" {hint}"), faded()), area);
 }
@@ -199,8 +212,7 @@ fn phase_text(app: &App) -> Option<&'static str> {
 }
 
 /// 角色标签样式。
-fn role_style(role: lib_bin_cli::sdk::MessageRole) -> Style {
-    use lib_bin_cli::sdk::MessageRole;
+fn role_style(role: MessageRole) -> Style {
     let color = match role {
         MessageRole::User => Color::Cyan,
         MessageRole::Assistant => Color::Green,
@@ -208,6 +220,18 @@ fn role_style(role: lib_bin_cli::sdk::MessageRole) -> Style {
         MessageRole::Tool => Color::Blue,
     };
     Style::new().fg(color).add_modifier(Modifier::BOLD)
+}
+
+/// 工具调用行的样式：按前缀字符区分进行中、成功、失败与待确认（不新增颜色常量）。
+fn tool_style(text: &str) -> Style {
+    let color = match text.chars().next() {
+        Some('✓') => Color::Green,
+        Some('✗') => Color::Red,
+        Some('⚠') => Color::Yellow,
+        Some('⊘') => Color::DarkGray,
+        _ => Color::Blue,
+    };
+    Style::new().fg(color)
 }
 
 /// 边框样式：焦点所在区域高亮。
