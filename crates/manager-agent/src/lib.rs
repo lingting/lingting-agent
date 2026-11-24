@@ -18,7 +18,9 @@ mod session;
 
 pub use assemble::{AssemblyOptions, assemble, assemble_with};
 pub use holder::{AgentHolder, holder, install, runtime, shutdown};
-pub use session::{cancel_run, create_session, get_run, list_messages, list_sessions, running_run_count, send_message};
+pub use session::{
+    cancel_run, create_session, get_run, list_messages, list_sessions, list_tool_calls, running_run_count, send_message,
+};
 
 /// Provider 配置服务：只读，装载结果由启动方经 [`AssemblyOptions`] 传入（P2-017）。
 pub use agent_route::ProviderService;
@@ -26,3 +28,5 @@ pub use agent_route::ProviderService;
 pub use service_core::session::SessionError;
 /// 会话业务服务：Handler 只需要引用它来校验占用，业务方法一律走本 Crate 的入口函数。
 pub use service_core::session::SessionService;
+/// 工具审计的契约类型：`lib-web` 的 Handler 直接用它做查询参数与响应载荷（P3-019）。
+pub use service_core::session::{ToolAuditListParams, ToolCallVO};

@@ -16,7 +16,7 @@
 //! 失败原因也存进 `result`：OpenAI 兼容协议的工具结果没有 error 字段，审计表也只有一列 `result`，
 //! 因此不额外造一个无列可落的 `error` 字段。
 
-use framework_proc_auto::auto_enum;
+use framework_proc_auto::{auto_enum, auto_type};
 use lib_core::time::now_millis;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -119,6 +119,56 @@ impl ToolCallRecord {
         self.result = Some(REJECTED_TEXT.to_owned());
         self
     }
+}
+
+/// 审计记录的契约快照：`api/tool/audit/list` 的响应载荷（P3-019）。
+///
+/// 与 `ToolCallRecord` 字段同构，差别只有两处：`duration_ms` 用 `i64`（与其余 `i64` 字段一样
+/// 走字符串 wire 形态），且不携带 `run_id` / `session_id`（查询本身已经限定了 Run）。
+#[auto_type(default = false, clone = true)]
+pub struct ToolCallVO {
+    /// 模型给出的调用标识。
+    pub tool_call_id: String,
+    /// 工具名。
+    pub tool_name: String,
+    /// 本地文件操作声明（事后判断一次调用对本地文件的影响面）。
+    pub file_access: ToolFileAccess,
+    /// 调用状态；`PENDING` 表示仍在等待确认。
+    pub status: ToolCallStatus,
+    /// 已脱敏并截断的参数文本。
+    pub arguments: String,
+    /// 结果或错误文本；挂起时为空。
+    pub result: Option<String>,
+    /// 耗时（毫秒），含重试。
+    pub duration_ms: i64,
+    /// 第几轮工具调用（从 1 开始）。
+    pub tool_round: u32,
+    /// 记录产生时间（Unix 毫秒）。
+    pub created_at_ms: i64,
+}
+
+impl From<&ToolCallRecord> for ToolCallVO {
+    fn from(record: &ToolCallRecord) -> Self {
+        Self {
+            tool_call_id: record.tool_call_id.clone(),
+            tool_name: record.tool_name.clone(),
+            file_access: record.file_access,
+            status: record.status,
+            arguments: record.arguments.clone(),
+            result: record.result.clone(),
+            // 耗时的 `u64` 转 `i64` 饱和：真实耗时不可能到 2^63 毫秒。
+            duration_ms: i64::try_from(record.duration_ms).unwrap_or(i64::MAX),
+            tool_round: record.tool_round,
+            created_at_ms: record.created_at_ms,
+        }
+    }
+}
+
+/// 审计查询的查询参数：按 Run 查该次执行的全部工具调用。
+#[auto_type]
+pub struct ToolAuditListParams {
+    /// 目标 Run ID；未知 ID 返回空列表，不返回 404。
+    pub run_id: String,
 }
 
 /// 脱敏参数并转成审计文本：命中的键值替换为 `***`，整体按 [`MAX_ARGUMENT_CHARS`] 截断。

@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 部分完成（P3-010 / P3-011 代码 + 静态检查，P3-012 按需求方决定推迟到 Batch E 之后）；Batch D ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 部分完成（P3-010 / P3-011 代码 + 静态检查，P3-012 按需求方决定推迟到 Batch E 之后）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch D / F ~ H 未开工。** 26 项决策（D-P3-001 ~ D-P3-026）全部定案，可以按批次开工（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -333,8 +333,10 @@
 ## Batch E：持久化、审计与接口（P3-017 ~ P3-020）
 
 > 依赖：Batch B（记录类型）。与 C / D 可并行，但接口发布要等 D 能产出记录。
+>
+> **状态**：P3-017 ~ P3-020 完成（代码 + 静态检查 + 全量回归）。`cargo check` / `clippy -D warnings` / `fmt --check` / `make gen` / `make gen-check` / `make ui-check` 全部通过；`make test ARGS="--all"` 75 个用例通过（含 `persist.migration` 的同目录二次启动、`sdk.generator`）。仍未取证的两条：`0001` 时代旧库可读（无此类夹具）、`message/list` 的工具字段取值（等 Batch D / F 产出工具轨迹）；P3-020 的 `RunEvent` 新字段部分等 P3-013 落地后再生成一次。
 
-- [ ] **P3-017 迁移 `0002` 与 Repository**
+- [x] **P3-017 迁移 `0002` 与 Repository**
 
   **目标**：审计、工具轨迹与挂起状态落 SQLite，SQL 仍只在 Repository。
   **前置依赖**：P3-009。
@@ -347,13 +349,13 @@
   5. `repository/message.rs`：支持写入带工具列的消息；`repository/run.rs`：挂起列的读 / 写 / 清（条件更新 `WHERE status='QUEUED'`）。
   6. 迁移可重复执行（`IF NOT EXISTS` 语义由 `ALTER TABLE` 的幂等包装承担：先查 `PRAGMA table_info` 再决定是否加列）。
   **验收标准**：
-  - [ ] 迁移连续执行两次不报错；外键、唯一约束与 `idx_runs_pending` 真实存在。
-  - [ ] `grep -rn "INSERT\|SELECT\|ALTER" crates/service-core/src --include=*.rs` 仍只命中 `repository/`。
-  - [ ] 删除会话后 `tool_calls` 随之清空（`ON DELETE CASCADE` 链路经 `runs` 生效）；工具消息随 `messages` 一并删除。
-  - [ ] `0001` 既有数据可读（无工具列值为 `NULL`）。
+  - [x] 迁移连续执行两次不报错；外键、唯一约束与 `idx_runs_pending` 真实存在。（`persist.migration` 通过：同一 data 目录连续启动两次，第二次 `audit.error = 0`、`database.errors = 0`；用例 data 目录上核对：`schema_migrations` 有 1 / 2 两行、`tool_calls` 含 `UNIQUE (run_id, tool_call_id)` 与 `REFERENCES runs(id) ON DELETE CASCADE`、`idx_tool_calls_run` 与 `idx_runs_pending` 存在、`messages` / `runs` 的新列就位）
+  - [x] `grep -rn "INSERT\|SELECT\|ALTER" crates/service-core/src --include=*.rs` 仍只命中 `repository/`。
+  - [x] 删除会话后 `tool_calls` 随之清空（`ON DELETE CASCADE` 链路经 `runs` 生效）；工具消息随 `messages` 一并删除。（静态核对：`tool_calls.run_id REFERENCES runs(id) ON DELETE CASCADE` 已在库中生效，连接池开 `foreign_keys(true)`；P3 没有删除会话的接口与 Repository 方法，`grep -rn "DELETE FROM" crates/service-core crates/manager-agent` 为空，因此无法从接口侧触发）
+  - [ ] `0001` 既有数据可读（无工具列值为 `NULL`）。（用例的库都是 0001 + 0002 一次建成，不生成「0001 时代」的旧库夹具；此条保持未取证）
   **测试要求**：无（`tool.audit` / `persist.migration` 覆盖，**需授权**）。
 
-- [ ] **P3-018 Service 层的轨迹写入、挂起与唤醒**
+- [x] **P3-018 Service 层的轨迹写入、挂起与唤醒**
 
   **目标**：Runtime 只调 Service，不碰 Repository；挂起 / 唤醒的状态迁移有唯一入口。
   **前置依赖**：P3-017。
@@ -368,13 +370,13 @@
   7. 依赖方向：`service-core` 新增 `agent-tool`（`agent-tool` 不依赖 `service-core`，无环）；这条边写进 `docs/workspace.md`。
   8. 审计 / 轨迹写入不得在会话锁内（P2.1 的「锁内收尾」口径）。
   **验收标准**：
-  - [ ] `cargo tree -p service-core` 与 `cargo tree -p agent-tool` 之间没有环。
-  - [ ] 一轮的两类消息要么都写入要么都不写（事务边界可核）。
-  - [ ] `suspend_run` / `resume_run` 都以条件更新为准：并发两次唤醒只有一次命中。
-  - [ ] 写入失败不影响已成功 Run 的结论（代码路径可核：终态审计失败只 `warn!`）。
+  - [x] `cargo tree -p service-core` 与 `cargo tree -p agent-tool` 之间没有环。（`cargo tree -i agent-tool` 的直接消费者只有 `service-core`，另有 `agent-runtime` / `bin-tests` 经它间接引入）
+  - [x] 一轮的两类消息要么都写入要么都不写（事务边界可核：`Repository::with_tool_round` 是唯一入口，逐条 `insert_message_in` 在同一事务内完成）。
+  - [x] `suspend_run` / `resume_run` 都以条件更新为准：并发两次唤醒只有一次命中。（`suspend_run` 以 `status='RUNNING'` 为前提，`with_resume_run` 以 `pending_tool_call_id` 一致为前提，0 行即回滚）
+  - [ ] 写入失败不影响已成功 Run 的结论（代码路径可核：终态审计失败只 `warn!`）。（调用点属于 Batch D 的 `drive`，本批次只保证 `record_tool_call` 返回 `SessionError::Internal`）
   **测试要求**：无。
 
-- [ ] **P3-019 审计查询接口、`Message` 契约扩展与接口文档**
+- [x] **P3-019 审计查询接口、`Message` 契约扩展与接口文档**
 
   **目标**：审计可查、工具轨迹随 `message/list` 可见；接口契约只有一份来源。
   **前置依赖**：P3-018。
@@ -386,13 +388,13 @@
   4. `docs/api/tool.md` 新建并登记到 `docs/api/readme.md`；`docs/api/session.md` 的 `Message` 段落同步字段。
   5. 接口总数从 25 变 26（不含 debug + `metrics` 限定的 `api/probe/metrics`）；`client/update → client/post` 的重命名在 P3-026 单独处理，本任务不动。
   **验收标准**：
-  - [ ] `make gen` 产出的两份 SDK 都包含新接口、`ToolCallVO` 与 `Message` 的新字段。
-  - [ ] 路径命名符合规范：`api/tool/audit/list`（资源段小写单数、动作段用 `list`）。
-  - [ ] 未知 `runId` 返回 `[]` 而不是 404；`runId` 缺失返回 400。
-  - [ ] `message/list` 返回的历史里，TOOL 消息带 `toolCallId`，assistant 消息带 `toolCalls`。
+  - [x] `make gen` 产出的两份 SDK 都包含新接口、`ToolCallVO` 与 `Message` 的新字段。
+  - [x] 路径命名符合规范：`api/tool/audit/list`（资源段小写单数、动作段用 `list`）。
+  - [x] 未知 `runId` 返回 `[]` 而不是 404；`runId` 缺失返回 400。（Handler 不做存在性校验，`tool_calls` 查询无记录即空列表；缺参数走框架的查询参数转换）
+  - [ ] `message/list` 返回的历史里，TOOL 消息带 `toolCallId`，assistant 消息带 `toolCalls`。（契约与读写路径已就位，实际取值待 Batch D / F 产出工具轨迹后核验）
   **测试要求**：无（`tool.audit` 覆盖，**需授权**）。
 
-- [ ] **P3-020 SDK 重新生成与前端类型跟进**
+- [x] **P3-020 SDK 重新生成与前端类型跟进**（`RunEvent` 新字段部分随 P3-013 再生成一次）
 
   **目标**：契约变更走完 `make gen` 全链路，生成物不入库。
   **前置依赖**：P3-013、P3-019。
@@ -402,9 +404,9 @@
   2. 前端 `make ui-install` / `make ui-check` 通过；`useChat.ts` 里新增的三个事件分支先按「忽略但类型完整」处理（展示在 P3-028 / P3-029）。
   3. 确认生成物没有入库（`git status` 干净）。
   **验收标准**：
-  - [ ] `make gen` / `make gen-check` / `make ui-check` 均退出码 0。
-  - [ ] 生成物不在 `git status` 里。
-  - [ ] TS 侧 `RunEventKind` 含三个新取值，`RunEvent` 含六个新字段，`Message` 含三个新字段。
+  - [x] `make gen` / `make gen-check` / `make ui-check` 均退出码 0。
+  - [x] 生成物不在 `git status` 里。
+  - [ ] TS 侧 `RunEventKind` 含三个新取值，`RunEvent` 含六个新字段，`Message` 含三个新字段。（`Message` 的三个字段已生成；三个事件与六个事件字段依赖 P3-013，落地后再执行一次 `make gen`）
   **测试要求**：无（门禁命令本身就是静态检查）。
 
 ---

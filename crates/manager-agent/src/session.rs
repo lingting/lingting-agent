@@ -10,7 +10,7 @@ use agent_core::session::{
     SessionSummary,
 };
 use agent_route::{LlmError, ProviderService};
-use service_core::session::{SessionError, SessionService};
+use service_core::session::{SessionError, SessionService, ToolAuditListParams, ToolCallVO};
 
 use crate::holder::{holder, runtime};
 
@@ -95,6 +95,13 @@ pub async fn cancel_run(po: RunCancelPO) -> Result<Run, SessionError> {
 /// 由 Handler 决定怎么报错（D-P2-036）。
 pub async fn running_run_count() -> Result<i64, SessionError> {
     session()?.running_run_count().await
+}
+
+/// 按 Run 查询工具审计记录（只读）：审计记录在 `service-core`，契约快照在 `agent-tool`，
+/// 两者的映射收敛在本层，Handler 只做参数解包。
+pub async fn list_tool_calls(po: ToolAuditListParams) -> Result<Vec<ToolCallVO>, SessionError> {
+    let records = session()?.tool_calls_of_run(&po.run_id).await?;
+    Ok(records.iter().map(ToolCallVO::from).collect())
 }
 
 /// 取已注入的会话业务服务；未注入说明启动装配不完整，属服务端内部错误。

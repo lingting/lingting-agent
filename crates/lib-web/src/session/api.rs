@@ -54,7 +54,7 @@ pub async fn run_cancel(Json(po): Json<RunCancelPO>) -> Result<Run> {
 }
 
 /// 把业务错误映射成统一的错误响应（D-024）。
-fn api_error(error: SessionError) -> anyhow::Error {
+pub(crate) fn api_error(error: SessionError) -> anyhow::Error {
     match error {
         SessionError::NotFound(message) => WebError::not_found(message).into(),
         SessionError::Invalid(message) => WebError::parameter(message, "会话业务参数或状态不满足规则").into(),

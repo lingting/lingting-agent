@@ -9,6 +9,6 @@ mod event;
 mod request;
 mod run;
 
-pub use dto::{Message, MessageRole, MessageSendVO, Run, RunStatus, SessionSummary};
+pub use dto::{LlmToolCallVO, Message, MessageRole, MessageSendVO, Run, RunStatus, SessionSummary};
 pub use event::{RunEvent, RunEventKind};
 pub use request::{MessageListParams, MessageSendPO, RunCancelPO, RunGetParams, SessionCreatePO};

@@ -53,10 +53,23 @@
 | `runId` | `string \| null` | 产生该消息的 Run；系统侧预置消息没有 Run |
 | `role` | `MessageRole` | `SYSTEM` / `USER` / `ASSISTANT` / `TOOL` |
 | `content` | `string` | 消息正文 |
+| `toolCallId` | `string \| null` | 工具结果应答的调用标识；只有 `TOOL` 消息有值 |
+| `toolName` | `string \| null` | 工具结果对应的工具名；只有 `TOOL` 消息有值 |
+| `toolCalls` | `LlmToolCallVO[] \| null` | 助手本轮请求的调用清单；只有 `ASSISTANT` 消息可能非空 |
 | `model` | `string \| null` | 生成该消息时使用的模型；用户消息为空 |
 | `inputTokens` | `string \| null` | 输入 token 用量；未统计时为空 |
 | `outputTokens` | `string \| null` | 输出 token 用量；未统计时为空 |
 | `createdAtMs` | `string` | 创建时间（Unix 毫秒） |
+
+### LlmToolCallVO
+
+助手消息里的工具调用清单：与 `agent-route` 的 `LlmToolCall` 字段同构，Provider 协议类型不出服务端适配层（D-P3-010）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `string` | 调用标识；与工具结果消息的 `toolCallId` 配对 |
+| `name` | `string` | 工具名 |
+| `arguments` | `string` | 参数：模型给出的完整 JSON 文本，读取方自行解析 |
 
 ### Run
 
@@ -156,7 +169,7 @@ POST api/message/create
 
 HTTP/1.1 200 OK
 {"code":200,"message":"Success","data":{
-  "message":{"id":"1842000000000000002","sessionId":"1842000000000000001","runId":"1842000000000000003","role":"USER","content":"你好","model":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000"},
+  "message":{"id":"1842000000000000002","sessionId":"1842000000000000001","runId":"1842000000000000003","role":"USER","content":"你好","toolCallId":null,"toolName":null,"toolCalls":null,"model":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000"},
   "run":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"QUEUED","model":"gpt-4o-mini","error":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225601000","finishedAtMs":null}
 }}
 ```
@@ -165,7 +178,7 @@ HTTP/1.1 200 OK
 GET api/message/list?sessionId=1842000000000000001
 
 HTTP/1.1 200 OK
-{"code":200,"message":"Success","data":[{"id":"1842000000000000002","sessionId":"1842000000000000001","runId":"1842000000000000003","role":"USER","content":"你好","model":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000"}]}
+{"code":200,"message":"Success","data":[{"id":"1842000000000000002","sessionId":"1842000000000000001","runId":"1842000000000000003","role":"USER","content":"你好","toolCallId":null,"toolName":null,"toolCalls":null,"model":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000"}]}
 ```
 
 ```text

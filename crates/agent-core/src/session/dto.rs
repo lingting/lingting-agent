@@ -50,7 +50,24 @@ pub struct SessionSummary {
     pub updated_at_ms: i64,
 }
 
+/// 助手消息里的工具调用清单（消息契约侧的一份）。
+///
+/// 与 `agent-route` 的 `LlmToolCall` 字段同构但不共用类型：Provider 协议类型不出
+/// `agent-route`（D-P3-010），消息契约只承载「发生过哪次调用」这个事实。
+#[auto_type(default = false, clone = true)]
+pub struct LlmToolCallVO {
+    /// 调用标识：与工具结果消息的 `tool_call_id` 配对。
+    pub id: String,
+    /// 工具名。
+    pub name: String,
+    /// 参数：模型给出的完整 JSON 文本，读取方自己解析。
+    pub arguments: String,
+}
+
 /// 会话消息。
+///
+/// 工具轨迹靠三个可选字段表达（D-P3-003）：助手消息带 `tool_calls`，工具结果消息带
+/// `tool_call_id` + `tool_name`，普通消息三者皆空。
 #[auto_type(default = false, clone = true)]
 pub struct Message {
     /// 消息 ID。
@@ -61,8 +78,14 @@ pub struct Message {
     pub run_id: Option<String>,
     /// 消息角色。
     pub role: MessageRole,
-    /// 消息正文。
+    /// 消息正文；助手请求调用时可以为空串。
     pub content: String,
+    /// 工具结果应答的调用标识；只有 `tool` 角色的消息有值。
+    pub tool_call_id: Option<String>,
+    /// 工具结果对应的工具名；只有 `tool` 角色的消息有值（客户端展示用）。
+    pub tool_name: Option<String>,
+    /// 助手本轮请求的调用清单；只有 `assistant` 消息可能非空。
+    pub tool_calls: Option<Vec<LlmToolCallVO>>,
     /// 生成该消息时使用的模型；用户消息为空。
     pub model: Option<String>,
     /// 输入 token 用量；未统计时为空。

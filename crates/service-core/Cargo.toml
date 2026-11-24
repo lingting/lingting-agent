@@ -13,9 +13,13 @@ publish = false
 lib-core = { workspace = true }
 # 契约类型唯一来源（P2-006 起）：会话 / 消息 / Run 与事件。
 agent-core = { workspace = true }
+# 审计记录与查询载荷（P3-018，D-P3-011）：仅类型层，`agent-tool` 不反向依赖本 Crate。
+agent-tool = { workspace = true }
 # 持久化：连接池、事务入口与错误来自 `lib-db`，SQL 全部写在 `repository`（P2-010 ~ P2-012）。
 lib-db = { workspace = true }
 sqlx = { workspace = true }
+# `messages.tool_calls` 列的 JSON 文本编解码（P3-017）。
+serde_json = { workspace = true }
 # 执行端口（`session/driver.rs`）：事件通道、取消信号与 dyn 兼容的 async trait。
 tokio = { workspace = true }
 tokio-util = { workspace = true }

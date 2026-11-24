@@ -28,7 +28,10 @@ mod registry;
 pub mod schema;
 mod tool;
 
-pub use audit::{MAX_ARGUMENT_CHARS, REJECTED_TEXT, ToolCallRecord, ToolCallStatus, redact_arguments};
+pub use audit::{
+    MAX_ARGUMENT_CHARS, REJECTED_TEXT, ToolAuditListParams, ToolCallRecord, ToolCallStatus, ToolCallVO,
+    redact_arguments,
+};
 pub use batch::BatchOutcome;
 pub use call::ToolCall;
 pub use context::ToolContext;

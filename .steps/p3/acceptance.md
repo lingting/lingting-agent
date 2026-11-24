@@ -1,6 +1,6 @@
 # P3 验收清单
 
-**状态：Batch A（P3-001 ~ P3-004）已完成，A-1 / A-5 / A-6 与 S-1 的静态部分已核对通过（`cargo clippy -p agent-tool --all-targets -- -D warnings` 无告警）；其余条目待后续批次取证。** 判据已展开，用例相关条目尚未取证。结论与证据将汇总为 `docs/reports/p3-032-acceptance.md`。
+**状态：Batch A（P3-001 ~ P3-004）已完成，A-1 / A-5 / A-6 与 S-1 的静态部分已核对通过（`cargo clippy -p agent-tool --all-targets -- -D warnings` 无告警）；Batch E（P3-017 ~ P3-020）已落地：`make gen` / `make gen-check` / `make ui-check` 通过，`make test ARGS="--all"` 75 个用例通过（`persist.migration` 覆盖迁移二次启动、`sdk.generator` 覆盖生成链）；其余条目待后续批次取证。** 判据已展开，用例相关条目尚未取证。结论与证据将汇总为 `docs/reports/p3-032-acceptance.md`。
 
 每条都要能实际验证；**任一条不通过，P3 不视为完成**。
 

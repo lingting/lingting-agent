@@ -15,6 +15,7 @@
 mod message;
 mod run;
 mod session;
+mod tool;
 
 use std::sync::Arc;
 

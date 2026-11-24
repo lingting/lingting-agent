@@ -3464,9 +3464,11 @@ name = "service-core"
 version = "26.11.0"
 dependencies = [
  "agent-core",
+ "agent-tool",
  "async-trait",
  "lib-core",
  "lib-db",
+ "serde_json",
  "sqlx",
  "tokio",
  "tokio-util",

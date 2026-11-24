@@ -12,6 +12,7 @@
 | [session.md](session.md) | session（会话） | 会话 / 消息 / Run 业务接口（P2 起真实执行），共 6 条 |
 | [runtime.md](runtime.md) | runtime（客户端连接） | 注册、心跳 / 问询应答、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
+| [tool.md](tool.md) | tool（工具审计） | 按 Run 查询工具调用审计记录（只读），共 1 条 |
 
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 

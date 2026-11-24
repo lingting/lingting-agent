@@ -278,7 +278,7 @@ Agent Skills 能力（阶段：P5）。
 - 不依赖 `agent-runtime`；工具模块不得反向依赖运行时。
 - 内置工具（`calculator` / `current_time` / `file_read` / `file_search` / `http_request`）位于 `builtin` 子模块，与 Tool 抽象同处本 Crate，不新建 `agent-tool-builtin`（`.steps/p3/decisions.md` D-P3-001）。
 - 依赖 `framework-http` 仅为 `http_request`，本 Crate 不直接依赖 `reqwest`；契约 DTO 的 `auto_type` 依赖 `framework-proc-auto` / `framework-proc-core`（`collect` 特性，同 `types-core`）。
-- P3 起 `service-core` 依赖本 Crate 承载审计记录与查询载荷（D-P3-011）；反向边不成立。
+- P3 起 `service-core` 依赖本 Crate 承载审计记录与查询载荷（D-P3-011）；装配层把记录映射成契约快照时用的是 `service-core` 转发的类型，不新增依赖边（P3-019）。反向边均不成立。
 
 #### agent-mcp
 

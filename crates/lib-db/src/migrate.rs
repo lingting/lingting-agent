@@ -8,9 +8,9 @@
 //! 无法满足 `Send`（`Executor` 实现要求引用与 `Executor` 生命周期相同，高阶推导失败），
 //! 会让整个迁移 future 不实现 `Send`，进而无法在异步服务里使用（D-P2-033）。
 
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
-use crate::{Database, DbError};
+use crate::{Database, DbError, Transaction};
 
 /// 一个迁移脚本：版本号、名称与编进二进制的 SQL。
 struct Migration {
@@ -23,11 +23,18 @@ struct Migration {
 }
 
 /// 迁移清单：追加新版本时只在这里追加一条，不改动已发布的脚本。
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("../migrations/0001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("../migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "tool_calls",
+        sql: include_str!("../migrations/0002_tool_calls.sql"),
+    },
+];
 
 /// 迁移账本表：建表语句本身也必须是幂等的（每次启动都会执行）。
 const CREATE_LEDGER: &str = "\
@@ -61,6 +68,14 @@ async fn applied(pool: &SqlitePool, version: i64) -> Result<bool, DbError> {
 async fn apply(database: &Database, migration: &Migration) -> Result<(), DbError> {
     let mut transaction = database.begin().await?;
     for statement in statements(migration.sql) {
+        // 加列语句先做存在性预检：SQLite 没有 `ADD COLUMN IF NOT EXISTS`（见 [`added_column`]）。
+        if let Some((table, column)) = added_column(statement)
+            && column_exists(&mut transaction, &table, &column)
+                .await
+                .map_err(|error| migrated(migration, error))?
+        {
+            continue;
+        }
         sqlx::query(statement)
             .execute(transaction.connection())
             .await
@@ -98,4 +113,39 @@ fn has_sql(statement: &str) -> bool {
     statement
         .lines()
         .any(|line| !line.trim().is_empty() && !line.trim_start().starts_with("--"))
+}
+
+/// 如果是「加列」语句，返回（表名, 列名）。
+///
+/// SQLite 的 `ALTER TABLE ... ADD COLUMN` 没有 `IF NOT EXISTS`，重复执行会整条迁移失败。
+/// 这里只认仓库脚本里实际使用的朴素写法（`ALTER TABLE <表> ADD COLUMN <列> <类型>`，
+/// 表名与列名不带引号），执行前用它做 [`column_exists`] 预检，让加列与建表 / 建索引一样幂等。
+fn added_column(statement: &str) -> Option<(String, String)> {
+    let text = statement
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("--"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut words = text.split_whitespace();
+    // 逐词取五个关键字位置：`ALTER TABLE <表> ADD COLUMN <列>`。
+    let [alter, table, table_name, add, column] = [
+        words.next()?,
+        words.next()?,
+        words.next()?,
+        words.next()?,
+        words.next()?,
+    ]
+    .map(str::to_ascii_uppercase);
+    if alter != "ALTER" || table != "TABLE" || add != "ADD" || column != "COLUMN" {
+        return None;
+    }
+    Some((table_name, words.next()?.to_owned()))
+}
+
+/// 该表是否已有这一列：`PRAGMA table_info` 的 `name` 字段是列名。
+async fn column_exists(transaction: &mut Transaction, table: &str, column: &str) -> Result<bool, sqlx::Error> {
+    let sql = format!("PRAGMA table_info({table})");
+    let rows = sqlx::query(&sql).fetch_all(&mut *transaction.connection()).await?;
+    Ok(rows.iter().any(|row| row.get::<String, _>("name") == column))
 }

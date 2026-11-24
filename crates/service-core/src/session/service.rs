@@ -14,11 +14,12 @@ use agent_core::session::{
     Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStatus,
     SessionCreatePO, SessionSummary,
 };
+use agent_tool::{ToolCallRecord, ToolCallStatus};
 use lib_core::{id, time};
 use lib_db::DbError;
 
 use crate::repository::Repository;
-use crate::session::SessionError;
+use crate::session::{PendingToolCall, ResumeDecision, SessionError};
 
 /// 未指定标题时的默认会话标题。
 const DEFAULT_TITLE: &str = "新会话";
@@ -109,6 +110,9 @@ impl SessionService {
             run_id: Some(run.id.clone()),
             role: MessageRole::User,
             content: params.content,
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: None,
             model: None,
             input_tokens: None,
             output_tokens: None,
@@ -189,6 +193,82 @@ impl SessionService {
     pub async fn history_before_run(&self, session_id: &str, run_id: &str) -> Result<Vec<Message>, SessionError> {
         self.repository
             .history_before_run(session_id, run_id)
+            .await
+            .map_err(internal)
+    }
+
+    /// 写一条工具调用的审计记录：`Pending` 是挂起时的插入，其余状态是收尾覆盖（P3-018）。
+    ///
+    /// `PENDING` 插入失败必须让本轮失败——它是挂起的事实源；终态覆盖失败只记日志，
+    /// 不影响已经成功的 Run（审计不该把成功 Run 打成失败）。
+    pub async fn record_tool_call(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        record: &ToolCallRecord,
+    ) -> Result<(), SessionError> {
+        let id = next_id()?;
+        let written = if record.status == ToolCallStatus::Pending {
+            self.repository.insert_tool_call(&id, run_id, session_id, record).await
+        } else {
+            // 收尾走 upsert：挂起记录缺失时也要留下一条完整审计（宁可多一条，不要漏一条）。
+            self.repository.finish_tool_call(&id, run_id, session_id, record).await
+        };
+        written.map_err(internal)
+    }
+
+    /// 某个 Run 的审计记录，按产生时间升序；没有记录时返回空列表。
+    pub async fn tool_calls_of_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, SessionError> {
+        self.repository.tool_calls(run_id).await.map_err(internal)
+    }
+
+    /// 一轮工具轨迹落库：assistant `tool_calls` 与全部 TOOL 结果同一事务写入（D-P3-024）。
+    ///
+    /// 进下一轮之前必须成功——写不进去就本轮失败，否则恢复时认不出「哪次调用没有结果」。
+    pub async fn append_tool_round(&self, messages: &[Message]) -> Result<(), SessionError> {
+        self.repository.with_tool_round(messages).await.map_err(internal)
+    }
+
+    /// 挂起：`RUNNING` 的 Run 退回 `QUEUED` 并记下待确认调用；返回是否命中（D-P3-023）。
+    pub async fn suspend_run(&self, run_id: &str, tool_call_id: &str, tool_round: u32) -> Result<bool, SessionError> {
+        self.repository
+            .suspend_run(run_id, tool_call_id, tool_round, time::now_millis())
+            .await
+            .map_err(internal)
+    }
+
+    /// 唤醒：待确认标识一致时清空；驳回时同一事务把审计记录置 `DENIED`（D-P3-023）。
+    ///
+    /// 返回是否命中：并发两次唤醒只有一次命中，第二次按「待确认的调用不匹配」处理。
+    pub async fn resume_run(
+        &self,
+        run_id: &str,
+        tool_call_id: &str,
+        decision: ResumeDecision,
+    ) -> Result<bool, SessionError> {
+        self.repository
+            .with_resume_run(run_id, tool_call_id, decision, time::now_millis())
+            .await
+            .map_err(internal)
+    }
+
+    /// 该 Run 正在等待确认的调用；不处于挂起态时为空。
+    pub async fn pending_tool_call(&self, run_id: &str) -> Result<Option<PendingToolCall>, SessionError> {
+        self.repository.pending_tool_call(run_id).await.map_err(internal)
+    }
+
+    /// 某个会话里全部挂起中的 Run：重连补发确认事件与「取消时清挂起」共用。
+    pub async fn pending_tool_calls_of_session(&self, session_id: &str) -> Result<Vec<PendingToolCall>, SessionError> {
+        self.repository
+            .pending_tool_calls_of_session(session_id)
+            .await
+            .map_err(internal)
+    }
+
+    /// 取消链路清挂起：挂起的 Run 落终态时一并清空待确认标识，不留悬挂挂起态。
+    pub async fn clear_pending_tool_call(&self, run_id: &str) -> Result<bool, SessionError> {
+        self.repository
+            .clear_pending_tool_call(run_id, time::now_millis())
             .await
             .map_err(internal)
     }

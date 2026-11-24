@@ -4,8 +4,11 @@
 //! 单语句操作直接走连接池。
 
 use agent_core::session::{Message, Run, RunStatus};
+use agent_tool::{REJECTED_TEXT, ToolCallStatus};
 use lib_db::{DbError, Transaction};
 use sqlx::Row;
+
+use crate::session::{PendingToolCall, ResumeDecision};
 
 use super::{Repository, decode_enum};
 
@@ -203,6 +206,124 @@ impl Repository {
             .fetch_one(self.pool())
             .await
             .map_err(DbError::Query)
+    }
+
+    /// 挂起：把 `RUNNING` 的 Run 退回 `QUEUED`，并记下等待确认的调用（D-P3-023）。
+    ///
+    /// 条件更新以 `status = 'RUNNING'` 为前提：影响 0 行说明 Run 已被取消或已终态，
+    /// 调用方据此放弃挂起（不再发确认事件）。
+    pub async fn suspend_run(
+        &self,
+        run_id: &str,
+        tool_call_id: &str,
+        tool_round: u32,
+        now_ms: i64,
+    ) -> Result<bool, DbError> {
+        let affected = sqlx::query(
+            "UPDATE runs SET status = ?, pending_tool_call_id = ?, pending_tool_round = ?, updated_at_ms = ? \
+             WHERE id = ? AND status = ?",
+        )
+        .bind(RunStatus::Queued.to_string())
+        .bind(tool_call_id)
+        .bind(tool_round)
+        .bind(now_ms)
+        .bind(run_id)
+        .bind(RunStatus::Running.to_string())
+        .execute(self.pool())
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
+    }
+
+    /// 该 Run 正在等待确认的调用；不处于挂起态时为空。
+    pub async fn pending_tool_call(&self, run_id: &str) -> Result<Option<PendingToolCall>, DbError> {
+        let row = sqlx::query("SELECT pending_tool_call_id, pending_tool_round FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_optional(self.pool())
+            .await?;
+        Ok(row.and_then(|row| {
+            let tool_call_id: Option<String> = row.get("pending_tool_call_id");
+            let tool_call_id = tool_call_id?;
+            Some(PendingToolCall {
+                run_id: run_id.to_string(),
+                tool_call_id,
+                tool_round: row.get::<Option<i64>, _>("pending_tool_round")?.max(0) as u32,
+            })
+        }))
+    }
+
+    /// 某个会话里全部挂起中的 Run，按最后更新时间升序（重连补发与取消清理用）。
+    pub async fn pending_tool_calls_of_session(&self, session_id: &str) -> Result<Vec<PendingToolCall>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id, pending_tool_call_id, pending_tool_round FROM runs \
+             WHERE session_id = ? AND pending_tool_call_id IS NOT NULL ORDER BY updated_at_ms, id",
+        )
+        .bind(session_id)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| PendingToolCall {
+                run_id: row.get("id"),
+                tool_call_id: row.get("pending_tool_call_id"),
+                tool_round: row
+                    .get::<Option<i64>, _>("pending_tool_round")
+                    .unwrap_or_default()
+                    .max(0) as u32,
+            })
+            .collect())
+    }
+    /// 清空待确认标识（取消链路用：挂起的 Run 只能由确认 / 取消 / 断连 / 关闭收尾）。
+    pub async fn clear_pending_tool_call(&self, run_id: &str, now_ms: i64) -> Result<bool, DbError> {
+        let affected = sqlx::query(
+            "UPDATE runs SET pending_tool_call_id = NULL, pending_tool_round = NULL, updated_at_ms = ? \
+             WHERE id = ? AND pending_tool_call_id IS NOT NULL",
+        )
+        .bind(now_ms)
+        .bind(run_id)
+        .execute(self.pool())
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
+    }
+
+    /// 唤醒：待确认标识与请求一致时清空；驳回时同一事务把审计记录置 `DENIED`。
+    ///
+    /// 返回是否命中：并发两次唤醒只有一次命中（第二次匹配不到待确认标识）。
+    pub async fn with_resume_run(
+        &self,
+        run_id: &str,
+        tool_call_id: &str,
+        decision: ResumeDecision,
+        now_ms: i64,
+    ) -> Result<bool, DbError> {
+        let mut transaction = self.begin().await?;
+        let affected = sqlx::query(
+            "UPDATE runs SET pending_tool_call_id = NULL, pending_tool_round = NULL, updated_at_ms = ? \
+             WHERE id = ? AND pending_tool_call_id = ?",
+        )
+        .bind(now_ms)
+        .bind(run_id)
+        .bind(tool_call_id)
+        .execute(transaction.connection())
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        if decision == ResumeDecision::Reject {
+            self.set_tool_call_status_in(
+                &mut transaction,
+                run_id,
+                tool_call_id,
+                ToolCallStatus::Denied,
+                Some(REJECTED_TEXT),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(true)
     }
 
     /// 启动自愈：上一次进程残留的执行中 Run 落 `FAILED`，排队中的 Run 落 `CANCELLED`（D-P2-030）。
