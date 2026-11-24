@@ -28,6 +28,12 @@ async-trait = { workspace = true }
 futures-util = { workspace = true }
 # 仅 `http_request` 使用；本 Crate 不直接依赖 reqwest（D-P3-018）。
 framework-http = { workspace = true, features = ["reqwest"] }
+# `http_request` 的地址解析与 host 白名单匹配（D-P3-014；两者都在 workspace 依赖里，不新增第三方依赖）。
+url = { workspace = true }
+# `current_time` 的 ISO8601 格式化（D-P3-016；同上，`chrono` 已在 workspace 依赖里）。
+chrono = { workspace = true }
+# `http_request` 的失败归一化：`framework-http` 以 `anyhow::Result` 返回错误，这里只读错误链。
+anyhow = { workspace = true }
 
 # 契约 DTO（`ToolDefinitionVO`）用 `auto_type` 标注参与 SDK 生成；宏展开使用绝对路径，
 # 因此这些 crate 必须直接声明，`collect` 让生成的类型元数据可被导出器看到（同 `types-core`）。

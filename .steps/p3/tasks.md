@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F ~ H 未开工。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F 完成（P3-021 ~ P3-025：五个内置工具 + `builtin::register_all` 装配；代码 + 静态核对 + 全量回归 75 个用例通过，`tool.builtin.*` 用例待 Batch H）；Batch G ~ H 未开工。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -163,7 +163,7 @@
   **验收标准**：
   - [x] 截断只按字符边界发生，中文与 emoji 不被截半（代码可核）。（`chars().take(max_chars)`，上限按字符计）
   - [x] 截断后的文本长度 ≤ `max_chars` + 固定提示长度，且提示里点明原文长度。（提示为 `\n…（结果已截断，原文共 N 字符）`，N 是截断前的字符数）
-  - [ ] 错误文案里不出现 `api_key` 明文与完整本地路径（`file_read` / `http_request` 的失败文本逐条对照）。**待 Batch F**：两个工具的实现（P3-023 / P3-025）落地后才能逐条对照。
+  - [x] 错误文案里不出现 `api_key` 明文与完整本地路径（`file_read` / `http_request` 的失败文本逐条对照）。（Batch F 落地后对照：`file_read` 的失败只可能是 `path::REJECTED_TEXT` / `该路径不是普通文件` / `文件超过读取上限（> N 字节）` / `二进制文件不支持读取`，都不带路径；`http_request` 的失败为 `只支持 http / https 地址` / `请求的主机不在允许的范围内` / `请求失败` / `连接失败或读取超时` / `初始化 HTTP 客户端失败`，都是固定文案（不回灌 URL、host、请求头与底层错误原文），参数脱敏另由 `redact_arguments` 在写出侧完成）
   **测试要求**：无（`tool.truncate` 覆盖，**待 Batch H 授权后执行**）。
 
 - [x] **P3-009 审计记录类型与脱敏**
@@ -415,8 +415,10 @@
 ## Batch F：五个内置工具（P3-021 ~ P3-025）
 
 > 依赖：Batch A / Batch B 的 trait 与执行器。可与 C / D 并行。每个工具只实现 trait，不新增机制。
+>
+> **状态**：P3-021 ~ P3-025 完成（代码 + 静态核对 + 全量回归；`cargo check` / `clippy -D warnings` / `fmt --check` 在 workspace 全绿，装配后 `make test ARGS="--all"` 75/75 全部通过，含 `web.e2e` 的 6 个浏览器用例与 `stress.boundary`）。**装配口径**：五个工具由 `agent_tool::builtin::register_all` 一次性注册，`[tools.file]` / `[tools.http]` 经 `BuiltinOptions` 传入；装配点是 `manager-agent::assemble::build_tools`（该函数改为返回 `Result`，注册失败即启动失败）。`http_request` 是 `Network` 风险，默认 `deny`，不显式 `allow` 就不进模型可见清单。全量回归证明「五个工具进装配」不改变既有行为（会话 / Run / 持久化 / TUI / WebUI 全部照旧）；工具自身的边界断言（`tool.builtin.*`）仍待 Batch H 的 P3-030 落地，本节判据以静态核对取证。
 
-- [ ] **P3-021 `calculator`**
+- [x] **P3-021 `calculator`**
 
   **目标**：安全的四则运算工具，不引表达式求值库。
   **前置依赖**：P3-002、P3-003。
@@ -427,12 +429,12 @@
   3. 结果格式：整数值输出整数形式，否则保留最多 10 位小数（去掉尾随零）。
   4. 输入长度上限 512 字符（防止病态嵌套），嵌套深度上限 32。
   **验收标准**：
-  - [ ] 不引入新的第三方依赖（`Cargo.toml` 可核）。
-  - [ ] 非法输入（空串、`1+`、`(1+2`、`1/0`、超出长度的表达式）返回固定错误文案，不 panic。
-  - [ ] `2+3*4` = `14`、`(2+3)*4` = `20`、`-3%2` = `-1`（取模符号与被除数一致）。
+  - [x] 不引入新的第三方依赖（`Cargo.toml` 可核）。（本 Crate 新增的 `url` / `chrono` / `anyhow` 都取自 `workspace.dependencies`，没有引入 workspace 之外的新第三方 crate）
+  - [x] 非法输入（空串、`1+`、`(1+2`、`1/0`、超出长度的表达式）返回固定错误文案，不 panic。（**实现口径**：空串 / 超长 / 含不支持字符 → `InvalidArguments`，文案 `expression 不能为空` / `expression 长度不能超过 512 字符` / `expression 只支持数字、. 、+ - * / % 与括号`；`1+` / `(1+2` → `Failed(表达式语法错误)`；`1/0` → `Failed(除数不能为零)`；嵌套 > 32 层与结果溢出各有固定文案。解析器只前进、不回溯、不切片越界，没有 `unwrap` 路径）
+  - [x] `2+3*4` = `14`、`(2+3)*4` = `20`、`-3%2` = `-1`（取模符号与被除数一致）。（按文法静态核对：`term` 比 `expr` 结合更紧、括号分支回到 `expr`、`%` 用 Rust 的「符号随被除数」语义；**未执行用例**）
   **测试要求**：无（`tool.builtin.calculator` 覆盖，**需授权**）。
 
-- [ ] **P3-022 `current_time`**
+- [x] **P3-022 `current_time`**
 
   **目标**：只读系统时钟，输出可被模型直接使用的两种格式。
   **前置依赖**：P3-002、P3-003。
@@ -441,12 +443,12 @@
   1. `CurrentTimeArgs { zone: Option<String> }`，取值 `utc` / `local`，缺省 `utc`；`file_access()` 返回 `ToolFileAccess::None`（只读系统时钟，不碰文件）；其它取值返回 `InvalidArguments`（不做时区名解析）。
   2. 输出：`<ISO8601>（Unix 毫秒：<ms>，时区：<utc|local>）`；毫秒用 `lib_core::time::now_millis`，格式化用 `chrono`（工作区已有依赖）。
   **验收标准**：
-  - [ ] 不引入新依赖（`chrono` 已在 workspace 依赖里）。
-  - [ ] `zone = "Asia/Shanghai"` 返回 `InvalidArguments` 且文案点明只支持 `utc` / `local`。
-  - [ ] 输出包含 ISO8601 与 Unix 毫秒两段，且毫秒与 `created_at_ms` 同源。
+  - [x] 不引入新依赖（`chrono` 已在 workspace 依赖里）。
+  - [x] `zone = "Asia/Shanghai"` 返回 `InvalidArguments` 且文案点明只支持 `utc` / `local`。（Display 为 `参数不合法：zone 只支持 utc 或 local`；取值先 `to_ascii_lowercase`，`UTC` 与 `utc` 等价）
+  - [x] 输出包含 ISO8601 与 Unix 毫秒两段，且毫秒与 `created_at_ms` 同源。（同一条 `lib_core::time::now_millis` 既用于 `DateTime::from_timestamp_millis` 也写进文本；ISO8601 走 `to_rfc3339_opts(SecondsFormat::Millis, …)`，`local` 保留偏移量、不换成 `Z`）
   **测试要求**：无（`tool.builtin.current_time` 覆盖，**需授权**）。
 
-- [ ] **P3-023 `file_read`**
+- [x] **P3-023 `file_read`**
 
   **目标**：在白名单内读取文本文件，越界即拒绝。
   **前置依赖**：P3-002、P3-003、P3-005（`[tools.file]`）。
@@ -458,12 +460,13 @@
   4. 非 UTF-8 → 拒绝并说明「二进制文件不支持」。
   5. 结果文本带相对路径头部（相对白名单根），正文原样。
   **验收标准**：
-  - [ ] 白名单外的路径被拒绝，且错误文本里不含真实绝对路径。
-  - [ ] 超过 `max_bytes` 的文件不被完整读入（代码用 `metadata` 预判，可核）。
-  - [ ] 二进制文件返回固定文案而不是乱码。
+  - [x] 白名单外的路径被拒绝，且错误文本里不含真实绝对路径。（越界与不存在共用 `path::REJECTED_TEXT`「路径不在允许的范围内或不存在」；`Resolved` 的规范化绝对路径只在工具内部使用，结果文本只写相对白名单根的路径）
+  - [x] 超过 `max_bytes` 的文件不被完整读入（代码用 `metadata` 预判，可核）。（`std::fs::read` 只在长度检查之后调用，超限直接返回固定文案）
+  - [x] 二进制文件返回固定文案而不是乱码。（`String::from_utf8` 失败 → `Failed(二进制文件不支持读取)`）
+  **补充口径**：结果头部为 `文件：<相对白名单根路径>`；路径存在但不是普通文件（目录 / 设备）时返回 `Failed(该路径不是普通文件)`。
   **测试要求**：无（`tool.builtin.file` 覆盖，**需授权**）。
 
-- [ ] **P3-024 `file_search`**
+- [x] **P3-024 `file_search`**
 
   **目标**：在白名单内按文件名搜索，遍历期剪枝无关目录。
   **前置依赖**：P3-023（复用 `path::resolve`）。
@@ -474,12 +477,13 @@
   3. 结果按路径字典序排序，每行「相对路径 + 大小」；到达上限即停止遍历并在文本末尾标注「已截断」。
   4. 跳过符号链接目录（不跟随），避免环。
   **验收标准**：
-  - [ ] 排除目录在**遍历阶段**剪枝（代码结构可核：命中即 `continue`，不做事后过滤）。
-  - [ ] 结果条数与顺序稳定（同一目录两次执行结果相同）。
-  - [ ] 起点路径越界时与 `file_read` 同样被拒绝。
+  - [x] 排除目录在**遍历阶段**剪枝（代码结构可核：命中即 `continue`，不做事后过滤）。（`EXCLUDED_DIRS.contains(&name)` 在入栈前判定，排除目录的 `read_dir` 一次都不会发生；符号链接同样不入栈）
+  - [x] 结果条数与顺序稳定（同一目录两次执行结果相同）。（每个目录的条目先按 `file_name` 排序再匹配/入栈，最终结果再按路径字典序排序，因此「谁占满上限」也确定）
+  - [x] 起点路径越界时与 `file_read` 同样被拒绝。（起点走同一个 `path::resolve`；起点不是目录时返回 `Failed(搜索起点不是目录)`）
+  **补充口径**：`FileSearch::new` 只接白名单——本工具不读文件内容，不需要 `max_bytes`；`max_results <= 0` 与空 `name` 都是 `InvalidArguments`。
   **测试要求**：无（`tool.builtin.file` 覆盖，**需授权**）。
 
-- [ ] **P3-025 `http_request`**
+- [x] **P3-025 `http_request`**
 
   **目标**：受域名白名单约束的 HTTP 调用，默认拒绝。
   **前置依赖**：P3-002、P3-003、P3-005（`[tools.http]`）。
@@ -491,10 +495,11 @@
   4. 结果文本：状态码 + 内容类型 + 正文；只回灌正文与状态，不回灌请求头（避免把 `Authorization` 之类带进模型上下文）。
   5. `retryable`：仅对「连接失败 / 读超时」返回真，`max_retries = 0` 时仍不重试（D-P3-008）。
   **验收标准**：
-  - [ ] 默认配置下该工具为 deny：既不出现在模型可见清单（不进入上下文），执行期也返回 `未授权`。
-  - [ ] 白名单之外的主机被拒绝时不发起连接（可用 127.0.0.1 之外的不可达地址验证「没有网络动作」）。
-  - [ ] 不跟随重定向（3xx 原样返回状态码）。
-  - [ ] 响应超限被截断并标注，不把整个响应读进内存。
+  - [x] 默认配置下该工具为 deny：既不出现在模型可见清单（不进入上下文），执行期也返回 `未授权`。（风险等级 `Network` → `ToolRisk::default_permission()` 为 `Deny`；注册表把 deny 的工具从 `model_definitions()` 摘掉、`lookup` 仍命中，执行期由执行器回 `DENIED` 并落 `工具未授权：http_request`）
+  - [x] 白名单之外的主机被拒绝时不发起连接（可用 127.0.0.1 之外的不可达地址验证「没有网络动作」）。（host 判定在 `HttpClient` 构造与任何请求之前返回 `Failed(请求的主机不在允许的范围内)`）
+  - [x] 不跟随重定向（3xx 原样返回状态码）。（`HttpClientBuilder::no_redirect()` → `redirect_limit(0)`）
+  - [x] 响应超限被截断并标注，不把整个响应读进内存。（`stream_get` / `stream_post` 逐块读，累积到 `max_bytes` 即停止读并追加 `…（响应超过 N 字节，已截断）`）
+  **补充口径**：客户端按 `ctx.deadline` 的剩余时间新建（`no_redirect()` + timeout），因此每次调用一个新连接池；`retryable` 按错误链里的 `std::io::ErrorKind`（`TimedOut` / `ConnectionRefused` / `ConnectionReset` / …）判定，`reqwest` 类型不出框架（D-P3-018）；失败文案不带 URL 与底层错误原文。
   **测试要求**：无（`tool.builtin.http` 覆盖，**需授权**；用例本地起一个只监听 127.0.0.1 的假服务端）。
 
 ---

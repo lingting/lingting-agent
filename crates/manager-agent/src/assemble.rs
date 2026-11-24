@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agent_route::ProviderService;
+use agent_tool::builtin::{BuiltinOptions, register_all};
 use agent_tool::{ToolLimits, ToolPermission, ToolPolicy, ToolRegistry};
 use anyhow::{Context, Result};
 use lib_core::time;
@@ -98,7 +99,7 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
             directory_root(&directories)
         }
     };
-    let (tools, tool_limits) = build_tools(&options.tools);
+    let (tools, tool_limits) = build_tools(&options.tools)?;
     Ok(AgentHolder::new(
         session,
         runtime,
@@ -110,25 +111,32 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
     ))
 }
 
-/// 按 `[tools]` 建注册表与执行参数：权限判定表、并发/超时上限，然后注册内置工具。
+/// 按 `[tools]` 建注册表与执行参数：权限判定表、并发/超时上限，然后注册五个内置工具。
 ///
-/// 内置工具在 P3-021 ~ P3-025 落地后由 `agent_tool::builtin` 提供注册入口；在此之前注册表
-/// 为空，`model_definitions()` 也就返回空清单，请求里不带 `tools`（P3-004 第 6 条）。
-fn build_tools(config: &ToolConfig) -> (Arc<ToolRegistry>, ToolLimits) {
+/// 权限只影响「发给模型的清单」：`deny` 的工具仍然注册（执行期回 `DENIED`），`http_request`
+/// 是 `Network` 风险、默认 `deny`，不显式 `allow` 就不进清单（D-P3-005）。
+fn build_tools(config: &ToolConfig) -> Result<(Arc<ToolRegistry>, ToolLimits)> {
     let policy = ToolPolicy::new(
         config
             .permissions
             .iter()
             .map(|(name, kind)| (name.clone(), permission_of(*kind))),
     );
-    let registry = Arc::new(ToolRegistry::new(policy));
+    let mut registry = ToolRegistry::new(policy);
+    let builtin = BuiltinOptions {
+        file_allow_dirs: config.file.allow_dirs.clone(),
+        file_max_bytes: config.file.max_bytes,
+        http_allow_hosts: config.http.allow_hosts.clone(),
+        http_max_bytes: config.http.max_bytes,
+    };
+    register_all(&mut registry, &builtin).context("注册内置工具失败")?;
     let limits = ToolLimits {
         timeout_ms: config.timeout_ms,
         max_result_chars: config.max_result_chars,
         max_parallel_calls: config.max_parallel_calls,
         max_retries: config.max_retries,
     };
-    (registry, limits)
+    Ok((Arc::new(registry), limits))
 }
 
 /// 配置侧的权限取值 → 工具层的判定值：两处枚举刻意分开，配置类型不进 `agent-tool`。

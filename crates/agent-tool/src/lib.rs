@@ -17,6 +17,7 @@
 
 mod audit;
 mod batch;
+pub mod builtin;
 mod call;
 mod context;
 mod definition;

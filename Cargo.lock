@@ -82,7 +82,9 @@ version = "26.11.0"
 dependencies = [
  "agent-context-core",
  "agent-core",
+ "anyhow",
  "async-trait",
+ "chrono",
  "framework-http",
  "framework-proc-auto",
  "framework-proc-core",
@@ -97,6 +99,7 @@ dependencies = [
  "strum_macros",
  "tokio",
  "tokio-util",
+ "url",
 ]
 
 [[package]]

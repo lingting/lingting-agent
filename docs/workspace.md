@@ -677,7 +677,7 @@ manager-agent -> service-agent
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
-| `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
+| `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`url`（`http_request` 的地址解析与 host 白名单匹配）、`chrono`（`current_time` 的 ISO8601 格式化）、`anyhow`（`http_request` 的错误归一化，框架以 `anyhow::Result` 返回）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
 | `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
 | `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
