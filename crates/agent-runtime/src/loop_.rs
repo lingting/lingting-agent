@@ -21,9 +21,9 @@ mod request;
 mod tool;
 mod trace;
 
-use agent_context_core::ContextPolicy;
+use agent_context_core::{ContextItem, ContextPolicy};
 use agent_core::session::{Message, MessageRole, Run, RunEventKind, RunStatus};
-use agent_route::{LlmError, LlmMessage};
+use agent_route::{LlmError, LlmMessage, LlmToolCall};
 use lib_core::{id, time};
 use service_core::session::{RunInput, RunOutcome, RunStop};
 use tracing::{info, warn};
@@ -188,12 +188,36 @@ async fn prepare(runtime: &AgentRuntime, run: &Run, prompt: &str) -> Result<Prep
         messages: context
             .items()
             .iter()
-            .map(|item| LlmMessage::text(item.role, item.content.clone()))
+            .map(to_llm_message)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| logged(error.public_message(), error))?,
         max_output_tokens: model.max_output_tokens as u64,
         input_tokens: context.metadata().estimated_tokens as i64,
     })
+}
+
+/// Context Item → 请求消息：工具轨迹要带上 `tool_call_id` 与调用清单，否则 Provider 侧无法
+/// 表达「助手请求调用」与「工具结果」这两条历史（P3-010 的三种消息形态）。
+///
+/// 历史里带工具轨迹是常态（上一轮会话留下的），因此这一步必须按 `ContextItem` 的字段逐项还原，
+/// 不能一律当普通文本——那样第二轮请求就会被适配器判为「工具结果消息必须带 tool_call_id」。
+fn to_llm_message(item: &ContextItem) -> Result<LlmMessage, LlmError> {
+    if item.role == MessageRole::Tool {
+        return LlmMessage::tool_result(item.tool_call_id.clone().unwrap_or_default(), item.content.clone());
+    }
+    if !item.tool_calls.is_empty() {
+        let calls = item
+            .tool_calls
+            .iter()
+            .map(|call| LlmToolCall {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            })
+            .collect();
+        return LlmMessage::assistant_tools(item.content.clone(), calls);
+    }
+    LlmMessage::text(item.role, item.content.clone())
 }
 
 /// token 用量累加（P3-014 第 8 条）：每轮的 usage 相加，缺一轮就按已有值算。
