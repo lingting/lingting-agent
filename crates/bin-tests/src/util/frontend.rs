@@ -65,15 +65,44 @@ pub(crate) async fn tool_tests() -> Result<()> {
     .context("前端工具事件用例失败")
 }
 
-/// 跑端到端用例（`playwright test`）。
+/// 跑对话与关服两个项目（`playwright test --project chat --project shutdown`）。
 ///
 /// 服务端由调用方启动，地址通过 `WEBUI_BASE_URL` 传给 Playwright 配置；浏览器二进制需事先
-/// 安装（`make ui-e2e-install`），本函数不自动下载。
+/// 安装（`make ui-e2e-install`），本函数不自动下载。`tool` 项目要另一套服务端配置
+/// （`[tools.permissions] calculator = "confirm"`），只能由 [`e2e_project`] 单独跑。
 pub(crate) async fn e2e(base_url: &str) -> Result<()> {
     let dir = installed_dir()?;
-    run_pnpm(&dir, &["exec", "playwright", "test"], &[("WEBUI_BASE_URL", base_url)])
-        .await
-        .context("前端端到端用例失败")
+    run_pnpm(
+        &dir,
+        &[
+            "exec",
+            "playwright",
+            "test",
+            "--project",
+            "chat",
+            "--project",
+            "shutdown",
+        ],
+        &[("WEBUI_BASE_URL", base_url)],
+    )
+    .await
+    .context("前端端到端用例失败")
+}
+
+/// 只跑一个 Playwright 项目（`playwright test --project <名字>`），产物落到 `output`。
+///
+/// `--output` 必须按用例分开：`--all` 并发执行时 `web.e2e` 与 `tool.web.e2e` 会同时各跑一个
+/// Playwright 进程，共用 `tests/.artifacts` 会让两份报告互相覆盖。
+pub(crate) async fn e2e_project(base_url: &str, project: &str, output: &Path) -> Result<()> {
+    let dir = installed_dir()?;
+    let output = output.to_string_lossy().to_string();
+    run_pnpm(
+        &dir,
+        &["exec", "playwright", "test", "--project", project, "--output", &output],
+        &[("WEBUI_BASE_URL", base_url)],
+    )
+    .await
+    .with_context(|| format!("前端端到端用例失败（project={project}）"))
 }
 
 /// 产物是否比所有构建输入都新：`dist/index.html` 不早于源码树里最新的修改。

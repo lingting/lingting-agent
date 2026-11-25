@@ -414,6 +414,7 @@ dependencies = [
  "manager-agent",
  "serde_json",
  "service-core",
+ "sqlx",
  "tokio",
  "types-core",
 ]

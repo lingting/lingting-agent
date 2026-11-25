@@ -7,7 +7,7 @@ use lib_bin_tui::testing::{App, Command as TuiCommand, KeyCode, KeyEvent, KeyMod
 use serde_json::json;
 
 use super::{case, post_confirm, prompt, serve_with, wait_confirm};
-use crate::case::{Case, CaseFuture, CaseKind};
+use crate::case::{Case, CaseFuture, CaseKind, Prep};
 use crate::mock::llm::MockServer;
 use crate::util::context::TestContext;
 use crate::util::flow::{self, Occupied};
@@ -18,12 +18,24 @@ const CONFIRM_ONLY: &str = r#"[tools.permissions]
 http_request = "confirm"
 "#;
 
+/// 浏览器侧用例的服务端配置：把 `calculator` 提为「需确认」，卡片才会出现两个按钮。
+const WEB_CONFIRM: &str = r#"[tools.permissions]
+calculator = "confirm"
+"#;
+
 /// 客户端消费用例。
 pub(super) fn cases() -> Vec<Case> {
     vec![
         case("tool.events", CaseKind::SelfServed, events),
         case("tool.tui", CaseKind::Shared, tui),
         case("tool.web", CaseKind::Shared, web),
+        // 浏览器侧用例：需要 WebUI 产物与「需确认」的 calculator。
+        Case {
+            name: "tool.web.e2e",
+            kind: CaseKind::SelfServed,
+            prep: &[Prep::WebUiBuild],
+            run: web_e2e,
+        },
     ]
 }
 
@@ -219,5 +231,25 @@ fn web(_context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         frontend::tool_tests().await?;
         Ok(vec!["前端工具事件用例通过（tool-events.test.tsx）".to_string()])
+    })
+}
+
+/// W-3 的浏览器侧：真实 Chromium 里把「卡片 → 确认 → 执行」走一遍（P3-029 的视觉条目）。
+///
+/// 服务端配置把 `calculator` 提为「需确认」，因此一张卡片会依次经过 待确认 → 等结果 → 完成；
+/// 前端用例同时把两个状态的截图落在 `lingting-agent-ui/tests/.artifacts/`，供人工目测比对。
+fn web_e2e(context: &TestContext) -> CaseFuture<'_> {
+    Box::pin(async move {
+        let mock = MockServer::start().await?;
+        serve_with(context, &mock, WEB_CONFIRM, async {
+            // 产物落到本用例自己的 `AGENT_HOME`：`--all` 时它与 `web.e2e` 各跑一个
+            // Playwright 进程，共用 `tests/.artifacts` 会互相覆盖。
+            let output = context.home().join("playwright");
+            frontend::e2e_project(context.base_url(), "tool", &output).await?;
+            Ok(vec![
+                "浏览器侧工具卡片用例通过（playwright --project tool）".to_string(),
+            ])
+        })
+        .await
     })
 }

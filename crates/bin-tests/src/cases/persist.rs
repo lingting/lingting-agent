@@ -3,7 +3,11 @@
 //! 用例自管服务端（`CaseKind::SelfServed`）：同一 `AGENT_HOME` 与端口上先启动、停掉、再启动，
 //! 才能断言「首次运行写入的数据在第二次启动后仍在」与「重启把残留 Run 自愈成终态」。
 //! 断言一律通过生成的 SDK，不直接读数据库。
+//!
+//! 唯一的例外是 `persist.migration` 的「`0001` 时代」夹具（R-6）：它必须在服务端启动**之前**
+//! 造出一个只跑过 0001 的库，因此那里直接用 sqlx 建库并回读迁移账本；业务断言仍然只走 SDK。
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -12,6 +16,8 @@ use lib_bin_cli::sdk::{
     ApiClient, ClientEventKind, ClientStreamParams, MessageListParams, MessageRole, MessageSendPO, OccupancyGetParams,
     Run, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
 };
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
 
 use crate::case::{Case, CaseFuture, CaseKind, CaseOutcome};
 use crate::util::context::TestContext;
@@ -21,6 +27,14 @@ use crate::util::server::{Server, capture};
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（与 `manager-agent` 的 `HEAL_RUNNING` 逐字一致）。
 const HEAL_RUNNING: &str = "服务重启，执行中的 Run 已终止";
+/// `0001` 的建表脚本：与 `lib-db` 的产品迁移同源（`include_str!` 引同一份文件，不复制 SQL）。
+const INIT_0001: &str = include_str!("../../../lib-db/migrations/0001_init.sql");
+/// 数据目录下的库文件名（与 `lib-db` 的 `DATABASE_FILE` 一致；本用例不引入该 Crate）。
+const DATABASE_FILE: &str = "agent.db";
+/// 「`0001` 时代」预置的会话与消息：那时 `messages` / `runs` 还没有工具列与挂起列。
+const LEGACY_SESSION: &str = "0001-era-session";
+const LEGACY_MESSAGE: &str = "0001-era-message";
+const LEGACY_CONTENT: &str = "P2 时期的消息";
 
 /// 持久化领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -219,9 +233,11 @@ async fn session_restore_body(context: &TestContext) -> Result<CaseOutcome> {
     ])
 }
 
-/// 用例主体：连续两次启动同一 data 目录。
+/// 用例主体：先造一个「`0001` 时代」的库，再连续两次启动同一 data 目录。
 async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
     let port = context.port()?;
+    // 服务端首次启动时只会补 0002：旧库里的数据必须仍然可读，新列取 NULL（P3-017 / R-6）。
+    seed_0001_database(context.home()).await?;
     let server = start(context).await?;
     let session = create_session(context, "迁移会话").await?;
     let _server = restarted(context, server, port).await?;
@@ -229,6 +245,27 @@ async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
     let summary = find_session(context, &session.id).await?;
     ensure!(summary.id == session.id, "第二次启动后会话应保留：{}", summary.id);
 
+    // 0001 时代的会话与消息：迁移后仍可读，三个工具列都是 NULL。
+    ensure!(
+        find_session(context, LEGACY_SESSION).await?.id == LEGACY_SESSION,
+        "0001 时代的会话应仍可读"
+    );
+    let legacy = list_messages(context, LEGACY_SESSION).await?;
+    ensure!(legacy.len() == 1, "0001 时代的消息应仍可读，实际 {} 条", legacy.len());
+    let old = &legacy[0];
+    ensure!(
+        old.id == LEGACY_MESSAGE && old.content == LEGACY_CONTENT && old.role == MessageRole::User,
+        "旧消息的标识、正文与角色都不应被迁移改写：{old:?}"
+    );
+    ensure!(
+        old.tool_call_id.is_none() && old.tool_name.is_none() && old.tool_calls.is_none(),
+        "0001 时代消息的工具字段应为 null：{old:?}"
+    );
+    // 0002 是「补」在旧库上的：账本里 1 与 2 都在。
+    ensure!(
+        ledger_versions(context.home()).await? == [1, 2],
+        "迁移账本应是 [1, 2]（0002 补在 0001 之上）"
+    );
     // 第二次启动不应有 ERROR 级事件、也不应有写锁争用：两项都由进程内计数给出（P2.2-003）。
     let metrics = metrics_of(context).await?;
     ensure!(
@@ -246,7 +283,74 @@ async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
     Ok(vec![
         "同一 data 目录连续启动两次：第二次成功且数据保留".to_string(),
         "第二次启动 audit.error = 0、database.errors = 0（ERROR 级事件与写锁争用均为 0）".to_string(),
+        format!(
+            "0001 时代的会话与消息仍可读（{}），工具字段均为 null，迁移账本 {:?}",
+            LEGACY_MESSAGE,
+            ledger_versions(context.home()).await?
+        ),
     ])
+}
+
+/// 造一个「`0001` 时代」的库：只跑 0001 的建表脚本、账本里只记 version 1，
+/// 并写入一条 P2 时期的会话与消息（那时 `messages` / `runs` 还没有工具列与挂起列）。
+async fn seed_0001_database(home: &Path) -> Result<()> {
+    let data = home.join("data");
+    std::fs::create_dir_all(&data).with_context(|| format!("创建数据目录失败：{}", data.display()))?;
+    let pool = open_pool(&data.join(DATABASE_FILE)).await?;
+    sqlx::raw_sql(INIT_0001)
+        .execute(&pool)
+        .await
+        .context("执行 0001 建表脚本失败")?;
+    sqlx::query("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .context("创建迁移账本失败")?;
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at_ms) VALUES (1, 0)")
+        .execute(&pool)
+        .await
+        .context("写入 0001 迁移记录失败")?;
+    sqlx::query("INSERT INTO sessions (id, title, model, created_at_ms, updated_at_ms) VALUES (?, ?, ?, 0, 0)")
+        .bind(LEGACY_SESSION)
+        .bind("P2 时期的会话")
+        .bind("mock-model")
+        .execute(&pool)
+        .await
+        .context("写入 0001 时代会话失败")?;
+    // 0001 的 `messages` 没有工具列：这正是「迁移后新列为 NULL」的那一行。
+    sqlx::query("INSERT INTO messages (id, session_id, role, content, seq, created_at_ms) VALUES (?, ?, ?, ?, 1, 0)")
+        .bind(LEGACY_MESSAGE)
+        .bind(LEGACY_SESSION)
+        .bind("USER")
+        .bind(LEGACY_CONTENT)
+        .execute(&pool)
+        .await
+        .context("写入 0001 时代消息失败")?;
+    pool.close().await;
+    Ok(())
+}
+
+/// 迁移账本里的版本号（升序）：`[1, 2]` 证明 0002 是补在旧库上的。
+async fn ledger_versions(home: &Path) -> Result<Vec<i64>> {
+    let pool = open_pool(&home.join("data").join(DATABASE_FILE)).await?;
+    let rows = sqlx::query("SELECT version FROM schema_migrations ORDER BY version")
+        .fetch_all(&pool)
+        .await
+        .context("读取迁移账本失败")?;
+    pool.close().await;
+    Ok(rows.iter().map(|row| row.get::<i64, _>("version")).collect())
+}
+
+/// 打开库文件（不存在则创建）：只给「0001 时代」夹具与账本回读用。
+async fn open_pool(path: &Path) -> Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .busy_timeout(Duration::from_secs(5));
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .with_context(|| format!("打开夹具数据库失败：{}", path.display()))
 }
 
 /// 用例主体：`QUEUED` 的 Run 在重启后被自愈成 `CANCELLED`。

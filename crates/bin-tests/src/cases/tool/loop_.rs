@@ -57,6 +57,14 @@ fn calculator(expression: &str) -> Value {
     json!({"name": "calculator", "arguments": {"expression": expression}})
 }
 
+/// schema 里某个字段的描述是否含给定类型关键字。
+///
+/// `schemars` 对 `Option<T>` 的写法可能是 `{"type":["integer","null"]}`、也可能是
+/// `{"anyOf":[…]}`，这里只核对「字段被描述成整数 / 字符串」这一层语义，不绑定具体排版。
+fn describes(schema: &Value, field: &str, kind: &str) -> bool {
+    schema["properties"][field].to_string().contains(kind)
+}
+
 /// 最近一次请求里的工具清单（`/mock/last-request` 的 `tools` 数组）。
 async fn tools_of(mock: &MockServer) -> Result<Vec<Value>> {
     let recorded = observe::last_request(mock).await?;
@@ -138,6 +146,84 @@ fn schema(context: &TestContext) -> CaseFuture<'_> {
             "缺必填字段的错误应点名字段：{error}"
         );
         notes.push(format!("schema / serde 同源：{}", error));
+
+        // 四、四类字段逐类对照（S-2 / P3-003 的「必填 + 可选 + 枚举 + 数字」）：
+        // 必填用 calculator，可选与数字用 file_search，枚举用 current_time；每类都比对
+        // 「schema 怎么声明」与「serde 接受还是拒绝」两侧。
+        let file_search = agent_tool::builtin::FileSearch::new(Vec::new());
+        let search = file_search.schema().as_value();
+        ensure!(
+            search["required"] == json!(["name"]),
+            "file_search 只把 name 声明为必填（path / max_results 是可选）：{search}"
+        );
+        ensure!(
+            describes(search, "max_results", "integer"),
+            "file_search 的 max_results 应被描述成整数：{search}"
+        );
+        // 可选字段缺省时要能通过 serde：`path` / `max_results` 都不给。
+        file_search
+            .call(&tool_context, json!({"name": "不存在的文件名-xyz"}))
+            .await
+            .context("可选字段缺省时应被接受")?;
+        // 数字字段收到字符串：schema 说整数，serde 也必须拒绝。
+        let error = file_search
+            .call(&tool_context, json!({"name": "x", "max_results": "abc"}))
+            .await
+            .err()
+            .context("数字字段收到字符串应被拒绝")?;
+        // `serde_json::from_value` 的类型错误不带字段路径，只给出期望类型（`expected i64`），
+        // 因此这里核「期望类型」而不是字段名——字段名只在缺必填 / 未知字段两类错误里出现。
+        ensure!(
+            error.to_string().contains("参数不合法：") && error.to_string().contains("expected i64"),
+            "数字字段类型不符应给出 InvalidArguments 与期望类型：{error}"
+        );
+        // 未知字段：schema 声明不许（`deny_unknown_fields`），serde 也必须拒绝。
+        ensure!(
+            search["additionalProperties"] == json!(false),
+            "deny_unknown_fields 应反映成 additionalProperties: false：{search}"
+        );
+        let error = file_search
+            .call(&tool_context, json!({"name": "x", "nope": 1}))
+            .await
+            .err()
+            .context("未知字段应被拒绝")?;
+        ensure!(
+            error.to_string().contains("参数不合法："),
+            "未知字段的错误应是 InvalidArguments：{error}"
+        );
+
+        // 枚举字段（`zone`）：schema 只声明成 string，取值白名单由工具自己校验，
+        // serde 因此接受任意字符串——两侧一致，不出现「schema 说只能是这两个值」的第二套定义。
+        let current_time = agent_tool::builtin::CurrentTime;
+        let clock = current_time.schema().as_value();
+        ensure!(
+            clock["properties"]["zone"].get("enum").is_none(),
+            "枚举取值由工具校验，schema 不应重复列一遍：{clock}"
+        );
+        ensure!(
+            describes(clock, "zone", "string"),
+            "current_time 的 zone 应被描述成字符串：{clock}"
+        );
+        current_time
+            .call(&tool_context, json!({"zone": "utc"}))
+            .await
+            .context("合法时区应被接受")?;
+        let error = current_time
+            .call(&tool_context, json!({"zone": "Asia/Shanghai"}))
+            .await
+            .err()
+            .context("枚举之外的取值应由工具拒绝")?;
+        ensure!(
+            error.to_string().contains("参数不合法：") && error.to_string().contains("zone"),
+            "非法时区的错误应点名 zone：{error}"
+        );
+        notes.push(format!(
+            "四类字段对照通过：必填 {}，可选 max_results 描述含 integer={}，枚举 zone 描述含 string={}，未知字段 additionalProperties={}",
+            search["required"],
+            describes(search, "max_results", "integer"),
+            describes(clock, "zone", "string"),
+            search["additionalProperties"]
+        ));
 
         Ok(notes)
     })

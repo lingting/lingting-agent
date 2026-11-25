@@ -46,6 +46,13 @@ export default defineConfig({
       use: { browserName: "chromium" },
     },
     {
+      // 工具卡片用例要一个「需确认」的 calculator，服务端由 bin-tests 单独拉起
+      // （`tool.web.e2e`），因此只能按项目单独跑，不与 chat / shutdown 同批。
+      name: "tool",
+      testMatch: /tool\.spec\.ts/,
+      use: { browserName: "chromium" },
+    },
+    {
       // 关服用例会把服务端停掉，必须等对话用例全部结束之后再跑。
       name: "shutdown",
       testMatch: /shutdown\.spec\.ts/,

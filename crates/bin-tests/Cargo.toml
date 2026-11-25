@@ -30,6 +30,8 @@ framework-http = { workspace = true, features = ["reqwest"] }
 framework-timer = { workspace = true }
 framework-proc-core = { workspace = true, features = ["ts", "rust"] }
 futures-util = { workspace = true }
+# 「0001 时代」旧库夹具：`persist.migration` 要先造一个只跑过 0001 的库再让服务端补 0002（R-6）。
+sqlx = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "process"] }
 
