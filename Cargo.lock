@@ -401,6 +401,7 @@ name = "bin-tests"
 version = "26.11.0"
 dependencies = [
  "agent-core",
+ "agent-tool",
  "anyhow",
  "clap",
  "framework-http",
