@@ -13,6 +13,7 @@ use super::http::{self, Request};
 use super::record::{MockState, StreamOutcome};
 use super::reply;
 use super::scenario::{Plan, Scenario};
+use super::tools::{self, Script};
 
 /// 处理一条连接：读一个请求、回一个响应，然后关闭。
 pub(crate) async fn handle(mut socket: TcpStream, state: Arc<MockState>) {
@@ -64,19 +65,35 @@ async fn chat(socket: &mut TcpStream, state: &MockState, request: &Request) -> R
         }
         _ => {}
     }
+    // 工具调用脚本：写在用户输入的 `tool:{…}` 里（P3-030）。
+    let script = Script::parse(&tools::last_content(&body));
     if !streaming {
-        return http::write_json(socket, 200, &reply::completion(&body, &reply::text(&body))).await;
+        let completion = match script.as_ref().filter(|script| script.applies_to(&body)) {
+            Some(script) => reply::completion_with_calls(&body, script),
+            None => reply::completion(&body, &reply::text(&body)),
+        };
+        return http::write_json(socket, 200, &completion).await;
     }
-    stream(socket, state, &body, &plan).await
+    stream(socket, state, &body, &plan, script).await
 }
 
 /// 流式响应：分块之间按 `chunk_interval` 停顿，每块之后探一次客户端是否已关闭。
-async fn stream(socket: &mut TcpStream, state: &MockState, body: &Value, plan: &Plan) -> Result<()> {
+async fn stream(
+    socket: &mut TcpStream,
+    state: &MockState,
+    body: &Value,
+    plan: &Plan,
+    script: Option<Script>,
+) -> Result<()> {
     if http::begin_sse(socket).await.is_err() {
         state.record_stream(StreamOutcome::Aborted);
         return Ok(());
     }
-    let frames = reply::stream_frames(body, &reply::text(body));
+    // 工具调用帧与文本分块帧互斥：这一轮要么要求调用工具，要么给出正文。
+    let (frames, done) = match script.as_ref().filter(|script| script.applies_to(body)) {
+        Some(script) => (reply::tool_frames(body, script), !script.missing_end),
+        None => (reply::stream_frames(body, &reply::text(body)), true),
+    };
 
     // 两种「不正常收尾」的场景只写一帧就停：不写 `[DONE]`。
     match plan.scenario {
@@ -104,6 +121,10 @@ async fn stream(socket: &mut TcpStream, state: &MockState, body: &Value, plan: &
         if !plan.chunk_interval.is_zero() {
             sleep(plan.chunk_interval).await;
         }
+    }
+    // 「缺 End」脚本故意不写 `[DONE]`：连接直接关闭，Rig 据此判定这次回复不完整。
+    if !done {
+        return Ok(());
     }
     if write(socket, "[DONE]").await {
         state.record_stream(StreamOutcome::Completed);

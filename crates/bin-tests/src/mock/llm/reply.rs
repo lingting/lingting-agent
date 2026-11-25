@@ -2,6 +2,8 @@
 
 use serde_json::{Value, json};
 
+use super::tools::{self, Script};
+
 /// Mock 提供的唯一模型 id；`bin-tests` 服务端的 `config.toml` 用的是同一个 id。
 pub(crate) const MODEL: &str = "mock-model";
 
@@ -93,6 +95,75 @@ pub(crate) fn stream_frames(body: &Value, text: &str) -> Vec<String> {
     frames
 }
 
+/// 工具调用的流式帧序列（不含 `[DONE]`）：参数分片 + 结束帧，与 OpenAI 的 `delta.tool_calls` 同形。
+///
+/// `missing_end` 为真时不写结束帧（`finish_reason = tool_calls`），也不写 `[DONE]`：
+/// Rig 侧因此拿不到 `End` 事件，应把这次回复判为「工具调用缺少结束事件」。
+pub(crate) fn tool_frames(body: &Value, script: &Script) -> Vec<String> {
+    let model = model(body);
+    let mut frames = Vec::new();
+    for (index, call) in script.calls.iter().enumerate() {
+        let pieces = tools::fragments_of(&call.arguments, script.fragments);
+        // 首帧带上 id / type / name 与第一片参数；后续帧只带参数。
+        frames.push(frame(
+            &model,
+            json!([{"index": 0, "delta": {"tool_calls": [{
+                "index": index,
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": pieces[0]},
+            }]}, "finish_reason": null}]),
+            None,
+        ));
+        for piece in &pieces[1..] {
+            frames.push(frame(
+                &model,
+                json!([{"index": 0, "delta": {"tool_calls": [{
+                    "index": index,
+                    "function": {"arguments": piece},
+                }]}, "finish_reason": null}]),
+                None,
+            ));
+        }
+    }
+    if script.missing_end {
+        return frames;
+    }
+    let (input, output) = usage(body, "");
+    frames.push(frame(
+        &model,
+        json!([{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
+        Some(json!({"prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output})),
+    ));
+    frames
+}
+
+/// 普通（非流式）补全里的工具调用响应体：消息带 `tool_calls`、正文为空。
+pub(crate) fn completion_with_calls(body: &Value, script: &Script) -> Value {
+    let (input, output) = usage(body, "");
+    json!({
+        "id": "chatcmpl-mock",
+        "object": "chat.completion",
+        "created": 0,
+        "model": model(body),
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": script.calls.iter().enumerate().map(|(index, call)| json!({
+                    "index": index,
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": call.arguments},
+                })).collect::<Vec<_>>(),
+            },
+            "finish_reason": "tool_calls",
+        }],
+        "usage": {"prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output},
+    })
+}
+
 /// 回复正文的分块：按字符切分，不拆开多字节字符。
 fn chunks(text: &str) -> Vec<String> {
     let mut pieces = Vec::new();
@@ -132,15 +203,9 @@ fn model(body: &Value) -> String {
     body.get("model").and_then(Value::as_str).unwrap_or(MODEL).to_string()
 }
 
-/// 最后一条消息的文本内容。
+/// 最后一条消息的文本内容：与工具调用脚本共用同一份读取口径（`tools::last_content`）。
 fn last_content(body: &Value) -> String {
-    body.get("messages")
-        .and_then(Value::as_array)
-        .and_then(|messages| messages.last())
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    tools::last_content(body)
 }
 
 /// 用量估算：四个字符一个 token，至少 1，保证两个计数都大于 0。

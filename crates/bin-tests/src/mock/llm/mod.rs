@@ -7,7 +7,7 @@
 //!
 //! - `POST …/v1/chat/completions`（JSON 与 SSE 两种响应）；
 //! - `GET …/v1/models`；
-//! - `GET /mock/last-request`：最近一次 chat 请求体，含完整 `messages` 数组；
+//! - `GET /mock/last-request`：最近一次 chat 请求体，含完整 `tools` 与 `messages` 数组；
 //! - `GET /mock/stats`：请求数、场景分布、流式收尾计数。
 //!
 //! 场景见 [`scenario::Scenario`]，节奏参数用查询串 `chunk_ms` / `stall_ms` 控制。
@@ -19,6 +19,7 @@ pub(crate) mod probe;
 mod record;
 mod reply;
 mod scenario;
+pub(crate) mod tools;
 
 use anyhow::{Context, Result};
 use std::sync::Arc;
