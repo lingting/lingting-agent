@@ -96,12 +96,12 @@
 | 编号 | 条目 | 验证方式 |
 |---|---|---|
 | F-1 | 确认前不执行 | 用例 `tool.confirm.approve`：`confirm` 工具的 `tool.call` 在确认前不被调用（假工具 panic 兜底）；审计记录为 `PENDING`、无结果 |
-| F-2 | 挂起回 `QUEUED` 且不占位 | 用例 `tool.confirm.approve`：`run/get` 为 `QUEUED` 且 `pendingToolCallId` 非空；`metrics` 快照 `running_now` 不含它；无后台任务残留 |
+| F-2 | 挂起回 `WAITING` 且不占位 | 用例 `tool.confirm.approve`：`run/get` 为 `WAITING`（D-P3-027；挂起态以 `tool_call_confirm_required` 的 `toolCallId` 与 `PENDING` 审计为准，`Run` 契约里没有 `pendingToolCallId` 字段）；`metrics` 快照 `running_now` 为 0；无后台任务残留 |
 | F-3 | 不阻塞同会话后续 Run | 用例 `tool.confirm.approve`：挂起期间同一会话的第二个 Run 能执行到 `COMPLETED` |
 | F-4 | 批准后重新排队并执行 | 用例 `tool.confirm.approve`：`client/post { TOOL_CONFIRM, APPROVE }` 后 Run 重新执行并 `COMPLETED`，审计转为 `OK`，不重跑已完成的轮次（Mock 请求次数可核） |
 | F-5 | 驳回回灌可读文本 | 用例 `tool.confirm.reject`：Run `COMPLETED`，模型收到「用户拒绝调用该工具」，审计为 `DENIED` |
 | F-6 | 重连补发 | 用例 `tool.confirm.reconnect`：断连重连后收到同 `toolCallId` 的再次 `tool_call_confirm_required`，再次确认成功 |
-| F-7 | 挂起中断连的收尾 | 用例 `tool.confirm.disconnect`：Run 落 `CANCELLED`、`pendingToolCallId` 清空、`PENDING` 审计收尾为 `CANCELLED`；重复确认返回固定 400 |
+| F-7 | 挂起中断连的收尾 | 用例 `tool.confirm.disconnect`：Run 落 `CANCELLED`、挂起列随取消链路清空、`PENDING` 审计收尾为 `CANCELLED`；重复确认返回固定 400（断连后客户端已被移除，文案为「客户端未注册，请重新连接」） |
 
 ## 9. Builtin Tools（T-1 ~ T-8）
 

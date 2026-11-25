@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F 完成（P3-021 ~ P3-025：五个内置工具 + `builtin::register_all` 装配；代码 + 静态核对 + 全量回归 75 个用例通过，`tool.builtin.*` 用例待 Batch H）；Batch G 完成（P3-026 ~ P3-029：`api/client/post` 改名与三种 `kind`、服务端确认链路与重连补发、取消链路收尾 `PENDING` 审计、TUI 与 WebUI 的工具卡片与确认交互；`make gen` / `make ui-check` / clippy 与格式检查通过 + 全量回归 75 个用例通过（`runtime.*`、`web.ui` 等全部改走 `client/post`），工具确认相关判据（F-2 / F-4 ~ F-7、C-3）仍待 Batch H 用例）；Batch H 未开工。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F 完成（P3-021 ~ P3-025：五个内置工具 + `builtin::register_all` 装配；代码 + 静态核对 + 全量回归 75 个用例通过，`tool.builtin.*` 用例待 Batch H）；Batch G 完成（P3-026 ~ P3-029：`api/client/post` 改名与三种 `kind`、服务端确认链路与重连补发、取消链路收尾 `PENDING` 审计、TUI 与 WebUI 的工具卡片与确认交互；`make gen` / `make ui-check` / clippy 与格式检查通过 + 全量回归 75 个用例通过（`runtime.*`、`web.ui` 等全部改走 `client/post`），工具确认相关判据（F-2 / F-4 ~ F-7、C-3）仍待 Batch H 用例）；Batch H 部分完成（P3-030：26 个 `tool.*` 用例 + `client.post` 落地，`make test ARGS="--all"` 102 个用例全部通过（报告 `target/tests/run-1795573931380-26212/README.md`），`make test ARGS="--list"` 可查到全部用例；P3-031 文档同步与 P3-032 阶段验收未开工）。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -291,7 +291,7 @@
   - [x] 一轮内有多个调用时全部执行，且下一轮请求包含全部工具结果。（批次按输入顺序产出记录，TOOL 消息逐条进轨迹并参与下一轮请求）
   - [x] 轮次用尽落 `FAILED` 且 `error` 为固定文案，助手消息不写库。（`error::TOOL_ROUNDS_EXCEEDED`，失败路径不调 `complete_run`）
   - [x] 进入下一轮之前，容器里已能查到本轮的 assistant `tool_calls` 与全部 TOOL 消息（`message/list` 可核）。（`append_tool_round` 在 `Step::Continue` 之前提交）
-  - [ ] 命中确认时 Run 回到 `QUEUED`、`drive` 已结束（无后台任务）、`running_now` 不含它。（**改判**：按 D-P3-027 停在 `WAITING`；`running_now` 只数 `RUNNING`，`drive` 返回 `RunOutcome::Suspended` 并 drop 许可。取值核对待 `tool.confirm.*`，**未授权未执行**）
+  - [x] 命中确认时 Run 停在 `WAITING`（按 D-P3-027 改判）、`drive` 已结束（无后台任务）、`running_now` 不含它。（`running_now` 只数 `RUNNING`，`drive` 返回 `RunOutcome::Suspended` 并 drop 许可；`tool.confirm.approve` 在挂起时取快照核到 `running_now = 0`，并核到同会话第二个 Run 在 `max_concurrent_runs = 1` 下仍能执行）
   - [x] 唤醒后不重跑已完成的轮次（Mock 侧请求次数可核）。（轮次号从已落库的工具组数继续数，已完成组只进轨迹、不再执行）
   - [x] `agent-runtime` 源码里没有具体工具名（`grep -n "calculator\|file_read\|http_request" crates/agent-runtime` 为空）。（实际检索无命中）
   **测试要求**：无（`tool.loop` / `tool.rounds` / `tool.confirm.*` 覆盖，**需授权**）。
@@ -308,7 +308,7 @@
   4. 挂起期间被取消（释放占用、断连、服务关闭）：清 `pending_tool_call_id`、按既有链路落 `CANCELLED`，不再唤醒。
   5. 超时（单工具）与取消区分：超时是工具失败，Run 继续；取消是 Run 终止。
   **验收标准**：
-  - [ ] 取消时不存在仍在执行的工具任务（`tool.cancel` 用慢响应服务验证：取消后服务端不再有后续事件、慢服务端连接被关闭）。（代码按 `select!` + drop 实现，验证需用例，**未授权未执行**）
+  - [x] 取消时不存在仍在执行的工具任务（`tool.cancel` 用慢响应服务验证：取消后服务端不再有后续事件、慢服务端连接被关闭）。（`tool.cancel`：取消后 1 秒内无新事件、假服务端记到连接被关闭、审计 0 条、`run/get` 为 `CANCELLED`）
   - [x] 每个 `tool_call_started` 都有配对的 `tool_call_completed`（含 `CANCELLED`）。（取消分支对已发出的开始事件逐条补 `CANCELLED` 完成事件；驳回分支同样补一条 `DENIED` 完成事件）
   - [x] 取消路径的终态事件类型与 P2 一致（`run_cancelled` vs `server_shutdown`）。（仍走原来的 `cancelled(...)` + `kind_of(stop)`）
   - [x] 挂起中断连后 `runs.pending_tool_call_id` 为空（无悬挂挂起态）。（`cancel_run` / `cancel_session_runs` / 启动自愈的 SQL 在落终态时一并把 `pending_*` 置空；`WAITING` 已进 `open_statuses`）
@@ -326,8 +326,8 @@
   4. 失败文本同样受 `max_result_chars` 限制。
   **验收标准**：
   - [x] 五个固定文案在代码里各只有一个产点（`grep` 可核）。（前四条只在 `agent-tool/src/error.rs` 的 `Display`，第五条只在 `audit.rs` 的 `REJECTED_TEXT`；运行时只拼接、不再造文案）
-  - [ ] 三种失败之后 Run 仍能以 `COMPLETED` 结束（模型在下一轮给出最终答案）。（失败都以 TOOL 消息回灌并继续循环，端到端断言需用例，**未授权未执行**）
-  - [ ] 失败不产生 panic、不产生孤儿任务、不留 `PENDING` 审计行。（`PENDING` 只在挂起点写入，失败路径不写；运行时行为需用例核对，**未授权未执行**）
+  - [x] 三种失败之后 Run 仍能以 `COMPLETED` 结束（模型在下一轮给出最终答案）。（`tool.invalid_args` / `tool.timeout` / `tool.failed` / `tool.denied` 四条用例：Run 均 `COMPLETED`，终答里能看到对应固定文案）
+  - [x] 失败不产生 panic、不产生孤儿任务、不留 `PENDING` 审计行。（四条失败用例的审计分别落 `INVALID_ARGUMENTS` / `TIMEOUT` / `ERROR` / `DENIED`，无 `PENDING`；`tool.cancel` 的审计为空、快照里 `running_now = 0`）
   **测试要求**：无（`tool.invalid_args` / `tool.timeout` / `tool.failed` / `tool.denied` 覆盖，**需授权**）。
 ---
 
@@ -392,7 +392,7 @@
   - [x] `make gen` 产出的两份 SDK 都包含新接口、`ToolCallVO` 与 `Message` 的新字段。
   - [x] 路径命名符合规范：`api/tool/audit/list`（资源段小写单数、动作段用 `list`）。
   - [x] 未知 `runId` 返回 `[]` 而不是 404；`runId` 缺失返回 400。（Handler 不做存在性校验，`tool_calls` 查询无记录即空列表；缺参数走框架的查询参数转换）
-  - [ ] `message/list` 返回的历史里，TOOL 消息带 `toolCallId`，assistant 消息带 `toolCalls`。（契约与读写路径已就位，实际取值待 Batch D / F 产出工具轨迹后核验）
+  - [x] `message/list` 返回的历史里，TOOL 消息带 `toolCallId`，assistant 消息带 `toolCalls`。（`tool.loop`：assistant 的 `toolCalls[0].id` 与事件同源，TOOL 消息带同一 `toolCallId` 与 `toolName`，且 assistant 不晚于它的结果）
   **测试要求**：无（`tool.audit` 覆盖，**需授权**）。
 
 - [x] **P3-020 SDK 重新生成与前端类型跟进**（`RunEvent` 新字段部分随 P3-013 再生成一次）
@@ -499,7 +499,7 @@
   - [x] 白名单之外的主机被拒绝时不发起连接（可用 127.0.0.1 之外的不可达地址验证「没有网络动作」）。（host 判定在 `HttpClient` 构造与任何请求之前返回 `Failed(请求的主机不在允许的范围内)`）
   - [x] 不跟随重定向（3xx 原样返回状态码）。（`HttpClientBuilder::no_redirect()` → `redirect_limit(0)`）
   - [x] 响应超限被截断并标注，不把整个响应读进内存。（`stream_get` / `stream_post` 逐块读，累积到 `max_bytes` 即停止读并追加 `…（响应超过 N 字节，已截断）`）
-  **补充口径**：客户端按 `ctx.deadline` 的剩余时间新建（`no_redirect()` + timeout），因此每次调用一个新连接池；`retryable` 按错误链里的 `std::io::ErrorKind`（`TimedOut` / `ConnectionRefused` / `ConnectionReset` / …）判定，`reqwest` 类型不出框架（D-P3-018）；失败文案不带 URL 与底层错误原文。
+  **补充口径**：客户端按 `no_redirect()` 新建、**不设客户端超时**——超时只有一个拥有者（执行器的 `[tools] timeout_ms`），两处同刻倒计时会让 `TIMEOUT` 状态取不到（P3-030 修正）；因此每次调用一个新连接池。`retryable` 按错误链里的 `std::io::ErrorKind`（`TimedOut` / `ConnectionRefused` / `ConnectionReset` / …）判定，`reqwest` 类型不出框架（D-P3-018）；失败文案不带 URL 与底层错误原文。
   **测试要求**：无（`tool.builtin.http` 覆盖，**需授权**；用例本地起一个只监听 127.0.0.1 的假服务端）。
 
 ---
@@ -527,7 +527,7 @@
   **补充口径**：`kind` 的分派在 handler（`client_post`），`manager-agent` 只暴露 `refresh_heartbeat` / `answer_inquiry` / `submit_confirm` 三个语义入口；确认链路的编排放在新模块 `runtime/confirm.rs`，`registry.rs` 保持「只做内存记账」。回归取证：`make test ARGS="--all"` 75 个用例全部通过，其中 `runtime.contract` / `runtime.heartbeat` / `runtime.inquiry` / `runtime.unregister` / `run.disconnect` 等已全部改走 `client/post`（PING / INQUIRY_ACK 行为与改名前等价）；前端 `tests/link.test.ts` 同步改名为 `clientPost` 后 `web.ui` 通过。
   **测试要求**：无（`client.*` 用例改名与覆盖在 P3-030，**需授权**）。
 
-- [ ] **P3-027 服务端挂起与唤醒链路**
+- [x] **P3-027 服务端挂起与唤醒链路**（代码在 Batch G 落地，判据在 Batch H 的 `tool.confirm.*` 取证）
 
   **目标**：确认事件下发 → Run 挂起 → 客户端决定 → 重新排队执行，全链路可用，含重连补发（D-P3-023）。
   **前置依赖**：P3-014、P3-018、P3-026。
@@ -540,16 +540,16 @@
   5. 取消路径联动：取消 / 释放占用 / 断连 / 服务关闭时清 `pending_tool_call_id`，`PENDING` 审计收尾为 `CANCELLED`。
   6. 不占用并发位：挂起时 `drive` 已返回，`Semaphore` 许可已释放（P3-014 保证）；本任务用 `metrics` 快照核对。
   **验收标准**：
-  - [ ] 挂起后 `runs` 行为 `status=QUEUED` + 非空 `pending_tool_call_id`；`running_now` 不含它（快照可核）。
-  - [ ] 同一会话后续 Run 能在挂起期间执行（用例可核）。
-  - [ ] 批准后 Run 重新执行并 `COMPLETED`，工具确实被执行（审计 `status=OK`）。
-  - [ ] 驳回后 Run `COMPLETED` 且模型收到「用户拒绝调用该工具」，审计 `status=DENIED`。
-  - [ ] 断连重连后收到补发的确认事件（同一 `toolCallId`），再次确认成功。
-  - [ ] 重复确认 / 过期 `toolCallId` 返回 400 固定文案，不产生第二条审计记录。
-  **补充口径**：链路落在 `manager-agent/src/runtime/confirm.rs` 与 `lib-web/src/runtime/api.rs`——确认鉴权三层（已注册 → 占用该会话 → `tool_call_id` 命中挂起列）、`resume_run` 条件更新、`notify_run` 唤醒、`api/client/stream` 建立后补发确认事件；「清挂起列 + `PENDING` 审计收尾为 `CANCELLED`」放在 `Repository::{cancel_run,cancel_session_runs}` 的同一事务里。回归取证：`make test ARGS="--all"` 75 个用例全部通过（`run.cancel` / `run.disconnect` / `run.shutdown` / `persist.*` 覆盖了取消链路的既有语义，确认链路的改动没有破坏它们）。**本任务的验收判据（F-2 / F-4 ~ F-7）全部是工具确认场景，`tool.confirm.*` 用例属 Batch H（P3-030）尚未落地，因此保持未勾选。** 已知口径缺口：补发只在「同一 `clientId` 重新建立下行流」时有效——完整断连会按 D-P3-023 把该会话的 Run 收尾为 `CANCELLED`，`tool.confirm.reconnect` 用例必须以「不断连、重开下行流」的方式构造。
+  - [x] 挂起后 `runs` 行为 `status=WAITING`（D-P3-027；`pending_tool_call_id` 非空，用例以 `tool_call_confirm_required` 的 `toolCallId` 与审计里的 `PENDING` 记录为准）；`running_now` 不含它（`tool.confirm.approve` 取快照核到 `running_now = 0`）。
+  - [x] 同一会话后续 Run 能在挂起期间执行（`tool.confirm.approve`：`max_concurrent_runs = 1` 下第二个 Run 仍 `COMPLETED`，且只多一次模型请求）。
+  - [x] 批准后 Run 重新执行并 `COMPLETED`，工具确实被执行（`tool.confirm.approve`：假服务端命中 1 次、审计转 `OK`、请求总数 3 说明首轮未重跑）。
+  - [x] 驳回后 Run `COMPLETED` 且模型收到「用户拒绝调用该工具」，审计 `status=DENIED`（`tool.confirm.reject`）。
+  - [x] 断连重连后收到补发的确认事件（同一 `toolCallId`），再次确认成功（`tool.confirm.reconnect`：建流前先挂起，建流后收到补发并批准成功）。
+  - [x] 重复确认 / 过期 `toolCallId` 返回 400 固定文案，不产生第二条审计记录（`tool.confirm.approve` 重复确认 → 400 `待确认的工具调用不存在或已处理`，审计仍 1 条；`tool.confirm.disconnect` 断连后 → 400 `客户端未注册，请重新连接`）。
+  **补充口径**：链路落在 `manager-agent/src/runtime/confirm.rs` 与 `lib-web/src/runtime/api.rs`——确认鉴权三层（已注册 → 占用该会话 → `tool_call_id` 命中挂起列）、`resume_run` 条件更新、`notify_run` 唤醒、`api/client/stream` 建立后补发确认事件；「清挂起列 + `PENDING` 审计收尾为 `CANCELLED`」放在 `Repository::{cancel_run,cancel_session_runs}` 的同一事务里。回归取证：`make test ARGS="--all"` 75 个用例全部通过（`run.cancel` / `run.disconnect` / `run.shutdown` / `persist.*` 覆盖了取消链路的既有语义，确认链路的改动没有破坏它们）。判据已由 Batch H（P3-030）取证：`tool.confirm.approve` / `.reject` / `.reconnect` / `.disconnect` 四条用例覆盖 F-2 / F-4 ~ F-7。挂起态口径按 D-P3-027 记为 `WAITING`。已知口径缺口：补发只在「同一 `clientId` 重新建立下行流」时有效——完整断连会按 D-P3-023 把该会话的 Run 收尾为 `CANCELLED`，`tool.confirm.reconnect` 用例即按「不断连、先挂起、再建流」构造。
   **测试要求**：无（`tool.confirm.*` 覆盖，**需授权**）。
 
-- [ ] **P3-028 TUI：工具事件与确认交互**
+- [x] **P3-028 TUI：工具事件与确认交互**（代码在 Batch G 落地，判据在 Batch H 的 `tool.tui` 取证）
 
   **目标**：TUI 里能看到工具调用状态、能对确认请求应答（D-P3-026）。
   **前置依赖**：P3-013、P3-020、P3-026。
@@ -564,7 +564,7 @@
   - [x] 三个事件分支都有对应 `Update`，无 `_ => {}` 兜底。（`dispatch_run_event` 逐个 `RunEventKind` 匹配；`Heartbeat` 是显式空分支，不是兜底）
   - [x] 没有 pending 时 `y` / `n` 不产生任何上行请求（代码可核 + 用例）。（`App::handle_key` 只在 `pending.is_some()` 时把 `y` / `n` 当应答键；用例部分未授权，待 `tool.tui`）
   - [x] 工具行不打断既有增量文本的拼接顺序；样式沿用既有主题，不新增颜色常量。（工具行作为 `MessageRole::Tool` 追加在消息区末尾，增量仍写在助手占位消息里；颜色只用既有的 `Green` / `Red` / `Yellow` / `DarkGray` / `Blue`）
-  **补充口径**：确认态落在 `App::pending`（`PendingConfirm { tool_call_id, summary, submitted }`），确认行与结果行都以 `MessageRole::Tool` 消息承载并按 `toolCallId` 原地改写（一次调用只占一行）；上行失败时 `Notice` 分支把这一行恢复成可应答（`reset_confirm`），用户不必重连。回归取证：`make test ARGS="--all"` 中 `tui.*` 全部通过（`tui.stream` / `tui.send` / `tui.interrupted` / `tui.reconnect` 等既有交互未被工具行打断）。任务本身仍保持未勾选：`tool.tui`（工具事件转 `Update`、无 pending 时 `y` / `n` 不上行）属 Batch H（P3-030），尚未落地。
+  **补充口径**：确认态落在 `App::pending`（`PendingConfirm { tool_call_id, summary, submitted }`），确认行与结果行都以 `MessageRole::Tool` 消息承载并按 `toolCallId` 原地改写（一次调用只占一行）；上行失败时 `Notice` 分支把这一行恢复成可应答（`reset_confirm`），用户不必重连。回归取证：`make test ARGS="--all"` 中 `tui.*` 全部通过（`tui.stream` / `tui.send` / `tui.interrupted` / `tui.reconnect` 等既有交互未被工具行打断）；`tool.tui`（Batch H）逐条断言三个事件转 `Update`、`y` / `n` 各产生一条 `Confirm`、已提交后重复按键不上行。
   **测试要求**：无（`tool.tui` 覆盖，**需授权**）。
 
 - [ ] **P3-029 WebUI：工具卡片与确认按钮**
@@ -581,7 +581,7 @@
   - [x] `make ui-check` 退出码 0；三个事件分支都有类型收窄，无 `any`。（`make ui-check` 退出码 0；三个分支在 `applyToolEvent` 里按 `event.event` 收窄，`ChatItem` 判别式联合无 `any`）
   - [x] 确认按钮点击后不可重复点击（状态机可核）。（`confirmingRef` 屏蔽请求在途的重复点击；点击即置 `submitted`，按钮 `disabled={!confirmable}`，只有上行失败才退回 `confirm`）
   - [ ] 卡片与既有消息气泡的视觉层级一致（沿用现有间距与字号）。（静态：卡片用 antd `Card size="small"`，作为无边框 Bubble 项与消息同列，未新增设计 token；按钮改用 antd 默认尺寸——**浏览器目测未做**）
-  **补充口径**：对话流改成一个判别式联合（`ChatItem = ChatMessage | ToolCard`），按到达顺序同列渲染，工具卡片的位置因此等于它真正发生的位置；`useChat` 仍导出只含消息气泡的 `messages`（既有用例与调用点不变），新组件 `ToolCard.tsx` 承担卡片与两个按钮。回归取证：`make test ARGS="--all"` 中 `web.ui` 31 个前端用例全部通过（`useChat` / `MessageList` / `ChatLink` 的既有行为未变）。视觉条目留给人工目测、工具事件的客户端展示归 `tool.web`（Batch H），故本任务保持未勾选。
+  **补充口径**：对话流改成一个判别式联合（`ChatItem = ChatMessage | ToolCard`），按到达顺序同列渲染，工具卡片的位置因此等于它真正发生的位置；`useChat` 仍导出只含消息气泡的 `messages`（既有用例与调用点不变），新组件 `ToolCard.tsx` 承担卡片与两个按钮。回归取证：`make test ARGS="--all"` 中 `web.ui` 31 个前端用例全部通过（`useChat` / `MessageList` / `ChatLink` 的既有行为未变）。视觉条目留给人工目测、工具事件的客户端展示已由 `tool.web`（Batch H）取证：`tests/tool-events.test.tsx` 覆盖三个事件分支、确认不可重复点击与未完成标记。本任务仍剩一条**浏览器目测**（视觉层级）未做，故保持未勾选。
   **测试要求**：无（`tool.web` 覆盖，**需授权**）。
 
 ---
@@ -590,13 +590,13 @@
 
 > 依赖：A ~ G 全部批次。
 
-- [ ] **P3-030 `bin-tests` 的 `tool.*` / `client.*` 用例与 Mock 扩展**
+- [x] **P3-030 `bin-tests` 的 `tool.*` / `client.*` 用例与 Mock 扩展**（26 个 `tool.*` + `client.post`，`make test ARGS="--all"` 102 个用例全部通过）
 
   **目标**：七条验收方向各有可执行的证据。
   **前置依赖**：P3-014 ~ P3-029。
-  **涉及文件 / Crate**：`crates/bin-tests/src/mock/llm/{reply.rs,handler.rs,record.rs}`、`crates/bin-tests/src/cases/tool/{mod.rs,loop_.rs,executor.rs,context.rs,builtin.rs,confirm.rs,config.rs,client.rs}`、`crates/bin-tests/src/cases/mod.rs`、`crates/bin-tests/src/cases/client.rs`（改名）。
+  **涉及文件 / Crate**：`crates/bin-tests/src/mock/llm/{mod.rs,reply.rs,handler.rs,tools.rs}`、`crates/bin-tests/src/cases/tool/{mod.rs,loop_.rs,executor.rs,context.rs,builtin.rs,confirm.rs,config.rs,client.rs,events.rs}`、`crates/bin-tests/src/cases/mod.rs`、`crates/bin-tests/src/util/frontend.rs`、`crates/lib-bin-tui/src/testing.rs`、`lingting-agent-ui/tests/tool-events.test.tsx`。（`client.post` 落在 `cases/tool/client.rs`，原有 `client.errors` 仍留在 `cases/client.rs`；`tool.events` / `tool.tui` / `tool.web` 集中在 `cases/tool/events.rs`）
   **实施步骤**：
-  1. Mock 扩展：请求的最后一条消息含 `tool:<name>` 关键字时，第一轮返回 `tool_calls`（流式帧），第二轮（历史里已含工具结果）返回纯文本；`/mock/last-request` 记录 `tools` 与完整 `messages`，用例据此断言清单与多轮历史。
+  1. Mock 扩展：请求的最后一条消息含 `tool:{…}` 关键字时按脚本返回 `tool_calls`（流式帧，支持参数分片 `fragments`、缺结束帧 `missingEnd`、每轮重复 `repeat`）；本轮脚本所在的用户消息之后一旦出现 assistant `tool_calls`，后续轮改回纯文本（多轮会话里每轮各带自己的脚本，因此不看整段历史）。`/mock/last-request` 返回完整请求体，`tools` 与 `messages` 都在里面，用例据此断言清单与多轮历史。
   2. 用例清单（全部 `SelfServed`，私有服务端 + 私有 Mock）：
      - `tool.schema`：工具清单按名字稳定排序；`deny` 的工具不在清单里、`confirm` 的在；请求里不出现 `fileAccess`。
      - `tool.loop`：calculator 两轮闭环，事件序列含 `tool_call_started` / `tool_call_completed` / `run_completed`，`seq` 连续；`message/list` 里能看到中间轮的 assistant `toolCalls` 与 TOOL 消息。
@@ -618,10 +618,10 @@
      - `client.post`：改名前后的行为等价（`PING` / `INQUIRY_ACK`）+ 四种确认字段组合校验。
   3. 所有断言的数据来源：客户端收到的 `RunEvent`、接口响应、`message/list`、`metrics` 快照；**不读日志**。
   **验收标准**：
-  - [ ] `make test ARGS="--list"` 里能查到上述全部用例。
-  - [ ] 每个用例失败时的信息点明「哪条断言、期望与实际」，不依赖日志排查。
-  - [ ] 用例不占用共享服务端（`SelfServed`），不修改全局配置。
-  - [ ] 全仓检索 `read_to_string(` 在 `crates/bin-tests` 中与日志无关（不新增日志读取）。
+  - [x] `make test ARGS="--list"` 里能查到上述全部用例。（26 个 `tool.*` + `client.post` 全部在列）
+  - [x] 每个用例失败时的信息点明「哪条断言、期望与实际」，不依赖日志排查。（首轮 6 条失败的原因都直接给出断言文案与实测值，例如「保留下来的应是第 2 轮与第 3 轮的结果：[\"2\"]」）
+  - [x] 用例不占用共享服务端（`SelfServed`），不修改全局配置。（有服务端交互的 15 条一律 `SelfServed` 自起私有服务端与私有 Mock；`tool.builtin.*` / `tool.decl` / `tool.config` / `tool.tui` 走进程内断言，不碰服务端；`client.post` 用 `Isolated` 以免污染共享注册表）
+  - [x] 全仓检索 `read_to_string(` 在 `crates/bin-tests` 中与日志无关（不新增日志读取）。（命中项只有 PID 文件、事件文件与源码读取；`cases/tool/` 下 0 处）
   **测试要求**：**需要授权后执行**；未授权时只落地用例代码与清单，判据保持未勾选。
 
 - [ ] **P3-031 文档同步与已知限制落稿**
