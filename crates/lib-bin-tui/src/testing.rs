@@ -5,7 +5,6 @@
 //! 区别只有渲染落到 [`TestBackend`]，终端既不进入 raw 模式也不写备用屏幕，
 //! 因此在无人值守环境里也能驱动一整个界面会话。
 
-use crate::event::Command;
 use crate::ui;
 use crate::worker::Worker;
 use ratatui::Terminal;
@@ -14,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
+pub use crate::event::{Command, Update};
 pub use crate::state::{App, Connection, Focus, Phase};
 pub use crate::worker::LinkSnapshot;
 pub use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

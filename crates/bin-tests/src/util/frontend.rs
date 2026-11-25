@@ -45,6 +45,26 @@ pub(crate) async fn test() -> Result<()> {
         .context("前端单元用例失败")
 }
 
+/// 只跑匹配的用例文件（`vp test run <文件>`）：`tool.web` 用它只跑工具卡片与确认状态机。
+pub(crate) async fn tool_tests() -> Result<()> {
+    let dir = installed_dir()?;
+    run_pnpm(
+        &dir,
+        &[
+            "exec",
+            "vp",
+            "test",
+            "run",
+            "--maxWorkers",
+            "2",
+            "tests/tool-events.test.tsx",
+        ],
+        &[],
+    )
+    .await
+    .context("前端工具事件用例失败")
+}
+
 /// 跑端到端用例（`playwright test`）。
 ///
 /// 服务端由调用方启动，地址通过 `WEBUI_BASE_URL` 传给 Playwright 配置；浏览器二进制需事先
