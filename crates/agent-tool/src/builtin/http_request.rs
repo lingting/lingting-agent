@@ -11,7 +11,6 @@
 //! HTTP 客户端走 `framework-http`（`reqwest` 特性，D-P3-018），本 Crate 不直接依赖 `reqwest`。
 
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -113,7 +112,7 @@ impl Tool for HttpRequestTool {
         matches!(error, ToolError::Retryable(_))
     }
 
-    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, _ctx: &ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let args: HttpRequestArgs = schema::parse(args)?;
         let method = method_of(args.method.as_deref())?;
         let target =
@@ -128,7 +127,7 @@ impl Tool for HttpRequestTool {
         if !self.allowed(host, target.port()) {
             return Err(ToolError::Failed("请求的主机不在允许的范围内".to_owned()));
         }
-        let client = self.client(ctx)?;
+        let client = self.client()?;
         let body = args.body.unwrap_or_default();
         let mut response = match method {
             Method::Get => client.stream_get(&args.url).await,
@@ -148,14 +147,14 @@ impl Tool for HttpRequestTool {
 }
 
 impl HttpRequestTool {
-    /// 按剩余时间建客户端：禁止重定向 + 本次调用的超时上限（D-P3-014）。
+    /// 建客户端：禁止重定向，**不设客户端超时**（超时统一归执行器，P3-030）。
     ///
-    /// 每次调用新建客户端（新的连接池）：超时来自本次调用的截止时刻，无法提前固化；
-    /// http 工具一轮最多调一次，这点开销换「超时准确」是划算的。
-    fn client(&self, ctx: &ToolContext) -> Result<framework_http::HttpClient, ToolError> {
-        let remaining = ctx.deadline.saturating_duration_since(Instant::now());
-        let timeout = Some(remaining.max(Duration::from_millis(1)));
-        framework_http::HttpClient::with(|builder| builder.no_redirect().timeout(timeout))
+    /// 超时只有一个拥有者：`ToolExecutor` 按 `[tools] timeout_ms` 与取消信号并列 `select!`。
+    /// 客户端若也按同一截止时刻倒计时，两个定时器会几乎同刻到期，而 `Timeout::poll` 先轮询
+    /// 内层 future，reqwest 的 `Retryable` 会先返回——`TIMEOUT` 状态因此永远取不到。
+    /// http 工具一轮最多调一次，每次新建客户端（新的连接池）的开销可以接受。
+    fn client(&self) -> Result<framework_http::HttpClient, ToolError> {
+        framework_http::HttpClient::with(|builder| builder.no_redirect().timeout(None))
             .map_err(|_| ToolError::Failed("初始化 HTTP 客户端失败".to_owned()))
     }
 }
