@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::definition::ToolDefinition;
-use crate::permission::ToolPolicy;
+use crate::permission::{ToolPermission, ToolPolicy};
 use crate::tool::{Tool, validate_name};
 
 /// 注册失败的原因。
@@ -72,10 +72,14 @@ impl ToolRegistry {
     ///
     /// 顺序只由名字字典序决定（与注册顺序无关），同一份配置两次运行产出同序清单；
     /// `deny` 的工具被摘掉，`confirm` 的工具仍在清单里（D-P3-005）。空清单是合法状态。
+    ///
+    /// 「拒绝」既可能来自 `[tools.permissions]` 的显式配置，也可能来自风险等级的缺省等级
+    /// （`Network` / `Write` 默认拒绝）：只看配置会让 `http_request` 在缺省配置下照样进清单，
+    /// 与 D-P3-005 相反。因此这里按「名字 + 工具自己的风险等级」判一次有效权限。
     pub fn model_definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .iter()
-            .filter(|(name, _)| !self.policy.is_denied(name))
+            .filter(|(name, tool)| self.policy.permission_of(name, tool.risk()) != ToolPermission::Deny)
             .map(|(_, tool)| ToolDefinition::of(tool.as_ref()))
             .collect()
     }
