@@ -141,7 +141,7 @@ A -> B
 
 - Session / Message / Run 业务服务与业务规则（P2 起，契约类型来自 `agent-core`）。
 - 执行端口定义：`RunDriver` trait（P2-022），由 `agent-runtime` 实现、装配层注册。
-- 对应业务持久化：`repository` 承载全部业务 SQL，事务边界经 `lib-db` 产生。
+- 对应业务持久化：`repository` 承载全部业务 SQL，事务边界经 `lib-db` 产生；P3 起还包括工具审计的写入与按 Run 查询（`tool_calls` 表，`repository/tool.rs`，D-P3-011）。
 - Provider / Model 的配置装载与校验**不在本 Crate**：装载与校验归启动方 `lib-bin-cli`，
   只读的 `ProviderService` 与模型解析归 `agent-route`（D-P2-037）。
 
@@ -162,7 +162,7 @@ P2-035 起迁入装配层 `manager-agent`，本 Crate 不感知 Agent 与事件�
 
 - 不实现 Agent Loop、Context 组装、Tool 执行。
 - 不实现 LLM 请求构造与调用（归 `agent-route`）。
-- 不依赖任何 `agent-*` Crate。
+- 只依赖类型层的 `agent-core` 与 `agent-tool`（P3 起：审计记录与查询载荷，D-P3-011）；不依赖 `agent-runtime` / `agent-route` / `agent-context*` 等其余 `agent-*` Crate。
 
 #### manager-agent
 
@@ -482,7 +482,7 @@ agent status
 
 - SQLite。
 - Database Connection / Pool。
-- Migration（自建 runner，脚本编进二进制）。
+- Migration（自建 runner，脚本编进二进制）：`0001_init.sql`（P2：`sessions` / `runs` / `messages`）与 `0002_tool_calls.sql`（P3：`tool_calls` 表、`messages` 的三个工具列、`runs` 的两个挂起列），只加列不改既有列。
 - Transaction：`Database::begin` 产生事务句柄，`commit` / `rollback` 只由句柄提供（D-P2-034）。
 - 数据库初始化。
 - 通用数据库支持。

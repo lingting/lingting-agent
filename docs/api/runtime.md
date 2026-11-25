@@ -17,7 +17,7 @@
 
 `clientId` 不出现在路径里（D-008），只走请求体或查询参数。下行流必须是 `GET`（浏览器 `EventSource` 的限制），上行一律 `POST` + JSON 请求体。
 
-`api/client/update` 已在 P3 改名为 `api/client/post`（D-P3-022）：上行只有一条通道，按 `kind` 分派语义，不保留旧路径、不同时注册两代。
+上行通道在 P3 由 `update` 动作改为 `post`（D-P3-022）：上行只有一条通道，按 `kind` 分派语义，不保留旧路径、不同时注册两代。
 
 ## 入参
 

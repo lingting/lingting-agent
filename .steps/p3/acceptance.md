@@ -1,6 +1,6 @@
 # P3 验收清单
 
-**状态：Batch A（P3-001 ~ P3-004）已完成，A-1 / A-5 / A-6 与 S-1 的静态部分已核对通过（`cargo clippy -p agent-tool --all-targets -- -D warnings` 无告警）；Batch C（P3-010 ~ P3-012）已完成，X-1 ~ X-3 的**实现口径**静态可核（组由相邻同组 Item 构成、裁剪只切段边界、无工具时退化为 P2 的逐条算法），`tool.context` / `chat.context` 用例未执行；Batch E（P3-017 ~ P3-020）已落地：`make gen` / `make gen-check` / `make ui-check` 通过，`make test ARGS="--all"` 75 个用例通过（`persist.migration` 覆盖迁移二次启动、`sdk.generator` 覆盖生成链）；其余条目待后续批次取证。** 判据已展开，用例相关条目尚未取证。结论与证据将汇总为 `docs/reports/p3-032-acceptance.md`。
+**状态：P3 全部判据已取证（Batch A ~ H），结论与证据见 [`docs/reports/p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md)。** 全量回归 `make test ARGS="--all"` 103 个用例通过（`target/tests/run-1795605450775-43892/README.md`）；B / A / S / L / X / C / P / F / T / W / R 各组在本文件下方逐条勾选并附证据。两处口径修订见报告 §四：R-1 的「请求体无 `tools` 键」在 P3 不成立（D-P3-028），A-2 的反向依赖清单补入 `manager-agent`。唯一「部分取证」项是 C-3（缺「确认点在中间的批量调用」用例），补证方式见报告 §八。
 
 每条都要能实际验证；**任一条不通过，P3 不视为完成**。
 
@@ -24,6 +24,8 @@
 | B-3 | Clippy 零告警 | `cargo clippy --workspace --all-targets -- -D warnings` 退出码 0 |
 | B-4 | SDK 与前端门禁 | `make gen`、`make gen-check`、`make ui-check` 均退出码 0 |
 
+**结论**：B-1 ~ B-4 全部成立（`cargo build --workspace` / `cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `make gen-check` + `make ui-check` 退出码均 0）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §二。
+
 ## 2. Architecture（A-1 ~ A-6）
 
 | 编号 | 条目 | 验证方式 |
@@ -34,6 +36,8 @@
 | A-4 | Rig 类型不出 `agent-route/src/rig/` | `grep -rn "rig_core" crates --include=*.rs` 只命中 `crates/agent-route/src/rig/` |
 | A-5 | 未创建被禁止的 Crate | 仓库中不存在 `manager-core` / `types-api` / `bin-tui` / `bin-web` / `bin-mock-server` / `agent-tool-builtin` |
 | A-6 | 结构文档同步 | `docs/workspace.md` 的 `agent-tool` 段、`service-core → agent-tool` 依赖与 `Cargo.toml` 的 members 逐条对照一致 |
+
+**结论**：A-1 / A-3 / A-4 / A-5 / A-6 成立；A-2 成立但反向依赖清单需补 `manager-agent`（P3 装配层直接依赖 `agent-tool`，方向仍在上层）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §二 与 §四。
 
 ## 3. Contract & Schema（S-1 ~ S-8）
 
@@ -48,6 +52,8 @@
 | S-7 | 工具轨迹进历史 | 用例 `tool.loop`：`message/list` 返回的历史里，中间轮的 assistant 消息带 `toolCalls`，TOOL 消息带 `toolCallId`，且 `seq` 升序 |
 | S-8 | `client/post` 契约完整 | 用例 `client.post`：`PING` / `INQUIRY_ACK` / `TOOL_CONFIRM` 三值各有正确响应；四种字段组合错误各返回固定 400 文案 |
 
+**结论**：S-1 ~ S-8 全部成立（`tool.schema` / `tool.loop` / `tool.events` / `tool.audit` / `tool.stream` / `client.post`）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.1。
+
 ## 4. Loop（L-1 ~ L-8）
 
 | 编号 | 条目 | 验证方式 |
@@ -61,6 +67,8 @@
 | L-7 | 每轮边界落库 | 用例 `tool.loop`：第一轮工具执行完成后、第二轮请求发出前，`message/list` 已能查到本轮的 assistant `toolCalls` 与全部 TOOL 消息（时序由 Mock 侧在收到第二轮请求时反查服务端确认） |
 | L-8 | Context 超预算即失败 | 用例 `tool.context` 的变体（把结果上限与历史预算压到最小）：Run 落 `FAILED`「上下文超出模型预算」，不静默丢工具结果 |
 
+**结论**：L-1 ~ L-8 全部成立（`tool.loop` / `tool.invalid_args` / `tool.timeout` / `tool.failed` / `tool.rounds` / `tool.context`）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.2。
+
 ## 5. Context 裁剪（X-1 ~ X-3）
 
 | 编号 | 条目 | 验证方式 |
@@ -68,6 +76,8 @@
 | X-1 | 组完整性 | 用例 `tool.context`：裁剪后历史里不存在「assistant `tool_calls` 缺 TOOL 结果」或「孤儿 TOOL 消息」 |
 | X-2 | 整组丢弃 | 用例 `tool.context`：预算只够保留最近一组时，旧组整体消失、新组完整 |
 | X-3 | 无工具时行为不变 | 用例 `chat.context`：Item 序列与 metadata 与 P2 基线一致（`git diff` + 用例断言） |
+
+**结论**：X-1 ~ X-3 全部成立（`tool.context` / `chat.context` / `chat.truncate`）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.3。
 
 ## 6. Concurrency & Cancellation（C-1 ~ C-5）
 
@@ -78,6 +88,8 @@
 | C-3 | 确认点截断后续调用 | 用例 `tool.parallel` 的确认变体：确认点之后的调用没有被执行（审计条数可核） |
 | C-4 | 取消中断工具执行 | 用例 `tool.cancel`：取消后不再有新事件，慢响应服务端连接被关闭，`tool_call_completed` 状态为 `CANCELLED`，`PENDING` 审计行已收尾 |
 | C-5 | 无孤儿任务 | 用例 `tool.cancel` 收尾断言：取消后 1s 内无新事件、无新增审计记录、`run/get` 为 `CANCELLED`（人工补充：`metrics` 快照里 `running_now` 归零） |
+
+**结论**：C-1 / C-2 / C-4 / C-5 成立（`tool.parallel` / `tool.cancel`）；C-3 只做到静态核对 + 两个间接用例，缺「确认点在中间的批量调用」用例，按「部分取证」记录（补证方式见报告 §八）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.4。
 
 ## 7. Permission & Audit（P-1 ~ P-7）
 
@@ -91,6 +103,8 @@
 | P-6 | 参数脱敏 | 用例 `tool.audit`：审计 `arguments` 里命中的键值为 `***`，明文不出现在任何响应与事件里（写出侧检测，不在事后扫描日志） |
 | P-7 | 配置校验 | 用例 `tool.config`：非法 `[tools]` 配置启动失败且文案点名字段；`[tools]` 里不存在「确认超时」字段（静态核对） |
 
+**结论**：P-1 ~ P-7 全部成立（`tool.denied` / `tool.audit` / `tool.config` / `tool.builtin.http`）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.5。
+
 ## 8. Confirmation（F-1 ~ F-7）
 
 | 编号 | 条目 | 验证方式 |
@@ -103,6 +117,7 @@
 | F-6 | 重连补发 | 用例 `tool.confirm.reconnect`：断连重连后收到同 `toolCallId` 的再次 `tool_call_confirm_required`，再次确认成功 |
 | F-7 | 挂起中断连的收尾 | 用例 `tool.confirm.disconnect`：Run 落 `CANCELLED`、挂起列随取消链路清空、`PENDING` 审计收尾为 `CANCELLED`；重复确认返回固定 400（断连后客户端已被移除，文案为「客户端未注册，请重新连接」） |
 
+**结论**：F-1 ~ F-7 全部成立（`tool.confirm.approve` / `.reject` / `.reconnect` / `.disconnect`）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.6。
 ## 9. Builtin Tools（T-1 ~ T-8）
 
 | 编号 | 条目 | 验证方式 |
@@ -116,6 +131,8 @@
 | T-7 | 结果截断 | 用例 `tool.truncate`：`max_result_chars` 调小后结果被截断并带「结果已截断」提示；截断发生在字符边界 |
 | T-8 | 文件操作声明与实现一致 | 用例 `tool.decl`：五个内置工具的 `fileAccess` 为 `None` / `None` / `Read` / `Read` / `None`，`default_concurrency()` 四条映射逐项正确；**人工**：逐个核对工具实现确实只做声明范围内的文件操作，并确认没有工具声明 `Write` / `ReadWrite` 却实际写文件 |
 
+**结论**：T-1 ~ T-8 全部成立（`tool.builtin.*` / `tool.truncate` / `tool.decl` + 人工核对）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.7。
+
 ## 10. Client（W-1 ~ W-4）
 
 | 编号 | 条目 | 验证方式 |
@@ -124,6 +141,8 @@
 | W-2 | TUI 展示与确认 | 用例 `tool.tui`：三个事件转成对应 `Update`；无 pending 时 `y` / `n` 不产生上行请求；`cargo clippy -p lib-bin-tui --all-targets -- -D warnings` 通过 |
 | W-3 | WebUI 展示与确认 | `make ui-check` 退出码 0；`useChat.ts` 三个分支有类型收窄、无 `any`；确认按钮不可重复点击（静态核对） |
 | W-4 | 确认上行同源 | 静态核对：TUI 与 WebUI 都只经生成的 SDK 方法调用 `api/client/post`，不手写 HTTP；请求体字段来自 `ClientPostPO` |
+
+**结论**：W-1 ~ W-4 全部成立（`tool.events` / `tool.tui` / `tool.web` / `tool.web.e2e` + 静态核对）。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.8。
 
 ## 11. Regression（R-1 ~ R-6）
 
@@ -136,6 +155,8 @@
 | R-5 | 发布构建可用 | `cargo build --release -p bin-agent` 成功；release 产物不带 `api/probe/metrics`，`http_request` 默认仍为 deny |
 | R-6 | 旧数据可读 | 静态核对 + 用例 `persist.migration`：`0001` 时期的数据（无工具列 / 无挂起列）迁移后可读，`Message` 新字段为 `null` |
 
+
+**结论**：R-2 ~ R-6 成立；R-1 成立但口径已修订——「Mock `last-request` 中无 `tools` 键」在 P3 不成立（D-P3-028），改为约束消息序列 / 裁剪 / token 语义与 P2 一致。证据见 [`p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md) §三 3.9 与 §四。
 ---
 
 ## 判据与验收方向的对应

@@ -14,6 +14,8 @@
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
 | [tool.md](tool.md) | tool（工具审计） | 按 Run 查询工具调用审计记录（只读），共 1 条 |
 
+当前接口总数 **26 条**（不含仅 `debug` + `metrics` 特性构建注册的 `api/probe/metrics`）：probe 12、session 6、runtime 4、occupancy 3、tool 1。
+
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 
 ## 通用约定

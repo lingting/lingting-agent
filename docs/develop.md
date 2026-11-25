@@ -218,6 +218,12 @@ P2 起的三处语义变化（字段与接口不变）：
 - `run_failed` 由执行层真实产出：`error` 是固定脱敏文案（如「调用模型失败：认证失败」），失败的 Run 不写助手消息。
 - 未被占用的会话里 Run 停在 `QUEUED`；`max_concurrent_runs` 已满时同样排队，排队超时落 `FAILED`「执行排队超时」。
 
+P3 起的三处变化（接口与 DTO 只增不改，D-P3-024 / D-P3-027）：
+
+- **工具轨迹进对话历史**：一轮里的 assistant 消息带 `toolCalls`（`content` 可为空串），每个工具结果是一条 `role=TOOL` 的消息并带 `toolCallId` / `toolName`；`message/list` 直接可见这些中间轮次的消息，客户端按 `toolCallId` 配对。
+- **每轮边界落库**：进入下一轮之前，本轮的 assistant `tool_calls` 与全部工具结果已提交；流式期间仍不写库，最终助手消息与 `COMPLETED` 仍是同一事务（D-P2-008 保留）。失败 / 取消的 Run 不写最终助手消息，已落库的中间轮次消息保留。
+- **挂起语义**：`confirm` 级工具在客户端确认前不执行，Run 由 `RUNNING` 转 `WAITING` 并让出全局并发许可；这是「同会话串行」的唯一例外——挂起期间同一会话可以继续执行后续 Run，历史顺序因此可能不等于发起顺序。
+
 约定：会话与 Run 的 ID 走查询参数或请求体（无路径占位符）；`messageCount`、token 用量与 `*Ms` 时间戳按 D-018 以字符串传输；业务失败的 404（会话/Run 不存在）与 400（参数或状态不满足规则）由 `SessionError` 映射，错误体仍是统一的 `{code,message}`。
 
 ### 运行时接口（P1.1）

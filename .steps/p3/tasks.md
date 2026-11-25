@@ -1,6 +1,6 @@
 # P3 任务清单
 
-**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F 完成（P3-021 ~ P3-025：五个内置工具 + `builtin::register_all` 装配；代码 + 静态核对 + 全量回归 75 个用例通过，`tool.builtin.*` 用例待 Batch H）；Batch G 完成（P3-026 ~ P3-029：`api/client/post` 改名与三种 `kind`、服务端确认链路与重连补发、取消链路收尾 `PENDING` 审计、TUI 与 WebUI 的工具卡片与确认交互；`make gen` / `make ui-check` / clippy 与格式检查通过 + 全量回归 75 个用例通过（`runtime.*`、`web.ui` 等全部改走 `client/post`），工具确认相关判据（F-2 / F-4 ~ F-7、C-3）仍待 Batch H 用例）；Batch H 部分完成（P3-030：27 个 `tool.*` 用例 + `client.post` 落地，`make test ARGS="--all"` 103 个用例全部通过（报告 `target/tests/run-1795599811697-44180/README.md`），`make test ARGS="--list"` 可查到全部用例；P3-031 文档同步与 P3-032 阶段验收未开工）。** 27 项决策（D-P3-001 ~ D-P3-027）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：Batch A 已完成（P3-001 ~ P3-004，仅代码 / 静态检查 / 文档）；Batch B 已验收（P3-005 ~ P3-009：代码 + 静态核对 + 全量回归 75 个用例通过，`tool.*` 用例待 Batch H）；Batch C 完成（P3-010 ~ P3-012：代码 + 静态检查；P3-012 在 Batch E 之后补齐，`tool.context` 用例待 Batch H）；Batch D 完成（P3-013 ~ P3-016：代码 + 静态检查；挂起态按 D-P3-027 改为 `WAITING`，`tool.*` 用例待 Batch H）；Batch E 完成（P3-017 ~ P3-020：代码 + 静态检查 + 两份 SDK 重新生成 + 全量回归 75 个用例通过；仅「`0001` 旧库可读」未取证）；Batch F 完成（P3-021 ~ P3-025：五个内置工具 + `builtin::register_all` 装配；代码 + 静态核对 + 全量回归 75 个用例通过，`tool.builtin.*` 用例待 Batch H）；Batch G 完成（P3-026 ~ P3-029：`api/client/post` 改名与三种 `kind`、服务端确认链路与重连补发、取消链路收尾 `PENDING` 审计、TUI 与 WebUI 的工具卡片与确认交互；`make gen` / `make ui-check` / clippy 与格式检查通过 + 全量回归 75 个用例通过（`runtime.*`、`web.ui` 等全部改走 `client/post`），工具确认相关判据（F-2 / F-4 ~ F-7、C-3）仍待 Batch H 用例）；Batch H 完成（P3-030：27 个 `tool.*` 用例 + `client.post` 落地；P3-031：接口 / 结构 / 开发规范三份文档同步；P3-032：阶段验收报告 `reports/p3-032-acceptance.md` 已出稿，`make test ARGS="--all"` 103 个用例全部通过（报告 `target/tests/run-1795605450775-43892/README.md`），唯一「部分取证」项是 C-3 的批量确认点用例）。** 28 项决策（D-P3-001 ~ D-P3-028）全部定案（[decisions.md](decisions.md) 的「定案状态」）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
 
 **本轮补证（用户授权新增用例、执行用例与浏览器目测）**：先前只剩的三条判据已全部取证——P3-003 的「必填 / 可选 / 枚举 / 数字四类字段对照 schema 与 serde」由 `tool.schema` 逐类断言；P3-017 的「`0001` 旧库可读」由 `persist.migration` 的「`0001` 时代」夹具（只跑 `0001`、账本只记 version 1）取证，迁移后旧消息的工具字段为 `null`、账本 `[1, 2]`；P3-029 的视觉层级由新增的 `tool.web.e2e`（真实 Chromium + `calculator = "confirm"`）与两张截图人工目测取证。同轮还把 P3-002「请求不含 `fileAccess`」（`tool.schema`）与 P3-018「终态审计写库失败不影响 Run 结论」（`loop_/tool.rs` 的 `audit()` 静态核对）补齐。回归：`make test ARGS="--all"` 103 个用例全部通过（报告 `target/tests/run-1795599811697-44180/README.md`），`make ui-check` / `cargo fmt --check` / `cargo clippy -p bin-tests --all-targets -- -D warnings` 均通过。P3-031 / P3-032（Batch H 剩余两项）本轮不推进。
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
@@ -626,7 +626,7 @@
   - [x] 全仓检索 `read_to_string(` 在 `crates/bin-tests` 中与日志无关（不新增日志读取）。（命中项只有 PID 文件、事件文件与源码读取；`cases/tool/` 下 0 处）
   **测试要求**：**需要授权后执行**；未授权时只落地用例代码与清单，判据保持未勾选。（本轮已授权：`make test ARGS="--all"` 103 个用例全部通过，报告 `target/tests/run-1795599811697-44180/README.md`；`web.e2e` 只跑 `chat` / `shutdown` 两个 Playwright 项目，`tool` 项目由 `tool.web.e2e` 单独跑并各自指定 `--output`，避免并发时产物互相覆盖）
 
-- [ ] **P3-031 文档同步与已知限制落稿**
+- [x] **P3-031 文档同步与已知限制落稿**
 
   **目标**：接口、结构与纪律文档与实现一致，已知限制有出处。
   **前置依赖**：P3-026、P3-027、P3-030。
@@ -637,12 +637,12 @@
   3. `docs/workspace.md`：`agent-tool` 已落地、`service-core` 的新依赖、`tool_calls` / `messages` / `runs` 的三处 schema 变化在对应 Crate 段落下点一句。
   4. 只在用户明确要求的范围内同步，其余同步建议列入报告。
   **验收标准**：
-  - [ ] `docs/api/readme.md` 的接口总数、领域索引与实际路由一致（逐条对照 `grep -rn "path = \"api/"`）。
-  - [ ] 文档里不出现 `client/update`。
-  - [ ] 已知限制（README §七 第 1~5 条）在报告中重述，并有对应判据编号。
+  - [x] `docs/api/readme.md` 的接口总数、领域索引与实际路由一致（逐条对照 `grep -rn "path = \"api/"`）。（路由 27 条；去掉仅 `debug` + `metrics` 注册的 `api/probe/metrics` 为 26 条，与 `readme.md` 新增的「当前接口总数 26 条」及领域计数逐条对上）
+  - [x] 文档里不出现 `client/update`。（现行文档 `docs/api` / `docs/develop.md` / `docs/workspace.md` 0 命中；`docs/reports/p1.1-022-acceptance.md` 与 `p2.1-008.2-db-read-cache.md` 是历史记录，按用户决定保留原文，口径见 `reports/p3-032-acceptance.md` §四）
+  - [x] 已知限制（README §七 第 1~5 条）在报告中重述，并有对应判据编号。（`reports/p3-032-acceptance.md` §六 逐条重述并挂 F-7 / P-7、F-3、R-2、R-6、L-7 / F-4）
   **测试要求**：无。
-
-- [ ] **P3-032 阶段验收与报告**
+  **落地记录**：`docs/api/session.md`（`WAITING`、三个工具事件、`RunEvent` 的 6 个工具字段、「工具轮次与挂起」一节）、`docs/api/readme.md`（接口总数 26 条与领域计数）、`docs/api/runtime.md`（改名说明不再写旧路径字面量）、`docs/develop.md`（会话业务接口段补 P3 的三处变化）、`docs/workspace.md`（`service-core` 的审计职责与依赖表述、`lib-db` 的 `0001` / `0002` 迁移清单、`agent-tool` 段已落地）。
+- [x] **P3-032 阶段验收与报告**
 
   **目标**：七条验收方向逐条取证，出阶段报告。
   **前置依赖**：P3-030、P3-031 与全部前置批次。
@@ -654,7 +654,7 @@
   4. 与 P2 决策的冲突处（D-P2-008 的修订、同会话串行的例外、P1.1 接口改名）在报告里单列一节说明。
   5. 若出现与规划不符之处，写进 [decisions.md](decisions.md) 的新条目，不改历史条目。
   **验收标准**：
-  - [ ] 报告中每条判据都有证据类型（命令 / 用例 / 静态核对 / 人工）与结论，未执行项显式标注「未授权」。
-  - [ ] `.steps/README.md` 与 `.steps/p3/README.md` 的状态一致。
-  - [ ] 没有把「代码写完」当成「验收通过」的勾选。
-  **测试要求**：**需要授权后执行**（`make test ARGS="tool"`、`ARGS="client"` 与 `--all` 回归）。
+  - [x] 报告中每条判据都有证据类型（命令 / 用例 / 静态核对 / 人工）与结论，未执行项显式标注「未授权」。（B ~ R 各组逐条给出证据类型与结论；无「未授权」留空项——本轮全量回归已授权；C-3 标注「部分取证」并在 §八 给出补证方式）
+  - [x] `.steps/README.md` 与 `.steps/p3/README.md` 的状态一致。（两处均为「P3 完成（8 个批次 / 32 个任务），Batch H 已验收，报告 `docs/reports/p3-032-acceptance.md`」）
+  - [x] 没有把「代码写完」当成「验收通过」的勾选。（C-3 缺批量确认点用例，保持「部分取证」；`acceptance.md` 的 C-3 行同步标注，其余判据均有用例 / 静态 / 人工证据）
+  **测试要求**：**需要授权后执行**（`make test ARGS="tool"`、`ARGS="client"` 与 `--all` 回归）。（本轮经授权执行 `make test ARGS="--all"`：103 个用例全部通过，报告 `target/tests/run-1795605450775-43892/README.md`；`tool` / `client` 两组包含在其中）

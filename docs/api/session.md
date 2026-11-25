@@ -77,7 +77,7 @@
 |---|---|---|
 | `id` | `string` | Run ID |
 | `sessionId` | `string` | 所属会话 ID |
-| `status` | `RunStatus` | `QUEUED` / `RUNNING` / `COMPLETED` / `CANCELLED` / `FAILED` |
+| `status` | `RunStatus` | `QUEUED` / `RUNNING` / `WAITING` / `COMPLETED` / `CANCELLED` / `FAILED`；`WAITING` 表示在等客户端确认某次工具调用（`runs.pending_tool_call_id` 非空），不占全局并发许可（D-P3-027） |
 | `model` | `string` | 本次执行使用的模型标识 |
 | `error` | `string \| null` | 失败原因；仅 `FAILED` 时有值，且不含内部细节 |
 | `inputTokens` | `string \| null` | 输入 token 用量；未统计时为空 |
@@ -107,9 +107,15 @@
 | `delta` | `string \| null` | 增量文本；仅 `message_delta` 有值 |
 | `messageId` | `string \| null` | 助手消息 ID；`run_started` 与 `run_completed` 有值 |
 | `status` | `RunStatus \| null` | Run 最新状态；`run_started` 与 `run_completed` 有值 |
-| `error` | `string \| null` | 失败或终止原因；仅 `run_failed`、`run_cancelled` 与 `server_shutdown` 有值，不含内部细节 |
+| `error` | `string \| null` | 失败或终止原因；`run_failed`、`run_cancelled` 与 `server_shutdown` 有值，`tool_call_completed` 失败时复用为工具错误文本；均不含内部细节 |
 | `inputTokens` | `string \| null` | 输入 token 用量；`run_started` 与 `run_completed` 有值（Mock 按字符数估算） |
 | `outputTokens` | `string \| null` | 输出 token 用量；`run_completed` 有值（Mock 按字符数估算） |
+| `toolCallId` | `string \| null` | 工具调用标识；三个工具事件都有值，客户端据此配对开始与结束 |
+| `toolName` | `string \| null` | 工具名；三个工具事件都有值 |
+| `toolArguments` | `string \| null` | 已脱敏、已截断的参数 JSON 文本；`tool_call_started` 与 `tool_call_confirm_required` 有值 |
+| `toolStatus` | `ToolCallStatus \| null` | 工具调用状态；仅 `tool_call_completed` 有值 |
+| `toolDurationMs` | `string \| null` | 工具调用耗时（毫秒，含重试），`i64` → 字符串；仅 `tool_call_completed` 有值 |
+| `toolRound` | `number \| null` | 第几轮工具调用（从 1 开始）；`tool_call_started` 与 `tool_call_confirm_required` 有值 |
 
 ### RunEventKind
 
@@ -121,9 +127,12 @@
 | `run_failed` | 执行失败（P2 起真实产出）：认证 / 上游 / 空闲超时 / 上下文超预算 / 排队超时 | `error`（固定脱敏文案） |
 | `run_cancelled` | 会话停止（占用释放 / 客户端断连）导致 Run 被取消 | `status`、`error`（固定原因文本） |
 | `server_shutdown` | 服务关闭导致 Run 终止（Run 已落成 `CANCELLED`） | `status`、`error` |
+| `tool_call_started` | 工具调用开始执行之前（每轮里每次调用一条） | `toolCallId`、`toolName`、`toolArguments`、`toolRound` |
+| `tool_call_completed` | 工具调用结束：成功 / 失败 / 超时 / 拒绝 / 取消都在这一条上 | `toolCallId`、`toolName`、`toolStatus`、`toolDurationMs`；失败时 `error` |
+| `tool_call_confirm_required` | `confirm` 级工具被请求调用，Run 转 `WAITING` 等客户端确认 | `toolCallId`、`toolName`、`toolArguments`、`toolRound` |
 | `heartbeat` | 保留值：Run 事件流的空闲保活；P1.1 起客户端心跳（`api/client/post`）承担保活，运行时会话暂不产出 | 仅公共字段 |
 
-P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事件的字段语义。
+P3 追加上述三个工具事件（D-P3-013）：只新增枚举值与 `RunEvent` 的可选字段，既有事件的字段语义一律不变。`ToolCallStatus` 取 `OK` / `ERROR` / `DENIED` / `TIMEOUT` / `CANCELLED` / `INVALID_ARGUMENTS` / `PENDING`；`PENDING` 只出现在审计记录里（挂起期间），不会出现在 `tool_call_completed` 上。
 
 ## Run 触发与事件
 
@@ -134,15 +143,15 @@ P2 追加事件（如 `tool_call_*`）只允许新增枚举值，不改已有事
 | 触发点 | 一条规则：Run 只在所属会话**当前被占用**时执行，执行者是该会话的运行时会话 |
 | 占用时 | `api/occupancy/create` 把该会话存量 `QUEUED` 按 `createdAtMs` 升序串行执行；`api/message/create` 追加到队列尾部 |
 | 未占用时 | 新建的 Run 停在 `QUEUED`，不排队、不执行（日志记一条原因），客户端必须先占用 |
-| 串行 | 同一会话同一时刻最多一个 `RUNNING` Run；`QUEUED → RUNNING` 仍走状态 CAS，一个 Run 只有一个生产方 |
+| 串行 | 同一会话同一时刻最多一个 `RUNNING` Run；`QUEUED → RUNNING` 仍走状态 CAS，一个 Run 只有一个生产方。**唯一例外是挂起**：`WAITING` 的 Run 不占全局并发许可，同一会话可以继续执行后续 Run（D-P3-023 / D-P3-027），因此历史顺序可能不等于发起顺序 |
 | 全局并发 | `QUEUED → RUNNING` 在拿到全局许可（`[agent] max_concurrent_runs`）之后才发生，排队期间 `run/get` 显示 `QUEUED`；等待超过 `run_queue_timeout_ms` 落 `FAILED`「执行排队超时」，且不产出 `run_started` |
 | token 语义 | `run_started.inputTokens` 是预算估算器的估算值；`run_completed` 的 `inputTokens` / `outputTokens` 用 Provider 的真实 usage，Provider 未给出时留空 |
 | 落盘 | 事件先写进该会话的事件文件并 flush，再转发到 `api/client/stream`；文件是唯一事实源（见 [occupancy.md](occupancy.md) 的「事件文件」） |
 | 转发帧 | 一条 `RunEvent` 包成 `session_event` 帧，`data` 里是整条事件；`RunEvent.seq`（文件内序号）与外层 `ClientEvent.seq` 不同源 |
 | 终态 | `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` 之一收尾，之后不再向该文件追加 |
 | 终态归属 | 每条 Run 的终态事件由执行层发出（P2-024）；写者的兜底补写只在最后一条事件不是终态时才触发，作为安全网 |
-| 断开 | 客户端断开（下行流被 drop）→ 断连处理链停止运行时会话 → `QUEUED` / `RUNNING` 的 Run 落 `CANCELLED` 并补终态事件 |
-| 取消 | `api/run/cancel` 把 Run 置 `CANCELLED` 后触发取消信号：执行方 drop 模型流并补 `run_cancelled`（`error` = 「用户取消执行」）；客户端收到响应后本地收尾 |
+| 断开 | 客户端断开（下行流被 drop）→ 断连处理链停止运行时会话 → `QUEUED` / `RUNNING` / `WAITING` 的 Run 落 `CANCELLED` 并补终态事件 |
+| 取消 | `api/run/cancel` 只允许取消 `QUEUED` / `RUNNING` / `WAITING`；取消把 Run 置 `CANCELLED` 后触发取消信号：执行方 drop 模型流或工具执行并补 `run_cancelled`（`error` = 「用户取消执行」），挂起列随之清空、`PENDING` 审计收尾为 `CANCELLED` |
 | 服务关闭 | 运行时会话以 `server_shutdown` 收尾（含 `status` 与可读 `error`）；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
 | 客户端 | 编排顺序为 `client/create` → `client/stream` → `occupancy/create` → `message/create` → 消费 `session_event` → `run/get` 对账；下行帧格式、心跳与问询见 [runtime.md](runtime.md)，TUI 与 WebUI 都用 fetch 流式响应自行切帧 |
 
@@ -218,3 +227,12 @@ HTTP/1.1 200 OK
 - 执行失败（认证 / 上游 / 空闲超时 / 上下文超预算 / 排队超时）落 `FAILED` + 固定脱敏 `error`，不写助手消息。
 - `messageCount` 与 `updatedAtMs` 在每次发送消息时更新；取消 Run 不影响会话统计。
 - 会话隔离由 `sessionId` 保证，不存在跨会话读取入口。
+
+## 工具轮次与挂起（P3 起）
+
+模型请求调用工具时，一次 Run 内会出现多个「推理轮次」，中间轮次的事实同样落在 `messages` 里：
+
+- **工具轨迹进历史**：assistant 消息带 `toolCalls`（此时 `content` 可以为空串），每个工具结果是一条 `role=TOOL` 的消息并带 `toolCallId` / `toolName`；`message/list` 按写入顺序返回这些中间轮次的消息，客户端按 `toolCallId` 配对。
+- **每轮边界落库**（D-P3-024）：进入下一轮之前，本轮的 assistant `toolCalls` 与全部 `TOOL` 结果已提交；流式期间仍不写库。最终助手消息与 `COMPLETED` 仍在同一事务提交（D-P2-008 保留）；失败 / 取消的 Run 不写最终助手消息，已落库的中间轮次消息保留。
+- **挂起**（D-P3-023 / D-P3-027）：`confirm` 级工具在确认前不执行，Run 由 `RUNNING` 转 `WAITING` 并下发 `tool_call_confirm_required`；客户端经 `api/client/post { kind: TOOL_CONFIRM }` 回传决定后 Run 退回 `QUEUED` 重新排队，链路细节见 [runtime.md](runtime.md) 的「工具确认链路」。确认没有超时。
+- **轮次上限**：`[agent] max_tool_rounds` 用尽时 Run 落 `FAILED`「工具调用轮次超过上限」，同样不写最终助手消息。
