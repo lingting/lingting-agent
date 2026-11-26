@@ -51,4 +51,4 @@ pub use manager::{GRACEFUL_CLOSE_TIMEOUT, McpManager, McpManagerError};
 pub use naming::{MAX_NAME_LEN, NAME_PREFIX, disambiguate, visible_name};
 pub use state::McpState;
 pub use tool::McpTool;
-pub use vo::{McpAction, McpServerVO, McpStatusKind, McpToolVO};
+pub use vo::{McpAction, McpServerUpdatePO, McpServerVO, McpStatusKind, McpToolListParams, McpToolVO};

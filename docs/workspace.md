@@ -172,12 +172,13 @@ Agent 装配、进程内运行时与跨 Service 编排（P2-013 / P2-035 起）�
 
 - 启动装配：应用目录 → 数据库（迁移 + 残留 Run 自愈）→ Repository → Service → 运行时状态。
 - 进程级 holder（`AgentHolder`）：持有 `session: Arc<SessionService>`、`runtime: RuntimeState`、
-  `provider: ProviderService`（模型查找下沉在 `agent-route`）与 `agent: AgentConfig`，
-  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent`）。
+  `provider: ProviderService`（模型查找下沉在 `agent-route`）、`agent: AgentConfig`、工具注册表与执行参数，
+  以及 MCP 门面 `mcp: Arc<McpManager>`（P4-011 起），
+  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent` / `tools` / `mcp`）。
 - 进程内运行时：客户端注册表、会话占用、事件文件与轮转、断连处理链、心跳扫描（`runtime/`）。
 - Run 执行：串行执行队列、取消信号登记与执行端口安装；事件生产自 P2-023 起由 `agent-runtime` 提供。
 - 跨组件协调：发送消息后唤醒该会话的执行队列；停止运行时会话时取消未结束的 Run。
-- 关闭入口：把「停全部客户端与运行时会话」交给断连处理链。
+- 关闭入口：先让 Run 落终态（断连处理链），再关闭 MCP 连接与其子进程（P4-012）。
 
 边界：
 
@@ -301,7 +302,7 @@ MCP 集成（P4-001 起落地）。使用 `rmcp`，它是本仓库里 `rmcp` 的
 - MCP 只是工具的一种来源：外部 Tool 经 Adapter 转换为内部统一 Tool，进入 `agent-tool` 的注册与执行体系。
 - **不得让 MCP 协议类型渗透到 Agent Runtime 或更上层**。
 - 未来需要把 MCP Resources / Prompts 纳入 Context 时，通过 `agent-context-core` 的抽象提供能力。
-- 依赖 `agent-tool`（`Tool` 契约与 `ToolSchema`）与 `lib-core`，外加 `rmcp`、Tokio、`serde` / `serde_json`、`async-trait`、`futures-util`、`tokio-util`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）；**不依赖** `types-core`（`mcp.toml` 由装配层读成 `agent-mcp` 自己的配置类型再喂进来）。
+- 依赖 `agent-tool`（`Tool` 契约与 `ToolSchema`）与 `lib-core`，外加 `rmcp`（含 stdio 子进程与 streamable HTTP 两种 transport）、`reqwest`（HTTP transport 的底层客户端）、`blake3`（截断与冲突消解的 8 位可复算短哈希）、Tokio（子进程、超时、锁与取消）、`serde` / `serde_json`、`serde_with` / `specta` / `strum` / `strum_macros`（契约 DTO 的 `auto_type` / `auto_enum` 派生与适配器）、`async-trait`、`futures-util`、`tokio-util`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）；**不依赖** `types-core`（`mcp.toml` 由装配层读成 `agent-mcp` 自己的配置类型再喂进来）。
 
 #### agent-context
 
@@ -674,12 +675,12 @@ manager-agent -> service-agent
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
 | `service-core` | `agent-core`（仅类型层，P2 起）、`agent-tool`（仅类型层，P3 起：审计记录与查询载荷，D-P3-011）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` / `agent-tool` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
-| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
+| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
 | `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`url`（`http_request` 的地址解析与 host 白名单匹配）、`chrono`（`current_time` 的 ISO8601 格式化）、`anyhow`（`http_request` 的错误归一化，框架以 `anyhow::Result` 返回）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
-| `agent-mcp` | `agent-tool`、`lib-core` | `rmcp`、Tokio（子进程与超时）、`async-trait`、`futures-util`、`tokio-util`、`serde` / `serde_json`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`） | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
+| `agent-mcp` | `agent-tool`、`lib-core` | `rmcp`、`reqwest`（HTTP transport 的底层客户端）、`blake3`（可复算短哈希）、Tokio（子进程、超时与取消）、`async-trait`、`futures-util`、`tokio-util`、`serde` / `serde_json`、`serde_with` / `specta` / `strum` / `strum_macros`（契约 DTO 的 `auto_type` / `auto_enum` 派生）、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`） | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
 | `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`types-core`、`lib-core`（`agent-tool` 于 P3 接入） | Tokio、`tokio-util`（取消信号）、`async-trait`（实现执行端口）、Tracing | `lib-web*`、`lib-bin-*`、`bin-*`；不直接写 SQL |
@@ -692,7 +693,7 @@ manager-agent -> service-agent
 | `bin-tui`（计划） | `lib-bin-cli`、`lib-bin-tui`、`lib-core` | — | `lib-bin-web`（不内嵌 WebUI） |
 | `bin-web`（计划） | `lib-bin-cli`、`lib-bin-web`、`lib-core` | — | `lib-bin-tui` |
 | `bin-mock-server`（计划） | `lib-web-core`、`lib-core` | Axum / `framework-web-axum` | `agent-runtime`、`service-core`、`lib-web` |
-| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`manager-agent`、`service-core`、`types-core`、`agent-core`、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-timer`（校对定时任务注册）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体与内置 Mock LLM 的请求体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`（不得进程内启动服务端）；`manager-agent` 与 `service-core` 只用于进程内驱动运行时内核（注册表、事件文件、断连链、轮转）与会话业务，不得用它们装配 Web 服务；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
+| `bin-tests` | `lib-bin-cli`、`lib-bin-tui`（`testing` feature）、`manager-agent`、`service-core`、`types-core`、`agent-core`、`agent-tool`、`agent-mcp`（MCP 用例直接核对状态机，P3-030 / P4-018）、`lib-core` | Clap、Tokio（子进程、网络监听、并发与超时）、`framework-http`（`reqwest` feature，直连非 SDK 路径）、`framework-timer`（校对定时任务注册）、`framework-proc-core`（`ts` + `rust` feature，校验导出构建器）、`serde_json`（解析错误体与内置 Mock LLM 的请求体）、`futures-util`（panic 兜底）、`anyhow` | `lib-web`、`lib-bin-web`（不得进程内启动服务端）；`manager-agent` 与 `service-core` 只用于进程内驱动运行时内核（注册表、事件文件、断连链、轮转）与会话业务，不得用它们装配 Web 服务；不得把 `bin-agent` 作为库依赖（只能以子进程运行） |
 
 ### 5.2 依赖图
 
@@ -710,6 +711,8 @@ flowchart BT
     manager --> agentcore["agent-core"]
     manager --> libdb
     manager --> agentroute["agent-route"]
+    manager --> tool["agent-tool"]
+    manager --> mcp["agent-mcp"]
     manager --> libcore
 ```
 
@@ -814,6 +817,7 @@ flowchart BT
 14. 启动装配（构造 Repository、Service、Runtime 并注入）由 `lib-bin-web` 完成；它不得调用 Runtime 的业务方法，业务动作一律经 `lib-web` 的 Handler → Service / Runtime。
 15. `agent-route` 是唯一允许依赖 Rig 的 Crate，且 Rig 类型不得离开其 Adapter 模块。
 16. `lib-db` 只提供连接、迁移与事务，不含业务表与业务 SQL；业务 SQL 归 `service-core` 的 `repository`。
+17. `agent-mcp` 只由装配层 `manager-agent` 接入：`mcp.toml` 由装配层读成 `agent-mcp` 自己的配置类型再喂进来（`agent-mcp` 不依赖 `types-core`），MCP 工具经 `agent-tool` 的注册表与执行器进入运行时（P4）。
 
 ### 5.4 禁止依赖关系
 
@@ -947,12 +951,26 @@ P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-cont
 
 `RunEventStream` 已被 P1.1 删除（事件下线只剩 `api/client/stream`）；进程级 `holder` 先由 `service-core` 迁出，P2-013 落在装配层 `manager-agent`（不在 `lib-web`），仍是启动期显式初始化。决策依据见 `.steps/p2/decisions.md` D-P2-018 / D-P2-019 / D-P2-032。
 
+### 8.1.2 P3 / P4 落地的依赖边
+
+P3 路线图新增 `agent-tool`，P4 路线图新增 `agent-mcp`（`.steps/p3/`、`.steps/p4/`），落地后的依赖边（与 5.1 一致）：
+
+| 边 | 说明 |
+|---|---|
+| `agent-tool -> agent-core` / `agent-context-core` / `lib-core` | 工具契约、执行上下文与基础能力（P3-001） |
+| `agent-runtime -> agent-tool` | 运行时持有注册表与执行器，不新增执行路径（P3-014） |
+| `service-core -> agent-tool` | 仅类型层：审计记录与查询载荷（P3-011） |
+| `manager-agent -> agent-tool` | 装配期建注册表与执行参数（P3-014） |
+| `agent-mcp -> agent-tool` / `lib-core` | MCP 工具适配为 `Arc<dyn Tool>`；协议类型只在 `agent-mcp`（P4-001） |
+| `manager-agent -> agent-mcp` | 装配期建 MCP 门面、接入注册表并在关闭时回收子进程（P4-010 ~ P4-013） |
+| `bin-tests -> agent-tool` / `agent-mcp` | 用例在进程内核对工具契约与 MCP 状态机（P3-030 / P4-018） |
+
 ### 8.2 后续阶段创建范围
 
 | 阶段 | 新增 Crate | 状态 |
 |---|---|---|
 | P3 | `agent-tool` | 已创建（P3-001） |
-| P4 | `agent-mcp` | 已创建（P4-001） |
+| P4 | `agent-mcp` | 已创建（P4-001）；门面、装配、指标与 3 条管理接口已落地（P4-010 ~ P4-014） |
 | P5 | `agent-skill` | 未创建 |
 | P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
 

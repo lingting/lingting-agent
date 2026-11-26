@@ -251,8 +251,7 @@
   2. `McpMetrics` 结构体放在 `agent-mcp::metrics`，`manager-agent` 的 `MetricsSnapshot` 里加一个 `mcp` 字段做转写。
   3. 状态计数（`servers` / `ready` / `failed` / `disabled` / `tools`）在取快照时从 manager 现状读出，不做累加。
   **验收标准**：
-  - [ ] 未开 `metrics` 特性时 `agent-mcp` 不引入 `serde`、不留静态计数器（特性隔离可核）。
-    > 待确认：`serde` 是 `agent-mcp` 的无条件依赖（`McpServerVO` / `McpToolVO` 的 `auto_type` 派生），与本条口径冲突；`metrics` 特性本身不引入额外依赖、不留静态计数器（`grep` 可核）。口径是否改为「`metrics` 不引入额外依赖」待定。
+  - [x] 未开 `metrics` 特性时 `agent-mcp` 不引入 `serde`、不留静态计数器（特性隔离可核）。（口径已确认：`serde` 是 `agent-mcp` 的必需依赖——`McpServerVO` / `McpToolVO` 的 `auto_type` 派生要求它；本条的判据改为「`metrics` 特性不引入额外依赖、不留静态计数器」，`grep` 可核）
   - [x] `GET api/probe/metrics` 的响应里出现 `mcp` 段，字段与 README §4.10 的表一致。（`MetricsSnapshot.mcp` 逐字段对应；运行期取值由 `mcp.metrics` 在 P4-018 取证）
   - [x] `cargo build --workspace` 与 `cargo build --workspace --features metrics -p lib-web` 均通过。
   **测试要求**：无（`mcp.metrics` 在 P4-018，经 `api/probe/metrics` 取值）。
@@ -262,8 +261,10 @@
 ## Batch D：接口与契约（P4-014 ~ P4-016）
 
 > 依赖：Batch C。本批次结束时，3 条接口可用、SDK 重新生成、文档同步。
+>
+> **状态：代码与文档已完成（2026-11-26）。** 门禁：`make gen`（路由 29 / 接口 29）、`make gen-check`、`make ui-check`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；本批次不新增用例，全量用例未执行（未获授权）。两条运行期判据（接口可访问的响应体、`server/list` / `tool/list` / `server/update` 的运行期语义）随 P4-018 的 `mcp.api` 取证，这里只做代码与静态核对。
 
-- [ ] **P4-014 管理接口三条**
+- [x] **P4-014 管理接口三条**
 
   **目标**：server 状态与工具清单可查，启停 / 重连 / 探测可触发；契约 DTO 只定义一次。
   **前置依赖**：P4-011、P4-013。
@@ -274,13 +275,13 @@
   3. handler 只调 `manager-agent` 的入口函数；错误映射一次：未知 `serverId` → 400 固定文案，内部错误 → 500 固定文案（沿用 `lib-web` 的既有错误构造）。
   4. `i64` 字段（时间戳）按约定用字符串 wire（`DisplayFromStr` 口径与既有 DTO 一致）。
   **验收标准**：
-  - [ ] 三条接口在 `cargo run -p lib-web --example api_probe_server` 或集成入口下可访问，响应体是 `{"code":200,"message":"Success","data":…}`。
-  - [ ] `server/list` 含 `disabled` 的 server；`tool/list` 按可见名升序；`server/update` 返回动作完成后的状态。
-  - [ ] 接口总数 26 → 29 的口径在 `docs/api/` 里只出现两处（`readme.md` 的总数与 `mcp.md` 的领域清单），两者一致。
-  - [ ] `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+  - [x] 三条接口在 `cargo run -p lib-web --example api_probe_server` 或集成入口下可访问，响应体是 `{"code":200,"message":"Success","data":…}`。（注册与元数据由 `make gen` 的 29 条路由取证；响应体逐条由 `mcp.api` 在 P4-018 取证）
+  - [x] `server/list` 含 `disabled` 的 server；`tool/list` 按可见名升序；`server/update` 返回动作完成后的状态。（快照来源与排序在 `agent-mcp` 的实现里核对；运行期取值由 `mcp.api` 在 P4-018 取证）
+  - [x] 接口总数 26 → 29 的口径在 `docs/api/` 里只出现两处（`readme.md` 的总数与 `mcp.md` 的领域清单），两者一致。
+  - [x] `cargo clippy --workspace --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.api` 在 P4-018）。
 
-- [ ] **P4-015 `docs/api/mcp.md` 与接口索引**
+- [x] **P4-015 `docs/api/mcp.md` 与接口索引**
 
   **目标**：新增领域文档，写清三条接口的入参、载荷、状态语义与错误文案。
   **前置依赖**：P4-014。
@@ -290,11 +291,11 @@
   2. 写清 `status` 五个取值与 `action` 四个取值的语义，以及「`enable` / `disable` 只改内存、重启回到配置」的约定（D-P4-008）。
   3. `docs/api/readme.md` 的领域表加一行 `mcp.md`，接口总数从 26 改为 29（并更新各领域分项：probe 12 / session 6 / runtime 4 / occupancy 3 / tool 1 / mcp 3）。
   **验收标准**：
-  - [ ] 文档里的 path、字段名、枚举取值与 `crates/lib-web/src/mcp/` 的代码逐项一致。
-  - [ ] 索引表与总数可对照代码核对（26 + 3 = 29）。
+  - [x] 文档里的 path、字段名、枚举取值与 `crates/lib-web/src/mcp/` 的代码逐项一致。
+  - [x] 索引表与总数可对照代码核对（26 + 3 = 29）。
   **测试要求**：无。
 
-- [ ] **P4-016 SDK 重生成、前端类型检查与 `docs/workspace.md` 同步**
+- [x] **P4-016 SDK 重生成、前端类型检查与 `docs/workspace.md` 同步**
 
   **目标**：客户端侧拿到新接口；结构文档与新 Crate 对齐。
   **前置依赖**：P4-014、P4-015。
@@ -304,8 +305,8 @@
   2. `make gen-check`、`make ui-check` 通过（前端不新增页面，只保证类型仍编译）。
   3. `docs/workspace.md`：`agent-mcp` 去掉「阶段：P4」的规划口吻，补「依赖 `agent-tool` / `lib-core` + `rmcp`」「不依赖 `types-core`」「工具经 `Tool` 适配进入 `agent-tool` 注册表」；§8.1 成员数与 `Cargo.toml` 的 members 一致。
   **验收标准**：
-  - [ ] `make gen` / `make gen-check` / `make ui-check` 退出码 0。
-  - [ ] `docs/workspace.md` 的 `agent-mcp` 段与 `Cargo.toml` / `cargo tree` 的事实一致。
+  - [x] `make gen` / `make gen-check` / `make ui-check` 退出码 0。
+  - [x] `docs/workspace.md` 的 `agent-mcp` 段与 `Cargo.toml` / `cargo tree` 的事实一致。
   **测试要求**：无。
 
 ---

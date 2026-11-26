@@ -24,7 +24,9 @@ pub use session::{
 };
 
 /// MCP 管理面的契约类型：Handler 直接转发，不维护第二套 DTO（P4-014）。
-pub use agent_mcp::{McpAction, McpManagerError, McpServerVO, McpStatusKind, McpToolVO};
+pub use agent_mcp::{
+    McpAction, McpManagerError, McpServerUpdatePO, McpServerVO, McpStatusKind, McpToolListParams, McpToolVO,
+};
 /// Provider 配置服务：只读，装载结果由启动方经 [`AssemblyOptions`] 传入（P2-017）。
 pub use agent_route::ProviderService;
 /// 会话业务错误：与 `service-core` 同一套语义，`lib-web` 只在这里映射一次状态码。

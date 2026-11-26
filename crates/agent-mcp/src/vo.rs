@@ -4,7 +4,7 @@
 //! （与 `ToolCallVO` 同一条路径）：接口层不再维护第二套 DTO（`AGENTS.md` 第 19 条）。
 //!
 //! 边界：`McpServerVO` / `McpToolVO` 由 [`crate::McpManager`] 的快照产出；动作与查询入参
-//! （`McpServerUpdatePO` / `McpToolListParams`）属于接口契约，与 handler 一起落地（P4-014）。
+//! （`McpServerUpdatePO` / `McpToolListParams`）也定义在这里，接口层只解包转发（P4-014）。
 
 use framework_proc_auto::{auto_enum, auto_type};
 
@@ -72,4 +72,22 @@ pub struct McpToolVO {
     pub description: String,
     /// 原样透传的参数 JSON Schema 文本（前端不解析，只展示）。
     pub parameters: String,
+}
+
+/// 管理动作的请求体（`api/mcp/server/update`）：`serverId` + `action`。
+#[auto_type(default = false)]
+pub struct McpServerUpdatePO {
+    /// 目标 server 标识；未知 `id` 是 400 `MCP 服务器不存在`，不是 404。
+    pub server_id: String,
+    /// 要执行的动作。
+    pub action: McpAction,
+}
+
+/// 工具清单的查询参数（`api/mcp/tool/list`）：`serverId` 可选。
+///
+/// 缺省返回全部 server 的工具；未知 `id` 返回空列表（不是 404，同审计查询口径）。
+#[auto_type]
+pub struct McpToolListParams {
+    /// 只返回该 server 的工具。
+    pub server_id: Option<String>,
 }

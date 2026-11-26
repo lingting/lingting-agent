@@ -13,8 +13,9 @@
 | [runtime.md](runtime.md) | runtime（客户端连接） | 注册、上行消息（心跳 / 问询应答 / 工具确认）、主动断开与唯一的下行事件流 `api/client/stream`，共 4 条 |
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
 | [tool.md](tool.md) | tool（工具审计） | 按 Run 查询工具调用审计记录（只读），共 1 条 |
+| [mcp.md](mcp.md) | mcp（MCP 管理） | MCP server 的连接状态与工具清单查询、启停 / 重连 / 探测，共 3 条 |
 
-当前接口总数 **26 条**（不含仅 `debug` + `metrics` 特性构建注册的 `api/probe/metrics`）：probe 12、session 6、runtime 4、occupancy 3、tool 1。
+当前接口总数 **29 条**（不含仅 `debug` + `metrics` 特性构建注册的 `api/probe/metrics`）：probe 12、session 6、runtime 4、occupancy 3、tool 1、mcp 3。
 
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 
