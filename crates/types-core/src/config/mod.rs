@@ -38,10 +38,14 @@
 //!
 //! MCP 的配置**不在** `config.toml` 里：它独立成应用根目录下的 `mcp.toml`（[`mcp`] 模块有示例），
 //! 随 server 数量增长，与主配置的装载节奏不同。
+//!
+//! Skill 的配置同理：独立成应用根目录下的 `skills.toml`（[`skills`] 模块有示例），
+//! 与 `mcp.toml` 同构（D-P5-007）。
 
 pub mod agent;
 pub mod mcp;
 pub mod provider;
+pub mod skills;
 pub mod tools;
 
 pub use agent::{AgentConfig, Concurrency};
@@ -49,4 +53,5 @@ pub use mcp::{
     McpConcurrencyKind, McpConfig, McpFileAccessKind, McpPermissionKind, McpServerConfig, McpTransportConfig,
 };
 pub use provider::{ModelConfig, ProviderConfig, ProviderKind, Secret};
+pub use skills::SkillsConfig;
 pub use tools::{ToolConfig, ToolFileConfig, ToolHttpConfig, ToolPermissionKind};

@@ -62,6 +62,11 @@
 //! MCP 的配置**不在** `config.toml` 里：它独立成应用根目录下的 `mcp.toml`（与 `config.toml` 同级，
 //! P4-004），由 [`resolve_server`] 一并装载、一并无条件校验。文件缺失等价于「没有 MCP 配置」，
 //! 文件存在但为空、字段混用、`id` 不合规与非法枚举值都是启动期硬错误（退出码 2）。客户端命令不读它。
+//!
+//! Skill 的配置同理独立成应用根目录下的 `skills.toml`（D-P5-007），由 [`resolve_server`] 一并
+//! 装载与校验：文件缺失等价于「全部缺省」（Skill 功能照常启用），文件存在但为空、字段类型错、
+//! `0` 上限、空 `root`、`max_description_chars > max_index_chars`、`disabled` 的空名字与非法名字
+//! 都是启动期硬错误（退出码 2）。客户端命令同样不读它。
 use crate::command::ServerArgs;
 use anyhow::{Context, Result, anyhow};
 use lib_core::directorys::directorys;
@@ -73,7 +78,7 @@ use std::str::FromStr;
 use tracing_subscriber::filter::LevelFilter;
 use types_core::config::tools::BUILTIN_TOOL_NAMES;
 use types_core::config::{
-    AgentConfig, Concurrency, McpConfig, McpServerConfig, McpTransportConfig, ProviderConfig, ToolConfig,
+    AgentConfig, Concurrency, McpConfig, McpServerConfig, McpTransportConfig, ProviderConfig, SkillsConfig, ToolConfig,
 };
 use url::Url;
 
@@ -101,6 +106,8 @@ pub struct ServerConfig {
     pub llm: LlmConfig,
     /// MCP server 配置（独立文件 `mcp.toml`，P4-004）；文件缺失等价于「没有 MCP」。
     pub mcp: McpConfig,
+    /// Skill 配置（独立文件 `skills.toml`，D-P5-007）；文件缺失等价于「全部缺省」。
+    pub skills: SkillsConfig,
 }
 
 /// 事件文件轮转配置：`None` 表示取服务端默认值，`Some(0)` 表示该维度不限制。
@@ -151,6 +158,7 @@ pub fn resolve_server(args: &ServerArgs) -> Result<ServerConfig> {
         },
         llm: llm_from(&file)?,
         mcp: load_mcp()?,
+        skills: load_skills()?,
     })
 }
 
@@ -541,6 +549,126 @@ fn validate_http_url(url: &str, id: &str) -> Result<()> {
         return Err(anyhow!("mcp.toml 的 server {id} 的 url 缺少主机名：{url}"));
     }
     Ok(())
+}
+
+/// Skill 名字规则（与 `agent-skill::validate_name` 逐字符一致，D-P5-005）：
+/// `^[a-z0-9][a-z0-9_-]{0,63}$`。本 crate 不依赖 `agent-skill`（那是领域 Crate），因此本地再实现
+/// 一次；两处规则由 `skill.config` 与 `skill.parse` 用例同时锚定。
+const SKILL_NAME_RULE: &str = "^[a-z0-9][a-z0-9_-]{0,63}$";
+/// `skills.toml` 的四个字符 / 字节上限字段名（按此顺序校验，错误因此是确定的）。
+const SKILL_MAX_FIELDS: [&str; 4] = [
+    "max_index_chars",
+    "max_description_chars",
+    "max_skill_bytes",
+    "max_inline_chars",
+];
+
+/// 装载应用根目录下的 `skills.toml`：文件缺失等价于「全部缺省」（Skill 功能照常启用）。
+///
+/// 与 `config.toml` / `mcp.toml` 分开装载：`disabled` 名单是运维开关，会随 Skill 数量增长，
+/// 且改一次就要重启服务；客户端命令也不读它（只有服务端需要认识 Skill）。
+fn load_skills() -> Result<SkillsConfig> {
+    let path = directorys()?.skills_file.clone();
+    match fs::read_to_string(&path) {
+        Ok(text) => parse_skills(&text).with_context(|| format!("解析 Skill 配置文件失败：{}", path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(SkillsConfig::default()),
+        Err(error) => Err(error).with_context(|| format!("读取 Skill 配置文件失败：{}", path.display())),
+    }
+}
+
+/// 解析并校验一份 `skills.toml` 文本：用例用它验证装载规则，不读写文件系统。
+///
+/// 先按 `toml::Value` 做字段级校验（serde 只报「类型不对」，报不出是哪个字段），再反序列化成类型
+/// 做跨字段校验；未知字段忽略（与 `SKILL.md` 的 frontmatter 同一口径）。文件存在但内容为空是
+/// 硬错误——写了个空文件等于「我本想配置但没写成」，不能静默当成全部缺省。
+pub fn parse_skills(text: &str) -> Result<SkillsConfig> {
+    if text.trim().is_empty() {
+        return Err(anyhow!("skills.toml 不能为空：要全部取缺省请删除该文件"));
+    }
+    let table = match toml::from_str::<toml::Value>(text).context("解析 skills.toml 失败")? {
+        toml::Value::Table(table) => table,
+        _ => return Err(anyhow!("skills.toml 的顶层必须是配置项（键值对）")),
+    };
+    validate_skill_fields(&table)?;
+    let config = SkillsConfig::deserialize(toml::Value::Table(table)).context("skills.toml 的顶层配置不合法")?;
+    validate_skills(&config)?;
+    Ok(config)
+}
+
+/// 逐字段的原文校验：类型、是否为空、四个上限是否为正整数。
+///
+/// 这些检查必须按原文做：反序列化只会报「取值类型不对」，报不出字段名，而错误文案要能直接
+/// 指出是哪个字段写错了。
+fn validate_skill_fields(table: &toml::Table) -> Result<()> {
+    if let Some(value) = table.get("enabled")
+        && !value.is_bool()
+    {
+        return Err(anyhow!("skills.toml 的 enabled 必须是布尔值"));
+    }
+    if let Some(value) = table.get("root")
+        && !value.is_str()
+    {
+        return Err(anyhow!("skills.toml 的 root 必须是字符串"));
+    }
+    if let Some(value) = table.get("disabled") {
+        let items = value
+            .as_array()
+            .ok_or_else(|| anyhow!("skills.toml 的 disabled 必须是字符串数组"))?;
+        if items.iter().any(|item| !item.is_str()) {
+            return Err(anyhow!("skills.toml 的 disabled 的每一项都必须是字符串"));
+        }
+    }
+    for field in SKILL_MAX_FIELDS {
+        let Some(value) = table.get(field) else {
+            continue;
+        };
+        let number = value
+            .as_integer()
+            .ok_or_else(|| anyhow!("skills.toml 的 {field} 必须是整数"))?;
+        if number <= 0 {
+            return Err(anyhow!("skills.toml 的 {field} 必须大于 0"));
+        }
+    }
+    Ok(())
+}
+
+/// 跨字段与取值校验：`root` 非空、描述上限不大于索引上限、`disabled` 里没有空名字与非法名字。
+fn validate_skills(config: &SkillsConfig) -> Result<()> {
+    if config.root.as_os_str().is_empty() {
+        return Err(anyhow!("skills.toml 的 root 不能为空"));
+    }
+    if config.max_description_chars > config.max_index_chars {
+        return Err(anyhow!(
+            "skills.toml 的 max_description_chars 不能大于 max_index_chars（{} > {}）",
+            config.max_description_chars,
+            config.max_index_chars
+        ));
+    }
+    for name in &config.disabled {
+        if name.trim().is_empty() {
+            return Err(anyhow!("skills.toml 的 disabled 不能包含空名字"));
+        }
+        if !valid_skill_name(name) {
+            return Err(anyhow!(
+                "skills.toml 的 disabled 含非法名字：{name}（规则 {SKILL_NAME_RULE}）"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Skill 名字规则：`^[a-z0-9][a-z0-9_-]{0,63}$`（大小写敏感，不做归一化）。
+fn valid_skill_name(name: &str) -> bool {
+    match name.as_bytes().split_first() {
+        Some((first, rest)) => {
+            (first.is_ascii_lowercase() || first.is_ascii_digit())
+                && rest.len() <= 63
+                && rest
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_' || *byte == b'-')
+        }
+        None => false,
+    }
 }
 
 /// Provider 校验：写了 `[provider]` 段就要求整段自洽，任何非法取值都是启动期硬错误。

@@ -241,7 +241,7 @@ Agent Context 的基础抽象，是 Skill、MCP、Tool 等模块参与 Context �
 
 #### agent-skill
 
-Agent Skills 能力（阶段：P5）。
+Agent Skills 能力（P5 起落地）。
 
 职责：
 
@@ -253,8 +253,18 @@ Agent Skills 能力（阶段：P5）。
 - Skill References。
 - Skill Instructions。
 - Skill 对 Context 的贡献。
+- 章节切分（ATX 标题，自研按行扫描）。
+- 索引渲染（进系统提示的那一段）。
+- `skill_load` 适配器。
 
-边界：只提供"任务知识"，不提供执行能力；Skill 声明所需 Tool，但不由本 Crate 执行 Tool。
+边界与约定：
+
+- 只提供"任务知识"，不提供执行能力；Skill 声明所需 Tool，但不由本 Crate 执行 Tool。
+- 唯一的工具形态是 `skill_load`：一个只读检索工具，经 `agent-tool` 的 `Tool` 契约适配（D-P5-001）。新增 `agent-skill -> agent-tool` 这条边**只为一个只读检索工具**，不是执行 Skill 声明的工具；工具层与 MCP 适配层都不认识 Skill。
+- 依赖 `agent-tool`（`Tool` 契约与工具名规则）、`agent-context-core` / `agent-core` / `lib-core`，外加 `serde_yaml_ng`（frontmatter 的 YAML 解析，本仓库唯一使用方）、`serde` / `serde_json` / `schemars`（`skill_load` 的参数 schema）、`async-trait`、`tracing`（解析失败只进 debug 日志）与契约 DTO 的 `framework-proc-auto` / `framework-proc-core`（`collect`）、`serde_with` / `specta` / `strum` / `strum_macros`。
+- 章节切分只认 ATX 标题与代码围栏，不引入任何 Markdown crate；`SKILL.md` 不识别 Setext 标题（D-P5-017）。
+- **不依赖** `types-core`：`skills.toml` 由装配层读成上限参数再喂进来（与 `agent-tool` 处理 `[tools]`、`agent-mcp` 处理 `mcp.toml` 同一口径）。
+- **不依赖** `agent-runtime` / `agent-route` / `rig-core` / `service-core` / `lib-db` / `lib-web*` / `bin-*`。
 
 #### agent-tool
 
@@ -678,7 +688,7 @@ manager-agent -> service-agent
 | `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
-| `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
+| `agent-skill` | `agent-tool`（`skill_load` 的 `Tool` 契约与工具名规则，P5 起）、`agent-context-core`、`agent-core`、`lib-core` | `serde_yaml_ng`（frontmatter 的 YAML 解析，本仓库唯一使用方）、自研的 ATX 章节切分（不引入 Markdown crate）、`serde` / `serde_json`、`schemars`（`skill_load` 的参数 schema）、`async-trait`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、`serde_with` / `specta` / `strum` / `strum_macros` | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
 | `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`url`（`http_request` 的地址解析与 host 白名单匹配）、`chrono`（`current_time` 的 ISO8601 格式化）、`anyhow`（`http_request` 的错误归一化，框架以 `anyhow::Result` 返回）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
 | `agent-mcp` | `agent-tool`、`lib-core` | `rmcp`、`reqwest`（HTTP transport 的底层客户端）、`blake3`（可复算短哈希）、Tokio（子进程、超时与取消）、`async-trait`、`futures-util`、`tokio-util`、`serde` / `serde_json`、`serde_with` / `specta` / `strum` / `strum_macros`（契约 DTO 的 `auto_type` / `auto_enum` 派生）、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`） | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
 | `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
@@ -727,6 +737,7 @@ flowchart BT
     skill["agent-skill"] --> ctxcore
     skill --> agentcore
     skill --> libcore
+    skill --> tool
     tool["agent-tool"] --> ctxcore
     tool --> libcore
     mcp["agent-mcp"] --> tool
@@ -899,7 +910,7 @@ embed-ui = ["dep:rust-embed"]
 
 目标架构包含的 Crate **不要求一次性创建**。创建顺序严格跟随 `.steps/` 路线图。
 
-### 8.1 当前实际实现范围（P1 / P1.1 / P2 / P3 / P4 进行中）
+### 8.1 当前实际实现范围（P1 / P1.1 / P2 / P3 / P4 / P5 进行中）
 
 | Crate | 阶段 | 说明 |
 |---|---|---|
@@ -921,6 +932,7 @@ embed-ui = ["dep:rust-embed"]
 | `agent-runtime` | P2 | Agent Loop、执行端口实现与全局并发限制 |
 | `agent-tool` | P3 | Tool Trait / 定义 / Schema / 注册表 / 执行器与内置工具 |
 | `agent-mcp` | P4 | MCP Client / transport / 工具发现 / Tool 适配（`rmcp` 只在本 Crate） |
+| `agent-skill` | P5 | Skills：`SKILL.md` 解析、章节切分、引用扫描、索引渲染（发现与注册于 P5 后续任务落地） |
 | `bin-tests` | P1 | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
 P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_sdk`；生成逻辑与其共用输出处理在 `examples/support/`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
@@ -965,13 +977,23 @@ P3 路线图新增 `agent-tool`，P4 路线图新增 `agent-mcp`（`.steps/p3/`�
 | `manager-agent -> agent-mcp` | 装配期建 MCP 门面、接入注册表并在关闭时回收子进程（P4-010 ~ P4-013） |
 | `bin-tests -> agent-tool` / `agent-mcp` | 用例在进程内核对工具契约与 MCP 状态机（P3-030 / P4-018） |
 
+### 8.1.3 P5 落地的依赖边
+
+P5 路线图新增 `agent-skill`（`.steps/p5/`），落地后的依赖边（与 5.1 一致）：
+
+| 边 | 说明 |
+|---|---|
+| `agent-skill -> agent-tool` / `agent-context-core` / `agent-core` / `lib-core` | Skill 知识层的解析与检索；`agent-tool` 只为一个只读检索工具 `skill_load`（P5-001 / D-P5-001） |
+
+这是 P5 唯一新增的依赖边：`serde_yaml_ng` 只进 `agent-skill`（`cargo tree -i serde_yaml_ng` 只命中它），`agent-tool` 的消费者只新增 `agent-skill`。装配层（`manager-agent`）与接口层（`lib-web`）接入 `agent-skill` 的边在 P5 后续批次落地，届时在此追加。
+
 ### 8.2 后续阶段创建范围
 
 | 阶段 | 新增 Crate | 状态 |
 |---|---|---|
 | P3 | `agent-tool` | 已创建（P3-001） |
 | P4 | `agent-mcp` | 已创建（P4-001）；门面、装配、指标与 3 条管理接口已落地（P4-010 ~ P4-014） |
-| P5 | `agent-skill` | 未创建 |
+| P5 | `agent-skill` | 已创建（P5-001）；`SKILL.md` 解析、章节切分与引用扫描已落地（P5-003），发现、索引、接口与客户端在 P5 后续批次 |
 | P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
 
 ### 8.3 阶段实现与目标依赖的差异

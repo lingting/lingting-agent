@@ -17,6 +17,7 @@ members = [
     "crates/agent-runtime",
     "crates/agent-tool",
     "crates/agent-mcp",
+    "crates/agent-skill",
     "crates/lib-db",
     "crates/manager-agent",
     "crates/bin-tests",
@@ -50,6 +51,7 @@ agent-route = { path = "crates/agent-route" }
 agent-runtime = { path = "crates/agent-runtime" }
 agent-tool = { path = "crates/agent-tool" }
 agent-mcp = { path = "crates/agent-mcp" }
+agent-skill = { path = "crates/agent-skill" }
 lib-db = { path = "crates/lib-db" }
 manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
@@ -74,6 +76,9 @@ base64 = { version = "0.22" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 serde_with = { version = "3.21" }
+# YAML frontmatter 解析：`serde_yaml` 已停止维护，用它的维护 fork（API 同形，带 `location()`）。
+# 版本只固定在 workspace 这一处；`agent-skill` 是唯一使用方（D-P5-017）。
+serde_yaml_ng = { version = "0.10" }
 schemars = { version = "1.2" }
 specta = { version = "=2.0.0-rc.25", features = ["derive", "function", "bytes"] }
 specta-typescript = { version = "0.0.12" }

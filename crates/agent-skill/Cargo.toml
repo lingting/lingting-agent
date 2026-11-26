@@ -1,0 +1,44 @@
+[package]
+name = "agent-skill"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Skills：SKILL.md 解析、章节切分、引用扫描与 skill_load 适配"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# 应用根目录与基础能力（相对路径口径、取消信号与日志初始化）。
+lib-core = { workspace = true }
+# Skill 的元数据引用 Agent 领域的稳定标识类型，本 Crate 不自造一套。
+agent-core = { workspace = true }
+# Skill 对 Context 的贡献沿用 Context 侧的抽象（D-P5-003）。
+agent-context-core = { workspace = true }
+# `skill_load` 是唯一的工具形态：经 `Tool` 契约适配，不新增执行路径（D-P5-001 / D-P5-002）。
+agent-tool = { workspace = true }
+
+# frontmatter 是 YAML（`serde_yaml_ng` 是 `serde_yaml` 的维护 fork，API 同形，D-P5-017）。
+# 版本固定在 workspace 一处；本 Crate 只写 `workspace = true`。
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
+serde_json = { workspace = true }
+# `skill_load` 的参数 schema 由类型派生（与内置工具同一口径，D-P3-002）。
+schemars = { workspace = true }
+async-trait = { workspace = true }
+# 解析失败的原始错误只经 `tracing::debug` 落地，不进 `Display`（D-P5-018）。
+tracing = { workspace = true }
+
+# 契约 DTO（`SkillVO` / `SkillDetailVO` / `SkillUpdatePO`）用 `auto_type` 标注参与 SDK 生成；
+# 宏展开使用绝对路径，因此必须直接声明，`collect` 让类型元数据可被导出器看到。
+framework-proc-auto = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect"] }
+# `auto_type` / `auto_enum` 展开出的派生与适配器必须在本 crate 可见（同 `agent-tool`）。
+serde_with = { workspace = true }
+specta = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+
+[lints]
+workspace = true

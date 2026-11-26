@@ -15,6 +15,10 @@ pub const CONFIG_FILE: &str = "config.toml";
 ///
 /// 与主配置分开：它随 MCP server 数量增长，改一次就要重启服务，与主配置的装载节奏不同。
 pub const MCP_CONFIG_FILE: &str = "mcp.toml";
+/// Skill 配置文件名，位于应用根目录（与 `config.toml` / `mcp.toml` 同级，独立文件，D-P5-007）。
+///
+/// 与 `mcp.toml` 同构：一个能力一个文件，`disabled` 名单会随 Skill 数量增长。
+pub const SKILLS_CONFIG_FILE: &str = "skills.toml";
 /// CLI 日志目录名称。
 const LOGS_CLI_DIRECTORY: &str = "logs-cli";
 /// TUI 日志目录名称。
@@ -36,6 +40,8 @@ pub struct AppDirectories {
     pub config_file: PathBuf,
     /// MCP 服务器配置路径，位于应用根目录；缺失等价于「没有 MCP 配置」。
     pub mcp_file: PathBuf,
+    /// Skill 配置路径，位于应用根目录；缺失等价于「全部缺省」（Skill 功能照常启用）。
+    pub skills_file: PathBuf,
     /// 服务端日志目录。
     pub logs_server: PathBuf,
     /// CLI 日志目录。
@@ -72,6 +78,7 @@ impl AppDirectories {
             data: create_directory(&root.join("data"))?,
             config_file: root.join(CONFIG_FILE),
             mcp_file: root.join(MCP_CONFIG_FILE),
+            skills_file: root.join(SKILLS_CONFIG_FILE),
             logs_server: create_directory(&root.join("logs"))?,
             logs_cli: create_directory(&root.join(LOGS_CLI_DIRECTORY))?,
             logs_tui: create_directory(&root.join(LOGS_TUI_DIRECTORY))?,
@@ -91,6 +98,7 @@ impl AppDirectories {
             data: directory.data,
             config_file: root.join(CONFIG_FILE),
             mcp_file: root.join(MCP_CONFIG_FILE),
+            skills_file: root.join(SKILLS_CONFIG_FILE),
             logs_server: directory.logs,
             logs_cli: create_directory(&root.join(LOGS_CLI_DIRECTORY))?,
             logs_tui: create_directory(&root.join(LOGS_TUI_DIRECTORY))?,
