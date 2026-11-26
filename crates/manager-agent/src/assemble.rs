@@ -2,11 +2,17 @@
 //!
 //! 装配顺序固定：先迁库再自愈残留 Run，最后才允许接入请求；任一步失败都返回可读错误，
 //! 由启动方（`lib-bin-web`）转成非 0 退出码（P2-013）。
+//!
+//! 工具与 Skill 的顺序同样固定（P3-014 / P4-011 / P5-010）：内置工具注册表 → Skill 发现与
+//! `skill_load` 注册 → MCP 接入 → Context 组装器（`AGENTS.md` + Skill 索引）交给运行时。Skill
+//! 必须先于 MCP：`skill_load` 先入注册表，MCP 的工具随后进来，「缺工具」标记因此按运行期现状
+//! 判定（D-P5-009）。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_context::ContextBuilder;
 use agent_mcp::{FileAccessRules, McpManager, McpServerSpec, McpTransport};
 use agent_route::ProviderService;
 use agent_tool::builtin::{BuiltinOptions, register_all};
@@ -18,11 +24,12 @@ use service_core::repository::Repository;
 use service_core::session::SessionService;
 use types_core::config::{
     AgentConfig, McpConcurrencyKind, McpConfig, McpFileAccessKind, McpPermissionKind, McpServerConfig,
-    McpTransportConfig, ProviderConfig, ToolConfig, ToolPermissionKind,
+    McpTransportConfig, ProviderConfig, SkillsConfig, ToolConfig, ToolPermissionKind,
 };
 
 use crate::holder::AgentHolder;
 use crate::runtime::{JournalConfig, RuntimeState};
+use crate::skill::build_skills;
 
 /// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（无法确认是否已产生结果）。
 const HEAL_RUNNING: &str = "服务重启，执行中的 Run 已终止";
@@ -44,6 +51,8 @@ pub struct AssemblyOptions {
     pub tools: ToolConfig,
     /// MCP 配置（`mcp.toml`）；由启动方从独立配置文件装载后透传（P4-011）。
     pub mcp: McpConfig,
+    /// Skill 配置（`skills.toml`）；由启动方从独立配置文件装载后透传（P5-010）。
+    pub skills: SkillsConfig,
     /// 数据库连接参数。
     pub database: DbConfig,
     /// 应用根目录；`None` 时按应用目录推导（用例传自己的临时目录）。
@@ -107,8 +116,25 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         }
     };
     let (tools, tool_limits) = build_tools(&options.tools)?;
+    // 配置冲突可见但不阻断启动（D-P5-010）：执行器的 `max_result_chars` 是最后一道闸，
+    // 正常配置下 `max_inline_chars < max_result_chars`，不会触发工具结果截断。
+    if options.skills.enabled && options.skills.max_inline_chars > tool_limits.max_result_chars {
+        tracing::warn!(
+            max_inline_chars = options.skills.max_inline_chars,
+            max_result_chars = tool_limits.max_result_chars,
+            "skills.toml 的 max_inline_chars 大于 [tools] max_result_chars：skill_load 的结果会被执行器截断"
+        );
+    }
+    // Skill 在 MCP 之前接入：`skill_load` 先入注册表，MCP 的工具随后进来，缺工具标记因此按运行期
+    // 现状判定（D-P5-009 / P5-010 的装配顺序）。
+    let skills = build_skills(&options.skills, &home, &tools).context("装配 Skill 失败")?;
     // MCP 在工具注册表建好之后接入：工具经同一个注册表暴露给模型（P4-011）。
     let mcp = build_mcp(&options.mcp, &home, Arc::clone(&tools)).await;
+    // Context 组装器由装配层造好给运行时（D-P5-016）：索引与 `AGENTS.md` 在这里合成同一份来源。
+    let builder = match skills.source() {
+        Some(source) => ContextBuilder::new(home.clone()).with_skills(Arc::clone(source)),
+        None => ContextBuilder::new(home.clone()),
+    };
     Ok(AgentHolder::new(
         session,
         runtime,
@@ -118,6 +144,8 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         tools,
         tool_limits,
         mcp,
+        skills,
+        builder,
     ))
 }
 

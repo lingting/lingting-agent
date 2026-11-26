@@ -173,12 +173,17 @@ Agent 装配、进程内运行时与跨 Service 编排（P2-013 / P2-035 起）�
 - 启动装配：应用目录 → 数据库（迁移 + 残留 Run 自愈）→ Repository → Service → 运行时状态。
 - 进程级 holder（`AgentHolder`）：持有 `session: Arc<SessionService>`、`runtime: RuntimeState`、
   `provider: ProviderService`（模型查找下沉在 `agent-route`）、`agent: AgentConfig`、工具注册表与执行参数，
-  以及 MCP 门面 `mcp: Arc<McpManager>`（P4-011 起），
-  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent` / `tools` / `mcp`）。
+  MCP 门面 `mcp: Arc<McpManager>`（P4-011 起）、Skill 部件 `skills: Arc<SkillManager>` 与 Context
+  组装器 `builder: ContextBuilder`（P5-010 起），
+  向 Handler 提供显式注入的访问入口（`install` / `holder` / `runtime` / `session` / `provider` / `agent` /
+  `tools` / `mcp` / `skills` / `context_builder`）。
 - 进程内运行时：客户端注册表、会话占用、事件文件与轮转、断连处理链、心跳扫描（`runtime/`）。
 - Run 执行：串行执行队列、取消信号登记与执行端口安装；事件生产自 P2-023 起由 `agent-runtime` 提供。
 - 跨组件协调：发送消息后唤醒该会话的执行队列；停止运行时会话时取消未结束的 Run。
 - 关闭入口：先让 Run 落终态（断连处理链），再关闭 MCP 连接与其子进程（P4-012）。
+- Skill 装配（P5-010 起）：`skills.toml` → `SkillLimits` 的翻译、`agent_skill::discover` 的调用、
+  `skill_load` 的注册与装配日志（只记相对目录与状态），以及索引来源交给 Context 组装器；
+  索引渲染与正文加载仍在 `agent-skill` 内完成。
 
 边界：
 
@@ -201,6 +206,8 @@ manager-agent
     +-- runner     Run 执行队列、取消信号登记与执行端口安装（生产方来自 `agent-runtime`）
     |
     +-- session    会话业务对外入口与唤醒协调
+    |
+    +-- skill      Skill 发现、`skill_load` 注册与工具可用性判定（P5-010）
 ```
 
 ### 3.2 Agent 领域层
@@ -331,7 +338,9 @@ Context 组装与管理实现。
 - Context Filtering。
 - Context Compression（后续）。
 
-边界：它是 Context 的具体组装与协调层，**不负责 Agent Loop，也不直接发起 LLM 请求**。
+边界：它是 Context 的具体组装与协调层，**不负责 Agent Loop，也不直接发起 LLM 请求**。Skill 索引与
+`AGENTS.md` 合并成同一条 system 消息（P5-007 / D-P5-003）；正文不进组装路径，只作为 `skill_load` 的
+工具结果在后续轮次出现（D-P5-002）。
 
 #### agent-route
 
@@ -685,13 +694,13 @@ manager-agent -> service-agent
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
 | `service-core` | `agent-core`（仅类型层，P2 起）、`agent-tool`（仅类型层，P3 起：审计记录与查询载荷，D-P3-011）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` / `agent-tool` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
-| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起）、`agent-skill`（工具可用性判定与 Skill 门面，P5-006 / P5-010 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
+| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起）、`agent-skill`（工具可用性判定与 Skill 门面，P5-006 / P5-010 起）、`agent-context`（Context 组装器在装配层构造，P5-010 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-tool`（`skill_load` 的 `Tool` 契约与工具名规则，P5 起）、`agent-context-core`、`agent-core`、`lib-core` | `serde_yaml_ng`（frontmatter 的 YAML 解析，本仓库唯一使用方）、自研的 ATX 章节切分（不引入 Markdown crate）、`serde` / `serde_json`、`schemars`（`skill_load` 的参数 schema）、`async-trait`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、`serde_with` / `specta` / `strum` / `strum_macros` | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
 | `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`url`（`http_request` 的地址解析与 host 白名单匹配）、`chrono`（`current_time` 的 ISO8601 格式化）、`anyhow`（`http_request` 的错误归一化，框架以 `anyhow::Result` 返回）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
 | `agent-mcp` | `agent-tool`、`lib-core` | `rmcp`、`reqwest`（HTTP transport 的底层客户端）、`blake3`（可复算短哈希）、Tokio（子进程、超时与取消）、`async-trait`、`futures-util`、`tokio-util`、`serde` / `serde_json`、`serde_with` / `specta` / `strum` / `strum_macros`（契约 DTO 的 `auto_type` / `auto_enum` 派生）、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`） | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
-| `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
+| `agent-context` | `agent-context-core`、`agent-core`（P2 实际）、`agent-skill`（索引进系统提示，P5-007 起；`agent-tool` / `agent-mcp` 的贡献点尚未接入） | `tracing`（系统提示词扫描、选中的文件与索引字符数的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`types-core`、`lib-core`（`agent-tool` 于 P3 接入） | Tokio、`tokio-util`（取消信号）、`async-trait`（实现执行端口）、Tracing | `lib-web*`、`lib-bin-*`、`bin-*`；不直接写 SQL |
 | `lib-web-core` | `lib-core`、`types-core` | `framework-web`、serde、`serde_json`（SSE 帧编码） | `lib-web`、业务 Service、Agent Runtime |
@@ -984,9 +993,11 @@ P5 路线图新增 `agent-skill`（`.steps/p5/`），落地后的依赖边（与
 | 边 | 说明 |
 |---|---|
 | `agent-skill -> agent-tool` / `agent-context-core` / `agent-core` / `lib-core` | Skill 知识层的解析与检索；`agent-tool` 只为一个只读检索工具 `skill_load`（P5-001 / D-P5-001） |
-| `manager-agent -> agent-skill` | 装配层给出工具可用性判定（`RegistryAvailability`，只读工具注册表）与 Skill 门面（P5-006 / P5-010） |
+| `manager-agent -> agent-skill` | 装配层给出工具可用性判定（`RegistryAvailability`，只读工具注册表）、Skill 门面（P5-006 / P5-010）与 `skill_load` 注册 |
+| `agent-context -> agent-skill` | 索引进系统提示：Context 只认识 `SkillIndexSource`，不新增 `ContextSource` 取值（P5-007 / D-P5-003） |
+| `manager-agent -> agent-context` | `ContextBuilder` 由装配层构造后交给运行时，运行时不再自己 `new`（P5-010 / D-P5-016） |
 
-到这里为止新增的依赖边就是上表两条：`serde_yaml_ng` 只进 `agent-skill`（`cargo tree -i serde_yaml_ng` 只命中它），`agent-tool` 的消费者只新增 `agent-skill`。接口层（`lib-web`）接入 `agent-skill` 的边在 P5 后续批次落地，届时在此追加。
+到这里为止新增的依赖边就是上表四条：`serde_yaml_ng` 只进 `agent-skill`（`cargo tree -i serde_yaml_ng` 只命中它），`agent-tool` 的消费者只新增 `agent-skill`。接口层（`lib-web`）接入 `agent-skill` 的边在 P5 后续批次落地，届时在此追加。
 
 ### 8.2 后续阶段创建范围
 

@@ -4,6 +4,14 @@
 //! 裁剪同样固定：先按 `max_messages` 截断最旧，再按预算逐条丢弃最旧；系统提示词与本次输入
 //! 不参与裁剪。裁剪的单位是「段」，工具调用组整组保留或整组丢弃（D-P3-025）。本次输入单条即
 //! 超预算时返回 [`ContextError::PromptTooLarge`]，由调用方落 `FAILED`。
+//!
+//! Skill 索引（P5-007 / D-P5-003）：注入 [`SkillIndexSource`] 后，索引小节与 `AGENTS.md` 文本
+//! **合并成同一条** system 消息（`AGENTS.md` 在前、空行、`## 可用 Skill` 在后），不新增
+//! [`ContextSource`] 取值。索引每次 `build` 现场渲染，正文一律不在这里出现（D-P5-002）。
+//!
+//! 预算口径（P5-009 / D-P5-010）：`run_started.input_tokens` 取自首轮
+//! `Context::metadata().estimated_tokens`，因此**只随索引增长**——`skill_load` 的正文作为工具结果
+//! 进入的是后续轮次，不会改变首次 `input_tokens`。索引本身的字符上限由 `agent-skill` 渲染时守住。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,6 +21,7 @@ use agent_context_core::{
     Context, ContextError, ContextItem, ContextMetadata, ContextPolicy, ContextSource, TokenEstimator,
 };
 use agent_core::session::{Message, MessageRole, SessionSummary};
+use agent_skill::SkillIndexSource;
 
 use crate::estimate::{HeuristicEstimator, item_tokens};
 use crate::system::SystemPrompt;
@@ -20,10 +29,14 @@ use crate::trim;
 
 /// Context 组装器：持有系统提示词来源与估算器，按调用方给出的预算组装。
 ///
-/// 每个进程一个即可（无内部可变状态）：`build` 不做缓存，每次都会重新读取提示词文件。
+/// 每个进程一个即可（无内部可变状态）：`build` 不做缓存，每次都会重新读取提示词文件；装配层造好
+/// 之后交给 `AgentRuntime`，两者共享同一份来源（`Clone` 只复制 `Arc`）。
+#[derive(Clone)]
 pub struct ContextBuilder {
     /// 系统提示词来源。
     system_prompt: SystemPrompt,
+    /// Skill 索引来源；未注入时行为与 P2 完全一致（P5-007）。
+    skills: Option<Arc<SkillIndexSource>>,
     /// token 估算器；默认是 [`HeuristicEstimator`]。
     estimator: Arc<dyn TokenEstimator>,
 }
@@ -41,8 +54,18 @@ impl ContextBuilder {
     pub fn with_estimator(home: impl Into<PathBuf>, estimator: Arc<dyn TokenEstimator>) -> Self {
         Self {
             system_prompt: SystemPrompt::new(home),
+            skills: None,
             estimator,
         }
+    }
+
+    /// 注入 Skill 索引来源：索引小节与 `AGENTS.md` 合并成同一条系统消息（P5-007 / D-P5-003）。
+    ///
+    /// 索引在每次 `build` 时现场渲染，不做缓存：Skill 启停、重载与 MCP 连上工具之后，下一次
+    /// 请求即生效（D-P5-008 / D-P5-009）。
+    pub fn with_skills(mut self, skills: Arc<SkillIndexSource>) -> Self {
+        self.skills = Some(skills);
+        self
     }
 
     /// 组装一次请求的 Context。
@@ -108,9 +131,11 @@ impl ContextBuilder {
         Ok(Context::new(items, metadata))
     }
 
-    /// 读取系统提示词并转成 Item：内容为空（没有提示词文件或文件为空）时返回 `None`。
+    /// 组装系统消息：`AGENTS.md` 文本 + Skill 索引小节，合成为一条 Item（D-P5-003）。
+    ///
+    /// 两段都为空时不发系统消息（P2 既有行为）；只配 `AGENTS.md` 时文本与 P2 逐字节一致。
     fn system_item(&self) -> Result<Option<ContextItem>, ContextError> {
-        let content = self.system_prompt.load()?;
+        let content = compose_system(self.system_prompt.load()?, self.index_section());
         if content.trim().is_empty() {
             return Ok(None);
         }
@@ -120,6 +145,40 @@ impl ContextBuilder {
             content,
         )))
     }
+
+    /// 现场渲染索引小节；没有注入索引来源或没有可用 Skill 时为空串。
+    fn index_section(&self) -> String {
+        let Some(source) = self.skills.as_ref() else {
+            return String::new();
+        };
+        let index = source.index();
+        if index.section.is_empty() {
+            return String::new();
+        }
+        // 索引字符数是预算核对的可观测点（P5-009）：它只影响首轮 input_tokens，不背书正文。
+        tracing::info!(
+            chars = index.chars,
+            shown = index.shown,
+            hidden = index.hidden,
+            "Skill 索引已注入系统提示"
+        );
+        index.section
+    }
+}
+
+/// 合成 system 文本：`AGENTS.md` 在前，中间恰一个空行，索引小节在后。
+///
+/// 任一段为空时不留空行；索引为空时原样返回提示词文本（与 P2 的请求体逐字节一致）。
+fn compose_system(agents: String, index: String) -> String {
+    if index.trim().is_empty() {
+        return agents;
+    }
+    let index = index.trim();
+    let agents = agents.trim();
+    if agents.is_empty() {
+        return index.to_owned();
+    }
+    format!("{agents}\n\n{index}")
 }
 
 /// 历史消息 → Context Item：`SYSTEM` 不进请求，其余角色逐条映射（D-P3-003）。

@@ -16,6 +16,8 @@ agent-context-core = { workspace = true }
 agent-core = { workspace = true }
 # 裁剪条数与被选中的系统提示词文件只进日志（D-P2-013 第 5 条）。
 tracing = { workspace = true }
+# Skill 索引进系统提示：只认识 `agent-skill` 的索引来源类型（P5-007 / D-P5-002）。
+agent-skill = { workspace = true }
 
 [lints]
 workspace = true

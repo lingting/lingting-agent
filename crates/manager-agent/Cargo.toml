@@ -30,6 +30,8 @@ agent-tool = { workspace = true }
 agent-mcp = { workspace = true }
 # Skill 的工具可用性判定：`skill_load` 与索引行按工具注册表现状标注缺失（P5-006 / D-P5-009）。
 agent-skill = { workspace = true }
+# Context 组装器在装配层构造（`AGENTS.md` + Skill 索引），运行时只接收成品（P5-010 / D-P5-016）。
+agent-context = { workspace = true }
 
 anyhow = { workspace = true }
 tokio = { workspace = true }

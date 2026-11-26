@@ -38,6 +38,8 @@ pub const UNKNOWN_SKILL: &str = "技能不存在";
 pub const DISABLED_SKILL: &str = "技能已禁用";
 /// 技能被判为 `INVALID`（解析失败或同名冲突），不可加载。
 pub const UNAVAILABLE_SKILL: &str = "技能不可用";
+/// 技能里没有请求的章节（`skill_load` 的 `section` 参数，D-P5-011）。
+pub const UNKNOWN_SECTION: &str = "技能没有这个章节";
 /// Skill 侧的唯一错误类型。
 ///
 /// 每个取值对应一句固定文案；拼进来的只有相对路径、行号与用户自己写在 `SKILL.md` 里的标识，
@@ -152,6 +154,15 @@ pub enum SkillError {
         /// 判 `INVALID` 的原因。
         error: Box<SkillError>,
     },
+    /// 章节名不存在：文案列出可用章节（按正文顺序，最多前 10 个，D-P5-008）。
+    UnknownSection {
+        /// 被请求的 Skill 名。
+        name: String,
+        /// 被请求的章节名（模型给的原样文本）。
+        section: String,
+        /// 可用章节名，按正文顺序，最多 10 个。
+        available: Vec<String>,
+    },
 }
 
 impl SkillError {
@@ -171,7 +182,10 @@ impl SkillError {
             | Self::UnreadableFile { path }
             | Self::UnreadableReferences { path } => path,
             Self::DuplicateName { first, .. } => first,
-            Self::UnknownSkill { name } | Self::DisabledSkill { name } | Self::InvalidSkill { name, .. } => name,
+            Self::UnknownSkill { name }
+            | Self::DisabledSkill { name }
+            | Self::InvalidSkill { name, .. }
+            | Self::UnknownSection { name, .. } => name,
         }
     }
 
@@ -190,7 +204,8 @@ impl SkillError {
             Self::DuplicateName { .. }
             | Self::UnknownSkill { .. }
             | Self::DisabledSkill { .. }
-            | Self::InvalidSkill { .. } => None,
+            | Self::InvalidSkill { .. }
+            | Self::UnknownSection { .. } => None,
         }
     }
 
@@ -221,6 +236,9 @@ impl SkillError {
             Self::UnknownSkill { name } => format!("{UNKNOWN_SKILL}：{name}"),
             Self::DisabledSkill { name } => format!("{DISABLED_SKILL}：{name}"),
             Self::InvalidSkill { name, error } => format!("{UNAVAILABLE_SKILL}：{name}：{error}"),
+            Self::UnknownSection { section, available, .. } => {
+                format!("{UNKNOWN_SECTION}：{section}（可用章节：{}）", available.join("、"))
+            }
         }
     }
 }
@@ -232,6 +250,8 @@ impl fmt::Display for SkillError {
             Self::UnknownSkill { name } => write!(formatter, "{UNKNOWN_SKILL}：{name}"),
             Self::DisabledSkill { name } => write!(formatter, "{DISABLED_SKILL}：{name}"),
             Self::InvalidSkill { name, error } => write!(formatter, "{UNAVAILABLE_SKILL}：{name}：{error}"),
+            // 名字级的「没有这个章节」也不需要名字前缀：调用方刚刚按名请求过它。
+            Self::UnknownSection { .. } => formatter.write_str(&self.reason()),
             _ => match self.line() {
                 Some(line) => write!(formatter, "{}:{}: {}", self.path(), line, self.reason()),
                 None => write!(formatter, "{}: {}", self.path(), self.reason()),

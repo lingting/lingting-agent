@@ -76,6 +76,8 @@ fn server(args: &ServerArgs) -> ExitCode {
         tools: config.llm.tools,
         // MCP 配置来自独立的 `mcp.toml`（P4-004）；文件缺失即零 server。
         mcp: config.mcp,
+        // Skill 配置来自独立的 `skills.toml`（P5-002 / D-P5-007）；文件缺失即全部缺省。
+        skills: config.skills,
         ..Default::default()
     };
     let result = lib_bin_web::serve(&config.host, config.port, options);

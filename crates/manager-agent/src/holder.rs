@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use agent_context::ContextBuilder;
 use agent_mcp::McpManager;
 use agent_route::ProviderService;
 use agent_tool::{ToolLimits, ToolRegistry};
@@ -13,6 +14,7 @@ use service_core::session::SessionService;
 use types_core::config::AgentConfig;
 
 use crate::runtime::{RuntimeState, handler};
+use crate::skill::SkillManager;
 
 /// 一次装配的产物：会话业务服务 + 进程内运行时 + 只读的 Provider / Agent 配置。
 ///
@@ -35,6 +37,10 @@ pub struct AgentHolder {
     tool_limits: ToolLimits,
     /// MCP 门面：装配期建一次，运行期由管理接口驱动（P4-011）。
     mcp: Arc<McpManager>,
+    /// Skill 部件：注册表、可用性判定器与索引来源（P5-010）。
+    skills: Arc<SkillManager>,
+    /// Context 组装器：`AGENTS.md` + Skill 索引，装配期造好交给运行时（D-P5-016）。
+    builder: ContextBuilder,
 }
 
 impl AgentHolder {
@@ -51,6 +57,8 @@ impl AgentHolder {
         tools: Arc<ToolRegistry>,
         tool_limits: ToolLimits,
         mcp: Arc<McpManager>,
+        skills: Arc<SkillManager>,
+        builder: ContextBuilder,
     ) -> Self {
         Self {
             session,
@@ -61,6 +69,8 @@ impl AgentHolder {
             tools,
             tool_limits,
             mcp,
+            skills,
+            builder,
         }
     }
 
@@ -102,6 +112,16 @@ impl AgentHolder {
     /// MCP 门面：状态快照、启停与重连的唯一入口（P4-010）。
     pub fn mcp(&self) -> &Arc<McpManager> {
         &self.mcp
+    }
+
+    /// Skill 部件：清单、启停与加载都经它取（P5-010）。
+    pub fn skills(&self) -> &Arc<SkillManager> {
+        &self.skills
+    }
+
+    /// Context 组装器：启动方把它交给 `AgentRuntime`（`Clone` 只复制 `Arc`）。
+    pub fn context_builder(&self) -> ContextBuilder {
+        self.builder.clone()
     }
 }
 

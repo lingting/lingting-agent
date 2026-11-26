@@ -20,6 +20,7 @@ version = "26.11.0"
 dependencies = [
  "agent-context-core",
  "agent-core",
+ "agent-skill",
  "tracing",
 ]
 
@@ -2324,6 +2325,7 @@ dependencies = [
 name = "manager-agent"
 version = "26.11.0"
 dependencies = [
+ "agent-context",
  "agent-core",
  "agent-mcp",
  "agent-route",

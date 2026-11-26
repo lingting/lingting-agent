@@ -26,7 +26,7 @@ pub struct AgentRuntime {
     pub(crate) provider: ProviderService,
     /// Provider 适配器；`config.toml` 没有 `[provider]` 段时为 `None`，调用模型时才失败。
     pub(crate) llm: Option<Arc<dyn LlmProvider>>,
-    /// Context 组装器：系统提示词来自 `home` 下的 `AGENTS.md`。
+    /// Context 组装器：由装配层构造（`AGENTS.md` + Skill 索引，P5-007 / D-P5-016）。
     pub(crate) builder: ContextBuilder,
     /// `[agent]` 运行参数：Context 预算、排队超时、轮次上限与模型流空闲超时。
     pub(crate) agent: AgentConfig,
@@ -39,7 +39,7 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    /// 按装配结果构造：`home` 是应用根目录（系统提示词的扫描目录）。
+    /// 按装配结果构造：`home` 是应用根目录（执行器的路径基准）。
     ///
     /// Provider 适配器在这里一次性构造：共享 reqwest 连接池，空闲超时取
     /// `agent.llm_idle_timeout_ms`（P2-016）。未配置 Provider 时留空，`drive` 再按
@@ -47,6 +47,9 @@ impl AgentRuntime {
     ///
     /// 工具注册表与执行参数同样来自装配（P3-014）：注册表在装配期建一次，本函数只读它，
     /// 并用同一个 `home` 与 `limits` 构造执行器（工具的路径白名单基准与截断上限都在这里）。
+    ///
+    /// `builder` 由装配层造好给（P5-010 / D-P5-016）：系统提示词与 Skill 索引怎么合成是 Context
+    /// 的事，运行时既不认识 Skill，也不再自己 `new` 一个 `ContextBuilder`。
     pub fn new(
         service: Arc<SessionService>,
         provider: ProviderService,
@@ -54,6 +57,7 @@ impl AgentRuntime {
         home: impl Into<PathBuf>,
         tools: Arc<ToolRegistry>,
         limits: ToolLimits,
+        builder: ContextBuilder,
     ) -> Self {
         let home = home.into();
         let idle_timeout = Some(Duration::from_millis(agent.llm_idle_timeout_ms));
@@ -70,7 +74,7 @@ impl AgentRuntime {
             service,
             provider,
             llm,
-            builder: ContextBuilder::new(home),
+            builder,
             agent,
             limit,
             tools,

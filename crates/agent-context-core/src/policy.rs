@@ -29,6 +29,8 @@ impl ContextPolicy {
     /// 系统提示词之外可用于历史的 token 预算：
     /// `context_window - max_output_tokens - safety_tokens - system_tokens`。
     ///
+    /// `system_tokens` 是**整条**系统消息的开销：P5 起它包含 Skill 索引小节（索引与 `AGENTS.md`
+    /// 合并成同一条消息，D-P5-003），因此索引规模直接决定历史可用额度（D-P5-010）。
     /// 任一项超出窗口时按 0 处理（saturating），由调用方按「本次输入超预算」报错，不做补偿。
     pub fn available_tokens(&self, system_tokens: usize) -> usize {
         self.context_window

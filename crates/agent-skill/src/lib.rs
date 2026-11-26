@@ -26,7 +26,9 @@
 //! - [`registry`]：快照 + 启用状态 + 上限，读写路径的唯一入口（P5-005）；
 //! - [`index`]：索引小节渲染与行级预算（P5-005 / D-P5-010）；
 //! - [`load`]：按名取正文 / 章节 / 引用清单（P5-005）；
-//! - [`availability`]：工具可用性判定与降级文案的唯一产点（P5-006 / D-P5-009）。
+//! - [`availability`]：工具可用性判定与降级文案的唯一产点（P5-006 / D-P5-009）；
+//! - [`source`]：索引进系统提示的唯一入口（`agent-context` 只认识它，P5-007）；
+//! - [`tool`]：`skill_load` 适配器，按篇幅返回全文 / 章节目录 / 单节（P5-008 / D-P5-011）。
 
 mod availability;
 mod discover;
@@ -38,6 +40,8 @@ mod reference;
 mod registry;
 mod section;
 mod skill;
+mod source;
+mod tool;
 
 pub use availability::{
     INDEX_MISSING_PREFIX, INDEX_MISSING_SUFFIX, MISSING_CONSTRAINT, MISSING_HEADING, ToolAvailability, index_suffix,
@@ -51,3 +55,5 @@ pub use reference::{MAX_REFERENCES, scan_references};
 pub use registry::{SkillEntry, SkillLimits, SkillRegistry, SkillSnapshot, SkillStatus, SkillView};
 pub use section::SkillSection;
 pub use skill::{SkillFile, SkillMetadata, parse, validate_name};
+pub use source::SkillIndexSource;
+pub use tool::{SkillLoad, SkillLoadArgs};

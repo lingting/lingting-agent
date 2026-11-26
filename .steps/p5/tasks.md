@@ -1,6 +1,6 @@
 # P5 任务清单
 
-**状态：进行中（Batch A、Batch B 已完成，2026-11-26）。** 20 个任务 / 6 个批次，6 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：进行中（Batch A、Batch B、Batch C 已完成，2026-11-26）。** 20 个任务 / 6 个批次，10 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -139,9 +139,9 @@
 
 > 依赖：Batch B。本批次结束时，服务端的模型请求里带一段 Skill 索引，模型可以调用 `skill_load` 拿到正文，且预算口径全程成立。本批次不改 Agent Loop 的时序与事件。
 >
-> **状态：未开始。**
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿，`make gen-check` 通过。新增依赖边两条：`agent-context -> agent-skill`（索引进系统提示）、`manager-agent -> agent-context`（`ContextBuilder` 由装配层构造），已同步 `docs/workspace.md` 的 §5.1 / §8.1.3。本批次的请求体级验收项由 P5-017 的 `skill.index` / `skill.load` / `skill.budget` 与 P5-019 的 `skill.tools_missing` 取证；用例执行未授权，相关条目保持未勾选。
 
-- [ ] **P5-007 索引注入系统提示**
+- [x] **P5-007 索引注入系统提示**
 
   **目标**：索引作为系统提示的一部分进入请求，位置固定、可预测、不新增第二套上下文抽象。
   **前置依赖**：P5-005、P5-006。
@@ -152,14 +152,14 @@
   3. 合成后仍是一条 `ContextItem`（`ContextSource::System`、`MessageRole::System`），**不新增 `ContextSource` 取值**（D-P5-003）；`available_tokens(system_tokens)` 自动把索引算进系统开销。
   4. 两段都为空时不发 system 消息（P2 既有行为）；索引渲染在每次 `build` 时现场进行（无缓存），与系统提示词「改完即生效」的口径一致。
   **验收标准**：
-  - 只配 AGENTS.md：请求体与 P2 逐字节一致（`git diff` 只含新增分支）。
-  - 只配 Skill（无 AGENTS.md）：system 消息以 `## 可用 Skill` 开头，且只有一条 system 消息。
-  - 两者都有：AGENTS.md 内容在前，中间恰一个空行，索引小节在后。
-  - 无启用 Skill 时不产生空小节、不产生空 system 消息。
-  - `cargo clippy -p agent-context --all-targets -- -D warnings` 通过。
+  - 只配 AGENTS.md：请求体与 P2 逐字节一致（`git diff` 只含新增分支）。（待 P5-017 的 `skill.index` 取证）
+  - 只配 Skill（无 AGENTS.md）：system 消息以 `## 可用 Skill` 开头，且只有一条 system 消息。（待 P5-017 的 `skill.index` 取证）
+  - 两者都有：AGENTS.md 内容在前，中间恰一个空行，索引小节在后。（待 P5-017 的 `skill.index` 取证）
+  - 无启用 Skill 时不产生空小节、不产生空 system 消息。（待 P5-017 的 `skill.index` 取证）
+  - [x] `cargo clippy -p agent-context --all-targets -- -D warnings` 通过。
   **测试要求**：由 P5-017 的 `skill.index` 用例覆盖（断言请求体形态与 system 消息条数）。
 
-- [ ] **P5-008 `skill_load` 工具适配器**
+- [x] **P5-008 `skill_load` 工具适配器**
 
   **目标**：模型只要一个只读工具就能拿到任意 Skill 的正文或某一节，结果形态固定、可复算、受 `max_inline_chars` 约束。
   **前置依赖**：P5-005、P5-006。
@@ -171,14 +171,14 @@
   4. 篇幅判定（D-P5-010）：`无 section` 时正文总字符 ≤ `max_inline_chars` → 全文；否则 → 章节目录（每节 `标题（n 字）`）+ 一句「请用 section 参数按节读取」。`有 section` 时按标题精确匹配（允许省略 `#` 前缀），只返回该节（含子节），超过 `max_inline_chars` 则截断并标注「本节已截断，剩余 n 字符」。
   5. 未知技能 / 禁用 / `INVALID` / 未知章节分别返回 `ToolError`，`Display` 文案来自 `error.rs` 单一产点；`ToolError` 经执行器映射为模型可读文本，Run 不 `FAILED`。
   **验收标准**：
-  - 小正文：一次加载返回全文 + 引用清单；字符数与 `SKILL.md` 正文逐字符相等（除固定包装行）。
-  - 大正文（超 `max_inline_chars`）：没有 `section` 时返回章节目录，目录里的标题与字符数与解析结果一致；带 `section` 时返回该节正文。
-  - 未知章节的错误文案列出可用章节名（按正文顺序，最多前 10 个）。
-  - 工具不派生进程、不写文件：`git diff` 与进程计数可核对；`file_access` 为 `Read`，在只读工具的并行执行里不被串行。
-  - `cargo clippy -p agent-skill --all-targets -- -D warnings` 通过。
+  - 小正文：一次加载返回全文 + 引用清单；字符数与 `SKILL.md` 正文逐字符相等（除固定包装行）。（待 P5-017 的 `skill.load` 取证）
+  - 大正文（超 `max_inline_chars`）：没有 `section` 时返回章节目录，目录里的标题与字符数与解析结果一致；带 `section` 时返回该节正文。（待 P5-017 的 `skill.load` 取证）
+  - 未知章节的错误文案列出可用章节名（按正文顺序，最多前 10 个）。（待 P5-017 的 `skill.load` 取证）
+  - 工具不派生进程、不写文件：`git diff` 与进程计数可核对；`file_access` 为 `Read`，在只读工具的并行执行里不被串行。（静态部分已核对：本工具不碰文件系统与进程 API；串行与否待 P5-017 取证）
+  - [x] `cargo clippy -p agent-skill --all-targets -- -D warnings` 通过。
   **测试要求**：由 P5-017 的 `skill.load` 覆盖。
 
-- [ ] **P5-009 预算与截断口径**
+- [x] **P5-009 预算与截断口径**
 
   **目标**：把「索引 + 正文」的预算口径落成可断言的数字，任何一条路径都不能把窗口塞满。
   **前置依赖**：P5-007、P5-008。
@@ -189,13 +189,13 @@
   3. `run_started.input_tokens` 只随索引增长：正文只作为工具结果出现在**后续轮次**，不算进首次 `input_tokens`——这一点写进 `builder.rs` 与用例口径。
   4. 极端输入：`max_index_chars` 小于单行长度时，最多输出「另有 N 个」这一行（不输出半行）；正文为空、章节全空时返回明确文案而不是空字符串。
   **验收标准**：
-  - 索引字符数 ≤ `max_index_chars`（含结尾行）；正文返回值 ≤ `max_inline_chars`（含包装行）。
-  - 同一份 Skill 在「只启用它」与「启用 50 个」两种场景下，`skill_load` 的返回逐字符一致（索引规模不影响正文）。
-  - 换一份 10 倍大的 Skill，`run_started.input_tokens` 不增长（排除索引变化后逐值相等）；工具结果长度上限不变。
-  - `max_inline_chars > max_result_chars` 时启动日志有一条 `warn`，服务照常启动。
+  - 索引字符数 ≤ `max_index_chars`（含结尾行）；正文返回值 ≤ `max_inline_chars`（含包装行）。（待 P5-017 的 `skill.budget` 取证）
+  - 同一份 Skill 在「只启用它」与「启用 50 个」两种场景下，`skill_load` 的返回逐字符一致（索引规模不影响正文）。（待 P5-017 的 `skill.budget` 取证）
+  - 换一份 10 倍大的 Skill，`run_started.input_tokens` 不增长（排除索引变化后逐值相等）；工具结果长度上限不变。（待 P5-017 的 `skill.budget` 取证）
+  - `max_inline_chars > max_result_chars` 时启动日志有一条 `warn`，服务照常启动。（`warn` 已在装配期落地；日志取证需授权执行，未取）
   **测试要求**：由 P5-017 的 `skill.budget` 覆盖。
 
-- [ ] **P5-010 装配接入与 `agent-runtime` 构造调整**
+- [x] **P5-010 装配接入与 `agent-runtime` 构造调整**
 
   **目标**：服务启动时按固定顺序接上 Skill：工具注册表 → Skill 发现 → `skill_load` 注册 → MCP → 运行时（ContextBuilder 带索引）。运行时只多一个构造参数，循环一行不改。
   **前置依赖**：P5-002、P5-005、P5-007、P5-008。
@@ -207,10 +207,10 @@
   4. `AgentHolder` 增加 `skills: Arc<SkillManager>` 与访问器；`lib-web` 的接口经 `manager_agent::skill_*` 门面取用（P5-012）。
   5. `skills.toml` 的 `enabled = false` 时：不发现、不注册、不注入，等同 P2 行为，且 `api/skill/list` 返回空清单。
   **验收标准**：
-  - 启动后一个 Skill 出现在请求体的 system 消息里；`skill_load` 出现在 `tools` 字段里。
-  - `git diff --stat` 显示 `crates/agent-runtime/` 只有 `port.rs` 的构造签名与 `lib.rs` 的 re-export/文档行改动，循环（`loop_.rs`）零改动。
-  - `enabled = false` 时 `cargo tree` 不变、请求体与 P2 一致、`skill_load` 不在 `tools` 里。
-  - `cargo build --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+  - 启动后一个 Skill 出现在请求体的 system 消息里；`skill_load` 出现在 `tools` 字段里。（待 P5-017 / P5-019 取证）
+  - [x] `git diff --stat` 显示 `crates/agent-runtime/` 只有 `port.rs` 的构造签名改动，循环（`loop_.rs`）零改动。
+  - `enabled = false` 时 `cargo tree` 不变、请求体与 P2 一致、`skill_load` 不在 `tools` 里。（`cargo tree` 已核对：该分支不新增依赖；请求体差异待 P5-017 取证）
+  - [x] `cargo build --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings` 通过。
   **测试要求**：无新增用例；装配结果由 P5-017 / P5-019 用例间接取证。
 
 ---

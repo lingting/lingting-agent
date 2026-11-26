@@ -54,6 +54,21 @@ pub(crate) fn split(body: &str, first_line: usize) -> Vec<SkillSection> {
     sections
 }
 
+/// 第 `index` 个章节的正文（含子节）：与 [`split`] 完全同一套边界，`skill_load` 的 `section` 参数用它取文本。
+///
+/// 下标越界时返回空串（章节表与正文都由同一次切分产出，正常路径不会越界）。
+pub(crate) fn text(body: &str, index: usize) -> &str {
+    let headings = headings(body);
+    let Some(heading) = headings.get(index) else {
+        return "";
+    };
+    let end = headings[index + 1..]
+        .iter()
+        .find(|later| later.level <= heading.level)
+        .map_or(body.len(), |later| later.byte);
+    body.get(heading.byte..end).unwrap_or_default()
+}
+
 /// 按行扫描标题：围栏的开合状态跨行维护，围栏内的 `#` 一律不认。
 fn headings(body: &str) -> Vec<Heading> {
     let mut headings = Vec::new();
