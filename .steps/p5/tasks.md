@@ -1,6 +1,6 @@
 # P5 任务清单
 
-**状态：进行中（Batch A 已完成，2026-11-26）。** 20 个任务 / 6 个批次，3 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：进行中（Batch A、Batch B 已完成，2026-11-26）。** 20 个任务 / 6 个批次，6 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -78,9 +78,9 @@
 
 > 依赖：Batch A。本批次结束时，进程内能发现 `skills/` 下的全部 Skill、区分「可用 / 非法」、按名字查找与加载，并知道每个 Skill 声明的工具此刻是否可用。还没有上下文注入、没有工具、没有接口。
 >
-> **状态：未开始。**
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿。本批次 12 条验收项（P5-004 / P5-005 / P5-006 各 4 条）由 P5-016 的 `skill.discover`、P5-017 的 `skill.index` / `skill.load`、P5-019 的 `skill.tools_missing` 取证；用例执行未授权，相关条目保持未勾选。
 
-- [ ] **P5-004 Skill Discovery 与快照**
+- [x] **P5-004 Skill Discovery 与快照**
 
   **目标**：把「目录里有什么」变成一张确定性快照：每个 Skill 一条，坏的也不丢，坏的带原因。
   **前置依赖**：P5-002、P5-003。
@@ -92,13 +92,13 @@
   4. 同名冲突（两个目录声明同一个 `name`）：两份都置 `Invalid`，错误文案同时给出两个目录；不做「先到先得」。
   5. 快照按 `name` 升序（`Invalid` 也参与排序，同名的按目录名排序），保证两次扫描结果逐字节可比。
   **验收标准**：
-  - 目录缺失、空目录、只有无关子目录时都得到空清单且无错误。
-  - 缺 `SKILL.md` 的目录不进清单；`SKILL.md` 内容非法的目录进清单且 `status = INVALID`、`error` 可定位。
-  - 同名两份都 `INVALID`，`error` 含两个目录名；改名后重新扫描两份都变 `READY`。
-  - 两次扫描同一目录，快照完全一致（顺序、字段、错误文案）。
+  - 目录缺失、空目录、只有无关子目录时都得到空清单且无错误。（待 P5-016 的 `skill.discover` 取证）
+  - 缺 `SKILL.md` 的目录不进清单；`SKILL.md` 内容非法的目录进清单且 `status = INVALID`、`error` 可定位。（待 P5-016 的 `skill.discover` 取证）
+  - 同名两份都 `INVALID`，`error` 含两个目录名；改名后重新扫描两份都 `READY`。（待 P5-016 的 `skill.discover` 取证）
+  - 两次扫描同一目录，快照完全一致（顺序、字段、错误文案）。（待 P5-016 的 `skill.discover` 取证）
   **测试要求**：由 P5-016 的 `skill.discover` 用例覆盖。
 
-- [ ] **P5-005 SkillRegistry：启用状态、索引渲染与加载**
+- [x] **P5-005 SkillRegistry：启用状态、索引渲染与加载**
 
   **目标**：注册表是「哪些 Skill 会让模型看见」的唯一入口：启用状态在内存、索引按预算渲染、加载按需返回正文或章节目录。
   **前置依赖**：P5-004。
@@ -110,13 +110,13 @@
   4. 加载 `load(name) -> Result<SkillContent, SkillError>`：`Ready`/`enabled` 才可加载；返回正文、章节表与引用清单；工具缺失**不阻断**，由调用方把缺失清单拼进返回文本（D-P5-009）。
   5. `entries()` 出清单用（含 `Invalid` 与 `enabled` 标记，按 `name` 升序）；`enabled_count()`、`invalid_count()` 供指标与接口。
   **验收标准**：
-  - 索引只含启用项；`Invalid` 项永不出现；行格式与 D-P5-003 的样例逐字符一致。
-  - 超 `max_index_chars` 时整行截断且 `shown + hidden` 等于启用项总数；`chars` ≤ `max_index_chars`（含结尾那行）。
-  - `disable` 后索引立即不含该项，`enable` 后立即恢复；两次往返结果一致。
-  - `load` 对禁用 / 未知 / `INVALID` 三种输入返回三种不同文案；`INVALID` 的文案带着解析期的可定位错误。
+  - 索引只含启用项；`Invalid` 项永不出现；行格式与 D-P5-003 的样例逐字符一致。（待 P5-017 的 `skill.index` 取证）
+  - 超 `max_index_chars` 时整行截断且 `shown + hidden` 等于启用项总数；`chars` ≤ `max_index_chars`（含结尾那行）。（待 P5-017 的 `skill.index` 取证）
+  - `disable` 后索引立即不含该项，`enable` 后立即恢复；两次往返结果一致。（待 P5-017 的 `skill.index` 取证）
+  - `load` 对禁用 / 未知 / `INVALID` 三种输入返回三种不同文案；`INVALID` 的文案带着解析期的可定位错误。（待 P5-017 的 `skill.load` 取证）
   **测试要求**：由 P5-017 的 `skill.index` / `skill.load` 覆盖。
 
-- [ ] **P5-006 工具可用性判定与降级文案**
+- [x] **P5-006 工具可用性判定与降级文案**
 
   **目标**：「Skill 声明的工具此刻在不在」有一个判定点、一份文案，索引与加载都用它。
   **前置依赖**：P5-005。
@@ -127,10 +127,10 @@
   3. 文案单一产点在 `availability.rs`：索引行后缀 `（缺少工具：a、b）`，加载结果末尾追加一节「缺少的工具」+ 一句约束「涉及这些工具的步骤必须停止，并明确告知用户无法执行」。
   4. 装配层（`manager-agent`）提供实现：`struct RegistryAvailability(Arc<ToolRegistry>)`，`available` 走注册表查找；权限为 `deny` 的工具算**不可用**（它不会出现在模型清单里）。
   **验收标准**：
-  - 声明两个工具、只注册一个时：索引行标注缺少的那一个；`load` 结果含同样清单与那句约束。
-  - 权限 `deny` 的工具算缺失；改成 `allow` 后重新渲染即消失。
-  - 运行期注册新工具（MCP 连接）后，下一次渲染的缺失标记自动消失，无需重载 Skill。
-  - 文案只存在于 `availability.rs` 一处（全仓检索无第二个同类拼接点）。
+  - 声明两个工具、只注册一个时：索引行标注缺少的那一个；`load` 结果含同样清单与那句约束。（待 P5-019 的 `skill.tools_missing` 取证）
+  - 权限 `deny` 的工具算缺失；改成 `allow` 后重新渲染即消失。（待 P5-019 的 `skill.tools_missing` 取证）
+  - 运行期注册新工具（MCP 连接）后，下一次渲染的缺失标记自动消失，无需重载 Skill。（待 P5-019 的 `skill.tools_missing` 取证）
+  - 文案只存在于 `availability.rs` 一处（全仓检索无第二个同类拼接点）。（静态核对：`agent-skill` 内只有 `availability.rs` 拼接索引后缀与缺失小节）
   **测试要求**：由 P5-019 的 `skill.tools_missing` 用例覆盖。
 
 ---

@@ -28,6 +28,8 @@ types-core = { workspace = true }
 agent-tool = { workspace = true }
 # MCP 门面：装配期建一次并接入注册表，运行期由管理接口驱动（P4-011）。
 agent-mcp = { workspace = true }
+# Skill 的工具可用性判定：`skill_load` 与索引行按工具注册表现状标注缺失（P5-006 / D-P5-009）。
+agent-skill = { workspace = true }
 
 anyhow = { workspace = true }
 tokio = { workspace = true }

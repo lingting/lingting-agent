@@ -2327,6 +2327,7 @@ dependencies = [
  "agent-core",
  "agent-mcp",
  "agent-route",
+ "agent-skill",
  "agent-tool",
  "anyhow",
  "framework-bus",

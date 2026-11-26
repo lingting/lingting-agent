@@ -16,12 +16,15 @@ mod holder;
 mod runner;
 pub mod runtime;
 mod session;
+mod skill;
 
 pub use assemble::{AssemblyOptions, assemble, assemble_with};
 pub use holder::{AgentHolder, holder, install, runtime, shutdown};
 pub use session::{
     cancel_run, create_session, get_run, list_messages, list_sessions, list_tool_calls, running_run_count, send_message,
 };
+/// Skill 的工具可用性判定器：按工具注册表的现状回答「这个工具可用吗」（P5-006）。
+pub use skill::RegistryAvailability;
 
 /// MCP 管理面的契约类型：Handler 直接转发，不维护第二套 DTO（P4-014）。
 pub use agent_mcp::{

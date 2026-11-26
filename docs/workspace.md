@@ -685,7 +685,7 @@ manager-agent -> service-agent
 | `lib-db` | `lib-core` | SQLite 驱动 | 业务 Repository、Agent Crate |
 | `types-core` | `lib-core` | serde、`framework-proc-*`（生成用宏） | service / agent / web / bin |
 | `service-core` | `agent-core`（仅类型层，P2 起）、`agent-tool`（仅类型层，P3 起：审计记录与查询载荷，D-P3-011）、`lib-db`、`lib-core` | ORM / 驱动（经 `lib-db`） | `agent-*` 中除 `agent-core` / `agent-tool` 以外的 Crate（不得依赖 `agent-runtime` / `agent-route` / `agent-context*`）、`manager-agent`、`lib-web*`、`bin-*`；也不承载进程内运行时（归 `manager-agent`） |
-| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
+| `manager-agent` | `service-core`、`agent-route`（Provider 配置的只读承载，P2-017 起）、`lib-db`、`agent-core`、`types-core`、`lib-core`（P2-013 / P2-035 起）、`agent-tool`（工具注册表与执行参数，P3-014 起）、`agent-mcp`（MCP 门面，P4-011 起）、`agent-skill`（工具可用性判定与 Skill 门面，P5-006 / P5-010 起） | Tokio、Anyhow、Tracing、`serde_json`（事件文件行格式）、`framework-bus`（断连通知）、`framework-timer` / `framework-proc-timer`（心跳扫描与事件文件轮转） | Web / 传输层（`lib-web*`、`lib-bin-*`、`bin-*`）；业务规则实现；模型解析（归 `agent-route`） |
 | `agent-core` | `lib-core` | 无具体框架 | Rig、MCP、HTTP 框架、`agent-context-core` 及以上 |
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-tool`（`skill_load` 的 `Tool` 契约与工具名规则，P5 起）、`agent-context-core`、`agent-core`、`lib-core` | `serde_yaml_ng`（frontmatter 的 YAML 解析，本仓库唯一使用方）、自研的 ATX 章节切分（不引入 Markdown crate）、`serde` / `serde_json`、`schemars`（`skill_load` 的参数 schema）、`async-trait`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、`serde_with` / `specta` / `strum` / `strum_macros` | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
@@ -984,8 +984,9 @@ P5 路线图新增 `agent-skill`（`.steps/p5/`），落地后的依赖边（与
 | 边 | 说明 |
 |---|---|
 | `agent-skill -> agent-tool` / `agent-context-core` / `agent-core` / `lib-core` | Skill 知识层的解析与检索；`agent-tool` 只为一个只读检索工具 `skill_load`（P5-001 / D-P5-001） |
+| `manager-agent -> agent-skill` | 装配层给出工具可用性判定（`RegistryAvailability`，只读工具注册表）与 Skill 门面（P5-006 / P5-010） |
 
-这是 P5 唯一新增的依赖边：`serde_yaml_ng` 只进 `agent-skill`（`cargo tree -i serde_yaml_ng` 只命中它），`agent-tool` 的消费者只新增 `agent-skill`。装配层（`manager-agent`）与接口层（`lib-web`）接入 `agent-skill` 的边在 P5 后续批次落地，届时在此追加。
+到这里为止新增的依赖边就是上表两条：`serde_yaml_ng` 只进 `agent-skill`（`cargo tree -i serde_yaml_ng` 只命中它），`agent-tool` 的消费者只新增 `agent-skill`。接口层（`lib-web`）接入 `agent-skill` 的边在 P5 后续批次落地，届时在此追加。
 
 ### 8.2 后续阶段创建范围
 
@@ -993,7 +994,7 @@ P5 路线图新增 `agent-skill`（`.steps/p5/`），落地后的依赖边（与
 |---|---|---|
 | P3 | `agent-tool` | 已创建（P3-001） |
 | P4 | `agent-mcp` | 已创建（P4-001）；门面、装配、指标与 3 条管理接口已落地（P4-010 ~ P4-014） |
-| P5 | `agent-skill` | 已创建（P5-001）；`SKILL.md` 解析、章节切分与引用扫描已落地（P5-003），发现、索引、接口与客户端在 P5 后续批次 |
+| P5 | `agent-skill` | 已创建（P5-001）；解析、章节切分、引用扫描（P5-003）与发现、注册、索引渲染、加载、工具可用性判定（P5-004 ~ P5-006）已落地，上下文注入、接口与客户端在 P5 后续批次 |
 | P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
 
 ### 8.3 阶段实现与目标依赖的差异

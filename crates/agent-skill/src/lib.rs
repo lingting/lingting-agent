@@ -21,15 +21,33 @@
 //! - [`frontmatter`]：YAML frontmatter 的字段表与校验（未知字段忽略，D-P5-004）；
 //! - [`section`]：ATX 标题的章节切分（自研按行扫描，不引入 Markdown crate，D-P5-017）；
 //! - [`reference`]：`references/` 的引用清单扫描（不跟随符号链接、无 `..`）；
-//! - [`error`]：固定文案表，唯一构造点（D-P5-018）。
+//! - [`error`]：固定文案表，唯一构造点（D-P5-018）；
+//! - [`discover`]：一层目录的发现，坏的也进快照（P5-004）；
+//! - [`registry`]：快照 + 启用状态 + 上限，读写路径的唯一入口（P5-005）；
+//! - [`index`]：索引小节渲染与行级预算（P5-005 / D-P5-010）；
+//! - [`load`]：按名取正文 / 章节 / 引用清单（P5-005）；
+//! - [`availability`]：工具可用性判定与降级文案的唯一产点（P5-006 / D-P5-009）。
 
+mod availability;
+mod discover;
 mod error;
 mod frontmatter;
+mod index;
+mod load;
 mod reference;
+mod registry;
 mod section;
 mod skill;
 
+pub use availability::{
+    INDEX_MISSING_PREFIX, INDEX_MISSING_SUFFIX, MISSING_CONSTRAINT, MISSING_HEADING, ToolAvailability, index_suffix,
+    missing_section, missing_tools,
+};
+pub use discover::discover;
 pub use error::SkillError;
+pub use index::{INDEX_HEADING, INDEX_INTRO, SkillIndex};
+pub use load::SkillContent;
 pub use reference::{MAX_REFERENCES, scan_references};
+pub use registry::{SkillEntry, SkillLimits, SkillRegistry, SkillSnapshot, SkillStatus, SkillView};
 pub use section::SkillSection;
 pub use skill::{SkillFile, SkillMetadata, parse, validate_name};

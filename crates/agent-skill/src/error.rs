@@ -28,7 +28,16 @@ pub const INVALID_TOOL_NAME: &str = "requires_tools 含不合规的工具名";
 pub const EMPTY_BODY: &str = "正文不能为空";
 /// `references/` 无法读取。
 pub const UNREADABLE_REFERENCES: &str = "references 目录无法读取";
-
+/// `SKILL.md` 读不出来（权限或 IO 失败）。
+pub const UNREADABLE_FILE: &str = "SKILL.md 无法读取";
+/// 两个目录声明了同一个名字（同名冲突，D-P5-005）。
+pub const DUPLICATE_NAME: &str = "名字与另一个目录重复";
+/// 未知技能（注册表里没有这个名字）。
+pub const UNKNOWN_SKILL: &str = "技能不存在";
+/// 技能已被禁用。
+pub const DISABLED_SKILL: &str = "技能已禁用";
+/// 技能被判为 `INVALID`（解析失败或同名冲突），不可加载。
+pub const UNAVAILABLE_SKILL: &str = "技能不可用";
 /// Skill 侧的唯一错误类型。
 ///
 /// 每个取值对应一句固定文案；拼进来的只有相对路径、行号与用户自己写在 `SKILL.md` 里的标识，
@@ -112,6 +121,37 @@ pub enum SkillError {
         /// 相对应用根目录的 `references` 目录路径。
         path: String,
     },
+    /// 相对应用根目录的 `SKILL.md` 路径读不出来（权限、IO 失败）。
+    UnreadableFile {
+        /// 相对应用根目录的 `SKILL.md` 路径。
+        path: String,
+    },
+    /// 两个目录声明了同一个名字：两份都判 `INVALID`，文案同时给出两个目录（D-P5-005）。
+    DuplicateName {
+        /// 冲突的名字。
+        name: String,
+        /// 其中一个目录（相对应用根目录）。
+        first: String,
+        /// 另一个目录（相对应用根目录）。
+        second: String,
+    },
+    /// 注册表里没有这个名字。
+    UnknownSkill {
+        /// 被请求的名字。
+        name: String,
+    },
+    /// 名字存在但已被禁用。
+    DisabledSkill {
+        /// 被请求的名字。
+        name: String,
+    },
+    /// 名字存在但被判 `INVALID`：文案带着解析期 / 冲突期的可定位错误。
+    InvalidSkill {
+        /// 被请求的名字。
+        name: String,
+        /// 判 `INVALID` 的原因。
+        error: Box<SkillError>,
+    },
 }
 
 impl SkillError {
@@ -128,7 +168,10 @@ impl SkillError {
             | Self::MissingDescription { path, .. }
             | Self::InvalidToolName { path, .. }
             | Self::EmptyBody { path, .. }
+            | Self::UnreadableFile { path }
             | Self::UnreadableReferences { path } => path,
+            Self::DuplicateName { first, .. } => first,
+            Self::UnknownSkill { name } | Self::DisabledSkill { name } | Self::InvalidSkill { name, .. } => name,
         }
     }
 
@@ -143,7 +186,11 @@ impl SkillError {
             | Self::MissingDescription { line, .. }
             | Self::InvalidToolName { line, .. }
             | Self::EmptyBody { line, .. } => Some(*line),
-            Self::UnreadableReferences { .. } => None,
+            Self::UnreadableFile { .. } | Self::UnreadableReferences { .. } => None,
+            Self::DuplicateName { .. }
+            | Self::UnknownSkill { .. }
+            | Self::DisabledSkill { .. }
+            | Self::InvalidSkill { .. } => None,
         }
     }
 
@@ -166,16 +213,29 @@ impl SkillError {
                 format!("{INVALID_TOOL_NAME}：{name}（规则 ^[a-z][a-z0-9_]{{1,63}}$）")
             }
             Self::EmptyBody { .. } => EMPTY_BODY.to_owned(),
+            Self::UnreadableFile { .. } => UNREADABLE_FILE.to_owned(),
             Self::UnreadableReferences { .. } => UNREADABLE_REFERENCES.to_owned(),
+            Self::DuplicateName { name, second, .. } => {
+                format!("{DUPLICATE_NAME}：{name} 与 {second} 冲突（两份都判为不可用）")
+            }
+            Self::UnknownSkill { name } => format!("{UNKNOWN_SKILL}：{name}"),
+            Self::DisabledSkill { name } => format!("{DISABLED_SKILL}：{name}"),
+            Self::InvalidSkill { name, error } => format!("{UNAVAILABLE_SKILL}：{name}：{error}"),
         }
     }
 }
 
 impl fmt::Display for SkillError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.line() {
-            Some(line) => write!(formatter, "{}:{}: {}", self.path(), line, self.reason()),
-            None => write!(formatter, "{}: {}", self.path(), self.reason()),
+        match self {
+            // 名字级错误没有文件路径可拼：`path()` 返回的是名字本身。
+            Self::UnknownSkill { name } => write!(formatter, "{UNKNOWN_SKILL}：{name}"),
+            Self::DisabledSkill { name } => write!(formatter, "{DISABLED_SKILL}：{name}"),
+            Self::InvalidSkill { name, error } => write!(formatter, "{UNAVAILABLE_SKILL}：{name}：{error}"),
+            _ => match self.line() {
+                Some(line) => write!(formatter, "{}:{}: {}", self.path(), line, self.reason()),
+                None => write!(formatter, "{}: {}", self.path(), self.reason()),
+            },
         }
     }
 }
