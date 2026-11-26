@@ -18,13 +18,17 @@ use crate::schema::ToolSchema;
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// 模型可见的稳定标识，必须满足 [`validate_name`] 的规则。
-    fn name(&self) -> &'static str;
+    ///
+    /// 名字可以来自运行期（P4 的 MCP 工具：连接成功后才拿到 server 的工具名），
+    /// 因此这里不要求 `&'static str`；但**任何来源的名字都要过 [`validate_name`]**，
+    /// 注册期是唯一校验点。
+    fn name(&self) -> &str;
 
-    /// 工具说明：模型据此判断什么时候用它。
-    fn description(&self) -> &'static str;
+    /// 工具说明：模型据此判断什么时候用它。同样可以来自运行期数据。
+    fn description(&self) -> &str;
 
-    /// 参数 JSON Schema：由参数类型派生，不在两处维护（D-P3-002）。
-    fn schema(&self) -> &'static ToolSchema;
+    /// 参数 JSON Schema：由参数类型派生（D-P3-002），MCP 工具则由 server 的 `inputSchema` 透传。
+    fn schema(&self) -> &ToolSchema;
 
     /// 风险等级。
     fn risk(&self) -> ToolRisk;

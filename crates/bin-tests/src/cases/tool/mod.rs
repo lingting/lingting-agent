@@ -20,6 +20,7 @@ mod context;
 mod events;
 mod executor;
 mod loop_;
+mod registry;
 
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -49,6 +50,7 @@ pub(crate) fn cases() -> Vec<Case> {
     cases.extend(builtin::cases());
     cases.extend(confirm::cases());
     cases.extend(config::cases());
+    cases.extend(registry::cases());
     cases.extend(events::cases());
     cases.extend(client::cases());
     cases

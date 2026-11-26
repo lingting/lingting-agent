@@ -1,0 +1,36 @@
+[package]
+name = "agent-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "MCP 集成：Client、transport、工具发现与 Tool 适配"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# MCP 工具经 `Tool` 契约适配后进入 `agent-tool` 的注册表与执行器（D-P4-001）。
+agent-tool = { workspace = true }
+# 应用根目录、关闭标记与日志初始化等公共基础能力。
+lib-core = { workspace = true }
+
+# MCP 协议栈：本 Crate 是 `rmcp` 的唯一落点（D-P4-002），特性只有客户端与两种 transport。
+rmcp = { workspace = true }
+# stdio 子进程与超时（`process` / `time`），握手与状态机用 `sync`。
+tokio = { workspace = true, features = ["process"] }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+# 取消信号（`CancellationToken`）：关闭与重连都以取消收口（同 `agent-tool` 的口径）。
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# 契约 DTO（`McpServerVO` / `McpToolVO` / `McpServerUpdatePO`）用 `auto_type` 标注参与 SDK 生成；
+# 宏展开使用绝对路径，因此必须直接声明，`collect` 让类型元数据可被导出器看到（同 `agent-tool`）。
+framework-proc-auto = { workspace = true, features = ["collect"] }
+framework-proc-core = { workspace = true, features = ["collect"] }
+
+[lints]
+workspace = true

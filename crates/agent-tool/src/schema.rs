@@ -43,6 +43,19 @@ pub fn of<A: JsonSchema>() -> ToolSchema {
     ToolSchema(Value::Object(object))
 }
 
+/// 由外部 JSON Schema 构造（P4 的 MCP 工具：schema 来自 server 的 `inputSchema`）。
+///
+/// 与 [`of`] 的口径差异：这里**不剥任何键**——外部 schema 的 `$schema` / `title` / `$defs`
+/// 与 `$ref` 组合可能在 server 侧有意义，透传才是忠实的（D-P4-003）。
+/// 唯一的兜底是「不是对象时补一个空对象骨架」：`ToolSchema` 的契约是对象 schema，
+/// 而非对象的输入（`null` / 字符串 / 数组）无法表达任何参数。
+pub fn from_value(value: Value) -> ToolSchema {
+    match value {
+        Value::Object(object) => ToolSchema(Value::Object(object)),
+        _ => ToolSchema(serde_json::json!({ "type": "object", "properties": {} })),
+    }
+}
+
 /// 用 serde 反序列化校验参数。
 ///
 /// 失败一律是 [`ToolError::InvalidArguments`]，只保留字段名与原因（`参数不合法：` 前缀由

@@ -58,6 +58,10 @@
 //!
 //! `[tools]` 段同理：整段可缺省（取 `types-core` 的缺省值），写下的每一项都要自洽——
 //! 未知工具名、`0` 上限、相对路径与空 host 都是启动期硬错误（P3-005）。
+//!
+//! MCP 的配置**不在** `config.toml` 里：它独立成应用根目录下的 `mcp.toml`（与 `config.toml` 同级，
+//! P4-004），由 [`resolve_server`] 一并装载、一并无条件校验。文件缺失等价于「没有 MCP 配置」，
+//! 文件存在但为空、字段混用、`id` 不合规与非法枚举值都是启动期硬错误（退出码 2）。客户端命令不读它。
 use crate::command::ServerArgs;
 use anyhow::{Context, Result, anyhow};
 use lib_core::directorys::directorys;
@@ -68,7 +72,9 @@ use std::io;
 use std::str::FromStr;
 use tracing_subscriber::filter::LevelFilter;
 use types_core::config::tools::BUILTIN_TOOL_NAMES;
-use types_core::config::{AgentConfig, Concurrency, ProviderConfig, ToolConfig};
+use types_core::config::{
+    AgentConfig, Concurrency, McpConfig, McpServerConfig, McpTransportConfig, ProviderConfig, ToolConfig,
+};
 use url::Url;
 
 /// 默认监听地址。
@@ -93,6 +99,8 @@ pub struct ServerConfig {
     pub runtime_events: RuntimeEventsConfig,
     /// Provider / Agent 配置（`[provider]` / `[agent]`）。
     pub llm: LlmConfig,
+    /// MCP server 配置（独立文件 `mcp.toml`，P4-004）；文件缺失等价于「没有 MCP」。
+    pub mcp: McpConfig,
 }
 
 /// 事件文件轮转配置：`None` 表示取服务端默认值，`Some(0)` 表示该维度不限制。
@@ -142,6 +150,7 @@ pub fn resolve_server(args: &ServerArgs) -> Result<ServerConfig> {
             max_bytes: file.runtime.events.max_bytes,
         },
         llm: llm_from(&file)?,
+        mcp: load_mcp()?,
     })
 }
 
@@ -315,6 +324,223 @@ fn llm_from(file: &FileConfig) -> Result<LlmConfig> {
         agent: file.agent.clone(),
         tools: file.tools.clone(),
     })
+}
+
+/// `file_access` 的合法取值：与 `agent-tool` 的 `ToolFileAccess` 逐项对应。
+const FILE_ACCESS_KINDS: [&str; 4] = ["none", "read", "write", "read-write"];
+
+/// 装载应用根目录下的 `mcp.toml`：文件缺失等价于「没有 MCP 配置」（零 server）。
+///
+/// 与 `config.toml` 分开装载：MCP 的 server 会随使用增长，且改一次就要重启服务；
+/// 客户端命令也不读它（只有服务端需要认识 MCP）。
+fn load_mcp() -> Result<McpConfig> {
+    let path = directorys()?.mcp_file.clone();
+    match fs::read_to_string(&path) {
+        Ok(text) => parse_mcp(&text).with_context(|| format!("解析 MCP 配置文件失败：{}", path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(McpConfig::default()),
+        Err(error) => Err(error).with_context(|| format!("读取 MCP 配置文件失败：{}", path.display())),
+    }
+}
+
+/// 解析并校验一份 `mcp.toml` 文本：用例用它验证装载规则，不读写文件系统。
+///
+/// 先按 `toml::Value` 做结构与枚举校验（错误文案才能给出 server `id` 与字段名），再反序列化成
+/// 类型；文件存在但内容为空是硬错误——写了个空文件等于「我本想配置但没写成」，不能静默当成零 server。
+pub fn parse_mcp(text: &str) -> Result<McpConfig> {
+    if text.trim().is_empty() {
+        return Err(anyhow!("mcp.toml 不能为空：不启用 MCP 请删除该文件"));
+    }
+    let mut table = match toml::from_str::<toml::Value>(text).context("解析 mcp.toml 失败")? {
+        toml::Value::Table(table) => table,
+        _ => return Err(anyhow!("mcp.toml 的顶层必须是配置项（键值对）")),
+    };
+    let servers = match table.remove("servers") {
+        Some(value) => parse_servers(value)?,
+        None => Vec::new(),
+    };
+    let mut config = McpConfig::deserialize(toml::Value::Table(table)).context("mcp.toml 的顶层配置不合法")?;
+    config.servers = servers;
+    validate_mcp(&config)?;
+    Ok(config)
+}
+
+/// 逐条反序列化 server：每条先做 `transport` 的结构校验，错误文案都带上 server `id`。
+fn parse_servers(value: toml::Value) -> Result<Vec<McpServerConfig>> {
+    let toml::Value::Array(items) = value else {
+        return Err(anyhow!("mcp.toml 的 servers 必须是数组（用 [[servers]] 声明）"));
+    };
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let toml::Value::Table(table) = &item else {
+                return Err(anyhow!(
+                    "mcp.toml 的第 {} 个 server 必须是配置表（用 [[servers]] 声明）",
+                    index + 1
+                ));
+            };
+            let label = match table.get("id").and_then(toml::Value::as_str) {
+                Some(id) if !id.trim().is_empty() => format!("server {id}"),
+                _ => format!("第 {} 个 server", index + 1),
+            };
+            validate_transport_fields(table, &label)?;
+            McpServerConfig::deserialize(item).with_context(|| format!("mcp.toml 的 {label} 配置不合法"))
+        })
+        .collect()
+}
+
+/// `transport` 判别键与两种 transport 的字段互斥、必填字段与枚举取值。
+///
+/// 这些检查必须按原文做：反序列化只报「取值不在枚举里」，报不出 `id` 与字段名；
+/// 而字段混用（stdio 写 `url`）会被 serde 静默丢掉，等于让配置「看起来生效了」。
+fn validate_transport_fields(table: &toml::Table, label: &str) -> Result<()> {
+    let transport = table
+        .get("transport")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| anyhow!("mcp.toml 的 {label} 缺少 transport（stdio 或 http）"))?;
+    let (required, forbidden): (&[&str], &[&str]) = match transport {
+        "stdio" => (&["command"], &["url", "headers"]),
+        "http" => (&["url"], &["command", "args", "env", "cwd"]),
+        other => {
+            return Err(anyhow!(
+                "mcp.toml 的 {label} 的 transport 不合法：{other}（可选 stdio / http）"
+            ));
+        }
+    };
+    for field in forbidden {
+        if table.contains_key(*field) {
+            return Err(anyhow!("mcp.toml 的 {label} 是 {transport} transport，不能写 {field}"));
+        }
+    }
+    for field in required {
+        match table.get(*field) {
+            Some(toml::Value::String(value)) if !value.trim().is_empty() => {}
+            Some(_) => return Err(anyhow!("mcp.toml 的 {label} 的 {field} 必须是非空字符串")),
+            None => return Err(anyhow!("mcp.toml 的 {label} 缺少 {field}")),
+        }
+    }
+
+    validate_enum_field(table, label, "permission", &["allow", "deny", "confirm"])?;
+    validate_enum_field(table, label, "concurrency", &["parallel", "exclusive"])?;
+    validate_file_access(table, label)
+}
+
+/// 枚举字段的原文校验：取值必须落在给定集合里。
+fn validate_enum_field(table: &toml::Table, label: &str, field: &str, allowed: &[&str]) -> Result<()> {
+    let Some(value) = table.get(field) else {
+        return Ok(());
+    };
+    let Some(text) = value.as_str() else {
+        return Err(anyhow!("mcp.toml 的 {label} 的 {field} 必须是字符串"));
+    };
+    if allowed.contains(&text) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "mcp.toml 的 {label} 的 {field} 取值不合法：{text}（可选 {}）",
+        allowed.join(" / ")
+    ))
+}
+
+/// `file_access` 的原文校验：必须是「工具名或 `*` 模式 → 枚举值」的表，键不能为空。
+fn validate_file_access(table: &toml::Table, label: &str) -> Result<()> {
+    let Some(value) = table.get("file_access") else {
+        return Ok(());
+    };
+    let Some(patterns) = value.as_table() else {
+        return Err(anyhow!(
+            "mcp.toml 的 {label} 的 file_access 必须是表（工具名或 * 模式 → {}）",
+            FILE_ACCESS_KINDS.join(" / ")
+        ));
+    };
+    for (pattern, access) in patterns {
+        if pattern.trim().is_empty() {
+            return Err(anyhow!("mcp.toml 的 {label} 的 file_access 不能有空模式"));
+        }
+        let text = access
+            .as_str()
+            .ok_or_else(|| anyhow!("mcp.toml 的 {label} 的 file_access[{pattern}] 必须是字符串"))?;
+        if !FILE_ACCESS_KINDS.contains(&text) {
+            return Err(anyhow!(
+                "mcp.toml 的 {label} 的 file_access[{pattern}] 取值不合法：{text}（可选 {}）",
+                FILE_ACCESS_KINDS.join(" / ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// MCP 配置的语义校验：`id` 规则与唯一性、各 transport 的必填项与非空键、超时非 0。
+fn validate_mcp(config: &McpConfig) -> Result<()> {
+    require_positive("mcp.toml connect_timeout_ms", config.connect_timeout_ms)?;
+    require_positive(
+        "mcp.toml reconnect_initial_backoff_ms",
+        config.reconnect_initial_backoff_ms,
+    )?;
+    // `reconnect_max_backoff_ms = 0` 是「关闭自动重连」，属于合法取值，不校验。
+
+    let mut ids = HashSet::new();
+    for server in &config.servers {
+        let id = server.id.trim();
+        if !valid_server_id(id) {
+            return Err(anyhow!(
+                "mcp.toml 的 server id 不合法：{}（规则 ^[a-z][a-z0-9_]{{0,31}}$）",
+                server.id
+            ));
+        }
+        if !ids.insert(id.to_owned()) {
+            return Err(anyhow!("mcp.toml 的 server id 重复：{id}"));
+        }
+        match &server.transport {
+            McpTransportConfig::Stdio { command, args, env, .. } => {
+                if command.trim().is_empty() {
+                    return Err(anyhow!("mcp.toml 的 server {id} 的 command 不能为空"));
+                }
+                if args.iter().any(|argument| argument.is_empty()) {
+                    return Err(anyhow!("mcp.toml 的 server {id} 的 args 不能包含空串"));
+                }
+                if env.keys().any(|key| key.trim().is_empty()) {
+                    return Err(anyhow!("mcp.toml 的 server {id} 的 env 不能有空键"));
+                }
+            }
+            McpTransportConfig::Http { url, headers } => {
+                validate_http_url(url, id)?;
+                if headers.keys().any(|key| key.trim().is_empty()) {
+                    return Err(anyhow!("mcp.toml 的 server {id} 的 headers 不能有空键"));
+                }
+            }
+        }
+        if server.file_access.keys().any(|pattern| pattern.trim().is_empty()) {
+            return Err(anyhow!("mcp.toml 的 server {id} 的 file_access 不能有空模式"));
+        }
+    }
+    Ok(())
+}
+
+/// server id 规则：`^[a-z][a-z0-9_]{0,31}$`（工具名前缀的来源，必须能安全拼进工具名）。
+fn valid_server_id(id: &str) -> bool {
+    match id.as_bytes().split_first() {
+        Some((first, rest)) => {
+            first.is_ascii_lowercase()
+                && rest.len() <= 31
+                && rest
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+        }
+        None => false,
+    }
+}
+
+/// HTTP transport 的地址校验：只接受 `http` / `https`，且必须能解析出 host。
+fn validate_http_url(url: &str, id: &str) -> Result<()> {
+    let parsed = Url::parse(url.trim()).map_err(|_| anyhow!("mcp.toml 的 server {id} 的 url 不是有效地址：{url}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!("mcp.toml 的 server {id} 的 url 只支持 http / https：{url}"));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(anyhow!("mcp.toml 的 server {id} 的 url 缺少主机名：{url}"));
+    }
+    Ok(())
 }
 
 /// Provider 校验：写了 `[provider]` 段就要求整段自洽，任何非法取值都是启动期硬错误。

@@ -51,11 +51,11 @@ pub struct Calculator;
 
 #[async_trait::async_trait]
 impl Tool for Calculator {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "calculator"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "计算一个算术表达式的数值结果。只支持数字、四则运算（+ - * /）、取模（%）与括号，不支持函数与变量。"
     }
 

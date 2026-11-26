@@ -6,6 +6,7 @@ mod client;
 mod disconnect;
 mod journal;
 mod llm;
+mod mcp;
 mod occupancy;
 mod persist;
 mod probe;
@@ -31,6 +32,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(disconnect::cases());
     cases.extend(journal::cases());
     cases.extend(llm::cases());
+    cases.extend(mcp::cases());
     cases.extend(occupancy::cases());
     cases.extend(persist::cases());
     cases.extend(probe::cases());

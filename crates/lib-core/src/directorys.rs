@@ -11,6 +11,10 @@ use std::sync::{Arc, LazyLock};
 ///
 /// 对外公开：用例要往隔离的 `AGENT_HOME` 里写同一份配置文件，不能再拼一次字面量。
 pub const CONFIG_FILE: &str = "config.toml";
+/// MCP 服务器配置文件名，位于应用根目录（与 `config.toml` 同级，独立文件，P4-004）。
+///
+/// 与主配置分开：它随 MCP server 数量增长，改一次就要重启服务，与主配置的装载节奏不同。
+pub const MCP_CONFIG_FILE: &str = "mcp.toml";
 /// CLI 日志目录名称。
 const LOGS_CLI_DIRECTORY: &str = "logs-cli";
 /// TUI 日志目录名称。
@@ -30,6 +34,8 @@ pub struct AppDirectories {
     pub data: PathBuf,
     /// 配置文件路径，位于应用根目录；文件按需创建，不预先创建。
     pub config_file: PathBuf,
+    /// MCP 服务器配置路径，位于应用根目录；缺失等价于「没有 MCP 配置」。
+    pub mcp_file: PathBuf,
     /// 服务端日志目录。
     pub logs_server: PathBuf,
     /// CLI 日志目录。
@@ -65,6 +71,7 @@ impl AppDirectories {
         Ok(Self {
             data: create_directory(&root.join("data"))?,
             config_file: root.join(CONFIG_FILE),
+            mcp_file: root.join(MCP_CONFIG_FILE),
             logs_server: create_directory(&root.join("logs"))?,
             logs_cli: create_directory(&root.join(LOGS_CLI_DIRECTORY))?,
             logs_tui: create_directory(&root.join(LOGS_TUI_DIRECTORY))?,
@@ -83,6 +90,7 @@ impl AppDirectories {
         Ok(Self {
             data: directory.data,
             config_file: root.join(CONFIG_FILE),
+            mcp_file: root.join(MCP_CONFIG_FILE),
             logs_server: directory.logs,
             logs_cli: create_directory(&root.join(LOGS_CLI_DIRECTORY))?,
             logs_tui: create_directory(&root.join(LOGS_TUI_DIRECTORY))?,

@@ -282,7 +282,7 @@ Agent Skills 能力（阶段：P5）。
 
 #### agent-mcp
 
-MCP 集成（阶段：P4）。使用 `rmcp`。
+MCP 集成（P4-001 起落地）。使用 `rmcp`，它是本仓库里 `rmcp` 的**唯一落点**。
 
 职责：
 
@@ -301,6 +301,7 @@ MCP 集成（阶段：P4）。使用 `rmcp`。
 - MCP 只是工具的一种来源：外部 Tool 经 Adapter 转换为内部统一 Tool，进入 `agent-tool` 的注册与执行体系。
 - **不得让 MCP 协议类型渗透到 Agent Runtime 或更上层**。
 - 未来需要把 MCP Resources / Prompts 纳入 Context 时，通过 `agent-context-core` 的抽象提供能力。
+- 依赖 `agent-tool`（`Tool` 契约与 `ToolSchema`）与 `lib-core`，外加 `rmcp`、Tokio、`serde` / `serde_json`、`async-trait`、`futures-util`、`tokio-util`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）；**不依赖** `types-core`（`mcp.toml` 由装配层读成 `agent-mcp` 自己的配置类型再喂进来）。
 
 #### agent-context
 
@@ -678,7 +679,7 @@ manager-agent -> service-agent
 | `agent-context-core` | `agent-core`、`lib-core` | 无具体框架 | Skill / Tool / MCP 的具体实现 |
 | `agent-skill` | `agent-context-core`、`agent-core`、`lib-core` | YAML / Markdown 解析 | `agent-runtime`、`agent-tool` 实现细节 |
 | `agent-tool` | `agent-core`、`agent-context-core`、`lib-core` | `schemars`（参数 schema 生成）、`framework-http`（仅 `http_request`，启用 `reqwest` 后端）、`url`（`http_request` 的地址解析与 host 白名单匹配）、`chrono`（`current_time` 的 ISO8601 格式化）、`anyhow`（`http_request` 的错误归一化，框架以 `anyhow::Result` 返回）、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`）、Tokio、`async-trait`、`futures-util`、serde | `agent-runtime`、`agent-route`、`agent-mcp`、`rig-core`、`service-core`、`lib-web*`、`bin-*` |
-| `agent-mcp` | `agent-tool`、`agent-context-core`、`lib-core` | `rmcp` | `agent-runtime`、`agent-context` |
+| `agent-mcp` | `agent-tool`、`lib-core` | `rmcp`、Tokio（子进程与超时）、`async-trait`、`futures-util`、`tokio-util`、`serde` / `serde_json`、`tracing`、`framework-proc-auto` / `framework-proc-core`（契约 DTO 的宏与元数据，开 `collect`） | `agent-runtime`、`agent-route`、`rig-core`、`service-core`、`types-core`、`lib-db`、`lib-web*`、`bin-*` |
 | `agent-context` | `agent-context-core`、`agent-core`（P2 实际；`agent-skill` / `agent-mcp` / `agent-tool` 于 P3–P5 接入） | `tracing`（系统提示词扫描与选中的日志）；无 LLM SDK | `agent-runtime`、`lib-web*` |
 | `agent-route` | `agent-core`、`types-core`、`lib-core` | Rig（`rig-core`） | `agent-runtime`、`service-core`（D-P2-018 已删除该边）、`lib-web*` |
 | `agent-runtime` | `agent-core`、`agent-context`、`agent-context-core`、`agent-route`、`service-core`（经其 Service 持久化 Run / Message，P2 起）、`types-core`、`lib-core`（`agent-tool` 于 P3 接入） | Tokio、`tokio-util`（取消信号）、`async-trait`（实现执行端口）、Tracing | `lib-web*`、`lib-bin-*`、`bin-*`；不直接写 SQL |
@@ -726,7 +727,6 @@ flowchart BT
     tool["agent-tool"] --> ctxcore
     tool --> libcore
     mcp["agent-mcp"] --> tool
-    mcp --> ctxcore
     mcp --> libcore
     ctx["agent-context"] --> ctxcore
     ctx --> skill
@@ -895,7 +895,7 @@ embed-ui = ["dep:rust-embed"]
 
 目标架构包含的 Crate **不要求一次性创建**。创建顺序严格跟随 `.steps/` 路线图。
 
-### 8.1 当前实际实现范围（P1 / P1.1 / P2 / P3）
+### 8.1 当前实际实现范围（P1 / P1.1 / P2 / P3 / P4 进行中）
 
 | Crate | 阶段 | 说明 |
 |---|---|---|
@@ -916,6 +916,7 @@ embed-ui = ["dep:rust-embed"]
 | `agent-context` | P2 | Context 组装与裁剪 |
 | `agent-runtime` | P2 | Agent Loop、执行端口实现与全局并发限制 |
 | `agent-tool` | P3 | Tool Trait / 定义 / Schema / 注册表 / 执行器与内置工具 |
+| `agent-mcp` | P4 | MCP Client / transport / 工具发现 / Tool 适配（`rmcp` 只在本 Crate） |
 | `bin-tests` | P1 | 开发期测试入口（`crates/bin-tests`），不参与分发 |
 
 P1 的 SDK 生成器与探针服务不单独建 crate，统一以 `crates/lib-web/examples/` 形式存在（`api_probe_server`、`gen_sdk`；生成逻辑与其共用输出处理在 `examples/support/`）；生成物落 `packages/`（不入库），由 `make gen` 一条命令产出。
@@ -951,7 +952,7 @@ P2 路线图（`.steps/p2/`）确定新增 `lib-db`、`agent-core`、`agent-cont
 | 阶段 | 新增 Crate | 状态 |
 |---|---|---|
 | P3 | `agent-tool` | 已创建（P3-001） |
-| P4 | `agent-mcp` | 未创建 |
+| P4 | `agent-mcp` | 已创建（P4-001） |
 | P5 | `agent-skill` | 未创建 |
 | P6 及以后 | 按需评估，可能包含跨 Service 的 `manager-<domain>` | 未创建 |
 

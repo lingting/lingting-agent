@@ -1,4 +1,4 @@
-//! 配置类型：Provider / Model / Agent / Tools（P2-009、P3-005）。
+//! 配置类型：Provider / Model / Agent / Tools（P2-009、P3-005）与 MCP（P4-004）。
 //!
 //! 这些是**内部配置类型**，不参与 SDK 生成（不加 `auto_*` 宏）；装载、环境变量覆盖与校验由
 //! `lib-bin-cli` 的配置装载（P2-017）负责，本模块只定义结构与缺省值，避免各处重复写常量。
@@ -35,11 +35,18 @@
 //! [tools.http]
 //! allow_hosts = []
 //! ```
+//!
+//! MCP 的配置**不在** `config.toml` 里：它独立成应用根目录下的 `mcp.toml`（[`mcp`] 模块有示例），
+//! 随 server 数量增长，与主配置的装载节奏不同。
 
 pub mod agent;
+pub mod mcp;
 pub mod provider;
 pub mod tools;
 
 pub use agent::{AgentConfig, Concurrency};
+pub use mcp::{
+    McpConcurrencyKind, McpConfig, McpFileAccessKind, McpPermissionKind, McpServerConfig, McpTransportConfig,
+};
 pub use provider::{ModelConfig, ProviderConfig, ProviderKind, Secret};
 pub use tools::{ToolConfig, ToolFileConfig, ToolHttpConfig, ToolPermissionKind};

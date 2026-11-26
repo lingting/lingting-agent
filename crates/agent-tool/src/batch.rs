@@ -94,10 +94,8 @@ impl ToolExecutor {
     /// 第一个「需确认」调用的下标：它之后的调用本轮不执行。
     fn confirm_index(&self, calls: &[ToolCall]) -> Option<usize> {
         calls.iter().position(|call| {
-            let Some(tool) = self.registry().lookup(&call.tool_name) else {
-                return false;
-            };
-            self.registry().policy().permission_of(&call.tool_name, tool.risk()) == ToolPermission::Confirm
+            // 未注册的工具不会挂起：执行期按 `DENIED` 收尾（与执行器同口径）。
+            self.registry().permission_of(&call.tool_name) == Some(ToolPermission::Confirm)
         })
     }
 

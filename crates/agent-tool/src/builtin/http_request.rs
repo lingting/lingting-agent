@@ -85,11 +85,11 @@ impl HttpRequestTool {
 
 #[async_trait::async_trait]
 impl Tool for HttpRequestTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "http_request"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "向白名单内的地址发起 GET 或 POST 请求，返回状态码、内容类型与响应正文。默认不跟随重定向。"
     }
 

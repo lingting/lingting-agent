@@ -16,6 +16,7 @@ members = [
     "crates/agent-route",
     "crates/agent-runtime",
     "crates/agent-tool",
+    "crates/agent-mcp",
     "crates/lib-db",
     "crates/manager-agent",
     "crates/bin-tests",
@@ -48,6 +49,7 @@ agent-context = { path = "crates/agent-context" }
 agent-route = { path = "crates/agent-route" }
 agent-runtime = { path = "crates/agent-runtime" }
 agent-tool = { path = "crates/agent-tool" }
+agent-mcp = { path = "crates/agent-mcp" }
 lib-db = { path = "crates/lib-db" }
 manager-agent = { path = "crates/manager-agent" }
 bin-tests = { path = "crates/bin-tests" }
@@ -128,6 +130,12 @@ sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "sqlite"] }
 # LLM 接入只允许 agent-route 使用；不启用 Rig 的 Agent Loop 相关特性（D-P2-001）。
 rig-core = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }
+# MCP 协议栈只允许 agent-mcp 依赖（正式构建）；`bin-tests` 仅在测试替身里追加 `server` 特性（D-P4-002）。
+rmcp = { version = "3.11", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
 proc-macro2 = { version = "1.0" }
 quote = { version = "1.0" }
 syn = { version = "2.0", features = ["full"] }

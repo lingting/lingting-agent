@@ -80,7 +80,7 @@ impl ExecOutcome {
     }
 }
 
-/// 工具执行器：持有只读注册表、执行参数与应用根目录。
+/// 工具执行器：持有注册表（与运行时同一个实例，运行期可变）、执行参数与应用根目录。
 pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
     limits: ToolLimits,
@@ -117,15 +117,18 @@ impl ToolExecutor {
             return self.denied(&call, ToolFileAccess::None);
         };
         // ② 权限：拒绝的工具不执行，需确认的工具交回 Loop 挂起（已批准的不再拦）。
-        match self.registry.policy().permission_of(&call.tool_name, tool.risk()) {
-            ToolPermission::Allow => {}
-            ToolPermission::Deny => return self.denied(&call, tool.file_access()),
-            ToolPermission::Confirm if !approved => {
+        //    判定入口只有一个：显式配置 > MCP 的条目默认 > 风险等级缺省（D-P4-004）。
+        match self.registry.permission_of(&call.tool_name) {
+            Some(ToolPermission::Allow) => {}
+            Some(ToolPermission::Deny) => return self.denied(&call, tool.file_access()),
+            Some(ToolPermission::Confirm) if !approved => {
                 return ExecOutcome::ConfirmRequired {
                     record: ToolCallRecord::pending(&call, tool.file_access()),
                 };
             }
-            ToolPermission::Confirm => {}
+            Some(ToolPermission::Confirm) => {}
+            // 查找与权限判定之间被注销（工具发现是运行期事件）：按未注册处理。
+            None => return self.denied(&call, ToolFileAccess::None),
         }
         // ③④ 执行：参数校验在工具内部（`schema::parse`），超时与取消在这里并列等待。
         let outcome = self.run(call, tool.as_ref(), cancel).await;

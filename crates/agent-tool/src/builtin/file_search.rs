@@ -73,11 +73,11 @@ impl FileSearch {
 
 #[async_trait::async_trait]
 impl Tool for FileSearch {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "file_search"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "在白名单目录内按文件名子串搜索文件（忽略大小写，不支持正则与通配符），返回匹配文件的相对路径与大小。"
     }
 

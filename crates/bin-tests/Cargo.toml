@@ -19,6 +19,8 @@ types-core = { workspace = true }
 agent-core = { workspace = true }
 # 工具契约与内置工具：`tool.decl` / `tool.builtin.*` 直接在进程内核对工具自述与边界（P3-030）。
 agent-tool = { workspace = true }
+# MCP 用例：`mcp.config` 直接喂文本核对装载规则；后续批次的 `mcp.*` 用例核对工具发现与调用（P4-018）。
+agent-mcp = { workspace = true }
 # 进程内用例的装配入口（P2-013 起 holder 归 manager-agent）；`metrics` 让运行时采集指标，
 # 运行结束后由测试报告输出快照（P2.1-003）。
 manager-agent = { workspace = true, features = ["metrics"] }

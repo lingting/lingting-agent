@@ -37,11 +37,11 @@ pub struct CurrentTime;
 
 #[async_trait::async_trait]
 impl Tool for CurrentTime {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "current_time"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "读取当前时间，返回 ISO8601 时间与 Unix 毫秒时间戳。时区只支持 utc（缺省）与 local。"
     }
 

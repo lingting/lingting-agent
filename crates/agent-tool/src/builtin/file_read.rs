@@ -45,11 +45,11 @@ impl FileRead {
 
 #[async_trait::async_trait]
 impl Tool for FileRead {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "file_read"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "读取白名单目录内的文本文件，返回文件内容。超过大小上限的文件与二进制文件会被拒绝。"
     }
 
