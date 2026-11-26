@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use agent_mcp::McpManager;
 use agent_route::ProviderService;
 use agent_tool::{ToolLimits, ToolRegistry};
 use service_core::session::SessionService;
@@ -32,10 +33,15 @@ pub struct AgentHolder {
     tools: Arc<ToolRegistry>,
     /// 工具执行参数（`[tools]` 的超时、截断与并发上限）。
     tool_limits: ToolLimits,
+    /// MCP 门面：装配期建一次，运行期由管理接口驱动（P4-011）。
+    mcp: Arc<McpManager>,
 }
 
 impl AgentHolder {
     /// 由装配流程构造：各部件必须来自同一次装配。
+    ///
+    /// 参数偏多是有意的：装配层是唯一知道全部部件的地方，不为构造器再造一层包装类型。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session: Arc<SessionService>,
         runtime: RuntimeState,
@@ -44,6 +50,7 @@ impl AgentHolder {
         home: PathBuf,
         tools: Arc<ToolRegistry>,
         tool_limits: ToolLimits,
+        mcp: Arc<McpManager>,
     ) -> Self {
         Self {
             session,
@@ -53,6 +60,7 @@ impl AgentHolder {
             home,
             tools,
             tool_limits,
+            mcp,
         }
     }
 
@@ -90,6 +98,11 @@ impl AgentHolder {
     pub fn tool_limits(&self) -> ToolLimits {
         self.tool_limits
     }
+
+    /// MCP 门面：状态快照、启停与重连的唯一入口（P4-010）。
+    pub fn mcp(&self) -> &Arc<McpManager> {
+        &self.mcp
+    }
 }
 
 /// 进程内装配结果，只允许注入一次。
@@ -121,12 +134,17 @@ pub fn runtime() -> Option<&'static RuntimeState> {
     holder().map(AgentHolder::runtime)
 }
 
-/// 关闭流程入口：把「停全部客户端与运行时会话」交给断连处理链，返回处理的客户端数量。
+/// 关闭流程入口：先让 Run 落终态，再关 MCP，最后回收子进程，返回处理的客户端数量。
 ///
-/// 未注入时（只跑用例的进程）直接返回 0：没有东西需要收尾。
+/// 顺序不能反（README §4.9）：先停 Run 再关 MCP，正在执行的工具调用才会以「取消」而不是
+/// 「服务器通信失败」收尾。未注入时（只跑用例的进程）直接返回 0：没有东西需要收尾。
 pub async fn shutdown() -> usize {
-    match runtime() {
-        Some(runtime) => handler::shutdown(runtime).await,
-        None => 0,
-    }
+    let Some(installed) = holder() else {
+        return 0;
+    };
+    let clients = handler::shutdown(installed.runtime()).await;
+    // MCP 关闭：置 STOPPED → 取消在途调用 → 优雅关闭，超时则强制终止（kill_on_drop 兜底）。
+    let kills = installed.mcp().shutdown_all().await;
+    tracing::info!(kills, "MCP 关闭完成：强制终止 {kills} 个子进程");
+    clients
 }

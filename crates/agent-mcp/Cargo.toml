@@ -9,6 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# 进程内指标（P4-013）：启用时用原子量累加，未启用时为空实现、不留静态计数器。
+metrics = []
+
 [dependencies]
 # MCP 工具经 `Tool` 契约适配后进入 `agent-tool` 的注册表与执行器（D-P4-001）。
 agent-tool = { workspace = true }
@@ -36,6 +40,11 @@ tracing = { workspace = true }
 # 宏展开使用绝对路径，因此必须直接声明，`collect` 让类型元数据可被导出器看到（同 `agent-tool`）。
 framework-proc-auto = { workspace = true, features = ["collect"] }
 framework-proc-core = { workspace = true, features = ["collect"] }
+# `auto_type` / `auto_enum` 展开出的派生与适配器必须在本 crate 可见（同 `agent-tool`）。
+serde_with = { workspace = true }
+specta = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [lints]
 workspace = true

@@ -5,16 +5,21 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
+use agent_mcp::{FileAccessRules, McpManager, McpServerSpec, McpTransport};
 use agent_route::ProviderService;
 use agent_tool::builtin::{BuiltinOptions, register_all};
-use agent_tool::{ToolLimits, ToolPermission, ToolPolicy, ToolRegistry};
+use agent_tool::{ToolConcurrency, ToolFileAccess, ToolLimits, ToolPermission, ToolPolicy, ToolRegistry};
 use anyhow::{Context, Result};
 use lib_core::time;
 use lib_db::{DATABASE_FILE, Database, DbConfig};
 use service_core::repository::Repository;
 use service_core::session::SessionService;
-use types_core::config::{AgentConfig, ProviderConfig, ToolConfig, ToolPermissionKind};
+use types_core::config::{
+    AgentConfig, McpConcurrencyKind, McpConfig, McpFileAccessKind, McpPermissionKind, McpServerConfig,
+    McpTransportConfig, ProviderConfig, ToolConfig, ToolPermissionKind,
+};
 
 use crate::holder::AgentHolder;
 use crate::runtime::{JournalConfig, RuntimeState};
@@ -37,6 +42,8 @@ pub struct AssemblyOptions {
     pub agent: AgentConfig,
     /// 工具执行参数与权限（`[tools]`）；由启动方从 `config.toml` 解析后透传（P3-005）。
     pub tools: ToolConfig,
+    /// MCP 配置（`mcp.toml`）；由启动方从独立配置文件装载后透传（P4-011）。
+    pub mcp: McpConfig,
     /// 数据库连接参数。
     pub database: DbConfig,
     /// 应用根目录；`None` 时按应用目录推导（用例传自己的临时目录）。
@@ -100,6 +107,8 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         }
     };
     let (tools, tool_limits) = build_tools(&options.tools)?;
+    // MCP 在工具注册表建好之后接入：工具经同一个注册表暴露给模型（P4-011）。
+    let mcp = build_mcp(&options.mcp, &home, Arc::clone(&tools)).await;
     Ok(AgentHolder::new(
         session,
         runtime,
@@ -108,6 +117,7 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
         home,
         tools,
         tool_limits,
+        mcp,
     ))
 }
 
@@ -137,6 +147,126 @@ fn build_tools(config: &ToolConfig) -> Result<(Arc<ToolRegistry>, ToolLimits)> {
         max_retries: config.max_retries,
     };
     Ok((Arc::new(registry), limits))
+}
+
+/// 建 MCP 门面并接入注册表：配置翻译、并发连接、逐 server 一行装配日志。
+///
+/// 连接失败只记状态，不返回错误：所有 server 都不可达时服务照常启动（P4-011）。
+/// 日志里不出现命令行与请求头（判据 E-3）。
+async fn build_mcp(config: &McpConfig, home: &Path, registry: Arc<ToolRegistry>) -> Arc<McpManager> {
+    let manager = Arc::new(McpManager::new(mcp_config(config, home), registry));
+    manager.connect_enabled_all().await;
+    for server in manager.snapshot() {
+        if server.status == agent_mcp::McpStatusKind::Failed {
+            tracing::warn!(
+                id = %server.id,
+                transport = %server.transport,
+                status = ?server.status,
+                tools = server.tool_count,
+                "MCP 服务器不可用"
+            );
+        } else {
+            tracing::info!(
+                id = %server.id,
+                transport = %server.transport,
+                status = ?server.status,
+                tools = server.tool_count,
+                "MCP 服务器状态"
+            );
+        }
+    }
+    manager
+}
+
+/// `mcp.toml` 的顶层配置 → `agent-mcp` 的连接配置（两套类型只在这一层相遇，D-P4-001）。
+fn mcp_config(config: &McpConfig, home: &Path) -> agent_mcp::McpConfig {
+    agent_mcp::McpConfig {
+        reconnect_initial_backoff: Duration::from_millis(config.reconnect_initial_backoff_ms),
+        reconnect_max_backoff: Duration::from_millis(config.reconnect_max_backoff_ms),
+        servers: config
+            .servers
+            .iter()
+            .map(|server| mcp_server(server, config, home))
+            .collect(),
+    }
+}
+
+/// 单个 server 的配置翻译：`cwd` 相对应用根目录解析，枚举逐项对应。
+fn mcp_server(server: &McpServerConfig, config: &McpConfig, home: &Path) -> McpServerSpec {
+    let concurrency = server
+        .concurrency
+        .map_or_else(|| concurrency_of(config.concurrency), concurrency_of);
+    McpServerSpec {
+        id: server.id.clone(),
+        enabled: server.enabled,
+        transport: match &server.transport {
+            McpTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => McpTransport::Stdio {
+                command: command.clone(),
+                args: args.clone(),
+                env: env.clone().into_iter().collect(),
+                cwd: resolve_cwd(cwd, home),
+            },
+            McpTransportConfig::Http { url, headers } => McpTransport::Http {
+                url: url.clone(),
+                headers: headers.clone().into_iter().collect(),
+            },
+        },
+        connect_timeout: Duration::from_millis(config.connect_timeout_ms),
+        permission: mcp_permission_of(server.permission),
+        concurrency,
+        file_access: FileAccessRules::new(
+            server
+                .file_access
+                .iter()
+                .map(|(name, kind)| (name.clone(), file_access_of(*kind))),
+        ),
+    }
+}
+
+/// 工作目录：空串表示不切换；相对路径按应用根目录（`config.toml` 所在目录）解析。
+fn resolve_cwd(cwd: &str, home: &Path) -> Option<PathBuf> {
+    let cwd = cwd.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    let path = Path::new(cwd);
+    Some(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        home.join(path)
+    })
+}
+
+/// 配置侧的 MCP 并发取值 → 工具层的并发语义。
+fn concurrency_of(kind: McpConcurrencyKind) -> ToolConcurrency {
+    match kind {
+        McpConcurrencyKind::Parallel => ToolConcurrency::Parallel,
+        McpConcurrencyKind::Exclusive => ToolConcurrency::Exclusive,
+    }
+}
+
+/// 配置侧的 MCP 权限取值 → 工具层的权限判定值。
+fn mcp_permission_of(kind: McpPermissionKind) -> ToolPermission {
+    match kind {
+        McpPermissionKind::Allow => ToolPermission::Allow,
+        McpPermissionKind::Deny => ToolPermission::Deny,
+        McpPermissionKind::Confirm => ToolPermission::Confirm,
+    }
+}
+
+/// 配置侧的 MCP 文件操作声明 → 工具自述的声明值。
+fn file_access_of(kind: McpFileAccessKind) -> ToolFileAccess {
+    match kind {
+        McpFileAccessKind::None => ToolFileAccess::None,
+        McpFileAccessKind::Read => ToolFileAccess::Read,
+        McpFileAccessKind::Write => ToolFileAccess::Write,
+        McpFileAccessKind::ReadWrite => ToolFileAccess::ReadWrite,
+    }
 }
 
 /// 配置侧的权限取值 → 工具层的判定值：两处枚举刻意分开，配置类型不进 `agent-tool`。

@@ -14,6 +14,10 @@ use crate::file_access::FileAccessRules;
 
 /// 握手超时的缺省值（毫秒）：连接 + `initialize` 的总上限。
 pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
+/// 自动重连退避的缺省初始值（毫秒）。
+pub const DEFAULT_RECONNECT_INITIAL_BACKOFF_MS: u64 = 1_000;
+/// 自动重连退避的缺省上限（毫秒）；写 `0` 关闭自动重连。
+pub const DEFAULT_RECONNECT_MAX_BACKOFF_MS: u64 = 30_000;
 
 /// 一个 MCP server 的连接参数与工具声明。
 ///
@@ -23,6 +27,8 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
 pub struct McpServerSpec {
     /// 全局唯一标识：模型可见工具名前缀的来源。
     pub id: String,
+    /// 是否在服务启动时连接；缺省 `false`——只写配置不会启动子进程（D-P4-013）。
+    pub enabled: bool,
     /// 传输方式与它的字段。
     pub transport: McpTransport,
     /// 握手超时（连接 + `initialize` 的总上限）。
@@ -97,11 +103,43 @@ impl McpServerSpec {
     pub fn new(id: impl Into<String>, transport: McpTransport) -> Self {
         Self {
             id: id.into(),
+            // 缺省不启用：只写配置不会启动子进程（D-P4-013）。
+            enabled: false,
             transport,
             connect_timeout: Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS),
             permission: ToolPermission::Allow,
             concurrency: ToolConcurrency::Parallel,
             file_access: FileAccessRules::default(),
+        }
+    }
+
+    /// 设置是否在启动时连接（配置里的 `enabled`）。
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+/// 一条 MCP 集成配置：全局重连策略 + 全部 server。
+///
+/// `reconnect_max_backoff` 为 0 表示关闭自动重连（只能手动 `reconnect`，D-P4-011）；
+/// 握手超时按 server 记在 [`McpServerSpec::connect_timeout`] 上。
+#[derive(Debug, Clone)]
+pub struct McpConfig {
+    /// 失败后自动重连的初始退避。
+    pub reconnect_initial_backoff: Duration,
+    /// 自动重连退避上限；0 关闭自动重连。
+    pub reconnect_max_backoff: Duration,
+    /// 全部 server：按 `id` 唯一（装载期已校验）。
+    pub servers: Vec<McpServerSpec>,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            reconnect_initial_backoff: Duration::from_millis(DEFAULT_RECONNECT_INITIAL_BACKOFF_MS),
+            reconnect_max_backoff: Duration::from_millis(DEFAULT_RECONNECT_MAX_BACKOFF_MS),
+            servers: Vec::new(),
         }
     }
 }

@@ -74,6 +74,8 @@ fn server(args: &ServerArgs) -> ExitCode {
         provider: config.llm.provider,
         agent: config.llm.agent,
         tools: config.llm.tools,
+        // MCP 配置来自独立的 `mcp.toml`（P4-004）；文件缺失即零 server。
+        mcp: config.mcp,
         ..Default::default()
     };
     let result = lib_bin_web::serve(&config.host, config.port, options);

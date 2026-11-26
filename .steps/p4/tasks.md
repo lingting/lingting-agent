@@ -186,12 +186,14 @@
 ## Batch C：Manager、装配与生命周期（P4-010 ~ P4-013）
 
 > 依赖：Batch B。本批次结束时，服务启动即接入 MCP 工具，关闭后无子进程，状态可观测。
+>
+> **状态：代码已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo build -p lib-web --features metrics` 全绿；本批次不新增用例，全量用例未执行（未获授权）。运行期判据（幂等、故障隔离、`mcp.*`）随 P4-018 取证，这里只做代码与静态核对。
 
-- [ ] **P4-010 `McpManager`：多 server、状态快照、启停与重连**
+- [x] **P4-010 `McpManager`：多 server、状态快照、启停与重连**
 
   **目标**：把多个 `McpClient` 收成一个门面：对外只暴露状态与动作，对内做差异注册、退避重连与通知刷新。
   **前置依赖**：P4-005、P4-007、P4-008。
-  **涉及文件 / Crate**：`crates/agent-mcp/src/{manager.rs,state.rs,lib.rs}`。
+  **涉及文件 / Crate**：`crates/agent-mcp/src/{manager.rs,state.rs,lib.rs}`（落地时另增 `vo.rs` 与 `config.rs` 的 `McpConfig` / `enabled`、`client.rs` 的 `probe` 与两个唤醒点——快照签名与动作需要它们）。
   **实施步骤**：
   1. `McpManager::new(config, Arc<ToolRegistry>)`；内部 `BTreeMap<String, ServerEntry>`（`entry` 里放 client 句柄、工具快照、退避状态），按 `id` 分段加锁，不持全局锁跨 `await`。
   2. `connect_enabled_all()`：并发对所有 `enabled` 的 server 启动连接（受各自 `connect_timeout_ms` 约束），任一失败只影响自己。
@@ -200,30 +202,30 @@
   5. `notifications/tools/list_changed` → 触发一次该 server 的重新发现（D-P4-010）。
   6. 状态快照 `snapshot() -> Vec<McpServerVO>` 与 `tool_snapshot() -> Vec<McpToolVO>`：只读、按 `id` / 可见名字典序、不含内部句柄。
   **验收标准**：
-  - [ ] `enable` / `disable` / `reconnect` / `probe` 四个动作的幂等性可逐条核对（重复调用不产生额外连接或额外注册）。
-  - [ ] 一个 server `Failed` 时，其他 server 的工具仍在清单里且可调用。
-  - [ ] 注销后 `model_definitions()` 不再出现该 server 的工具；重新 `enable` 后名字与之前一致。
-  - [ ] 无全局锁跨 `await`（`grep` 复核锁的作用域）。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [x] `enable` / `disable` / `reconnect` / `probe` 四个动作的幂等性可逐条核对（重复调用不产生额外连接或额外注册）。（代码核对：`enable` 在 `READY` 时直接返回；`disable` / `probe` 无副作用；`reconnect` 每次重建一条连接，是其语义本身）
+  - [x] 一个 server `Failed` 时，其他 server 的工具仍在清单里且可调用。（代码核对：状态、闸门与监督任务都按 server 分段，失败只改自己的状态）
+  - [x] 注销后 `model_definitions()` 不再出现该 server 的工具；重新 `enable` 后名字与之前一致。（`disable` / `shutdown` 调 `unregister`；名字由 `naming` 与「按原名升序」的固定顺序复算）
+  - [x] 无全局锁跨 `await`（`grep` 复核锁的作用域）。（每个 server 一把 `tokio::sync::Mutex` 闸门；只读快照走同步小锁，锁内只做内存读写）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.reconnect` / `mcp.api` 在 P4-018）。
 
-- [ ] **P4-011 装配接入与注册表联动（`manager-agent`）**
+- [x] **P4-011 装配接入与注册表联动（`manager-agent`）**
 
   **目标**：服务启动时把 MCP 接进来，且不改变 P3 的装配顺序与失败语义。
   **前置依赖**：P4-004、P4-010。
-  **涉及文件 / Crate**：`crates/manager-agent/src/{assemble.rs,holder.rs,lib.rs}`、`crates/manager-agent/Cargo.toml`（`agent-mcp`、`metrics` 特性传递）。
+  **涉及文件 / Crate**：`crates/manager-agent/src/{assemble.rs,holder.rs,lib.rs}`、`crates/manager-agent/Cargo.toml`（`agent-mcp`、`metrics` 特性传递）、`crates/bin-agent/src/main.rs`（把 `mcp` 配置传进装配参数）。
   **实施步骤**：
   1. `AssemblyOptions` 增加 `mcp: McpConfig`；`assemble_with` 在 `build_tools` 之后建 `McpManager`，`connect_enabled_all().await` 在返回 holder 之前完成（失败只记状态，不返回错误）。
   2. `AgentHolder` 持有 `Arc<McpManager>` 并提供只读入口；关闭路径见 P4-012。
   3. 装配日志：每个 server 一行（`id` / `transport` / 状态 / 工具数），`Failed` 用 `warn`，不打印命令行与 header。
   4. 新增 `mcp_servers` / `mcp_tools` / `mcp_update` 三个入口函数（P4-014 的 handler 只调它们）。
   **验收标准**：
-  - [ ] 一个 `enabled` 的 server 连接成功后，其工具出现在模型可见清单里（静态核对装配顺序 + `mcp.discover` 用例）。
-  - [ ] 所有 server 都不可达时，`assemble_with` 仍返回 `Ok`，服务可启动。
-  - [ ] `cargo build --workspace` 通过；`crates/agent-runtime` 无任何改动（`git diff` 为空）。
+  - [x] 一个 `enabled` 的 server 连接成功后，其工具出现在模型可见清单里（静态核对装配顺序 + `mcp.discover` 用例）。（装配顺序已核对：`build_tools` → `McpManager` → `connect_enabled_all` → holder；`mcp.discover` 待 P4-018）
+  - [x] 所有 server 都不可达时，`assemble_with` 仍返回 `Ok`，服务可启动。（`connect_enabled_all` 不返回错误，失败只落状态与 `lastError`）
+  - [x] `cargo build --workspace` 通过；`crates/agent-runtime` 无任何改动（`git diff` 为空）。
   **测试要求**：无（`mcp.discover` / `mcp.startup` 在 P4-018）。
 
-- [ ] **P4-012 关闭与子进程终止（无孤儿进程）**
+- [x] **P4-012 关闭与子进程终止（无孤儿进程）**
 
   **目标**：服务退出时子进程被收干净，且 Run 的收尾语义不因 MCP 改变。
   **前置依赖**：P4-010、P4-011。
@@ -234,12 +236,12 @@
   3. 子进程 `kill_on_drop(true)` 兜底；`Drop` 里若发现仍有活着的 child，记一条 `warn`（不阻塞）。
   4. 复用 `lib_core::lifecycle` 的关闭标记，避免关闭期间自动重连重新拉起子进程（关闭期间不排新的重连）。
   **验收标准**：
-  - [ ] 关闭顺序在代码里可逐行核对：Run 收尾先于 MCP 关闭。
-  - [ ] 关闭后不再出现新的连接尝试（自动重连被关闭标记挡住）。
-  - [ ] `cargo build --workspace` 通过。
+  - [x] 关闭顺序在代码里可逐行核对：Run 收尾先于 MCP 关闭。（`holder::shutdown` 先 `handler::shutdown(runtime)`，再 `shutdown_all()`）
+  - [x] 关闭后不再出现新的连接尝试（自动重连被关闭标记挡住）。（`shutdown_all` 置 `STOPPED` 并取消全部监督任务；每次重连前重查 `lib_core::lifecycle`）
+  - [x] `cargo build --workspace` 通过。
   **测试要求**：无（`mcp.shutdown` 在 P4-018 断言直接子进程已退出）。
 
-- [ ] **P4-013 状态可见性：`metrics` 的 `mcp` 段**
+- [x] **P4-013 状态可见性：`metrics` 的 `mcp` 段**
 
   **目标**：MCP 的连接、工具与调用失败可被测试与运维观察，且不引入事件与阈值日志。
   **前置依赖**：P4-010。
@@ -250,8 +252,9 @@
   3. 状态计数（`servers` / `ready` / `failed` / `disabled` / `tools`）在取快照时从 manager 现状读出，不做累加。
   **验收标准**：
   - [ ] 未开 `metrics` 特性时 `agent-mcp` 不引入 `serde`、不留静态计数器（特性隔离可核）。
-  - [ ] `GET api/probe/metrics` 的响应里出现 `mcp` 段，字段与 README §4.10 的表一致。
-  - [ ] `cargo build --workspace` 与 `cargo build --workspace --features metrics -p lib-web` 均通过。
+    > 待确认：`serde` 是 `agent-mcp` 的无条件依赖（`McpServerVO` / `McpToolVO` 的 `auto_type` 派生），与本条口径冲突；`metrics` 特性本身不引入额外依赖、不留静态计数器（`grep` 可核）。口径是否改为「`metrics` 不引入额外依赖」待定。
+  - [x] `GET api/probe/metrics` 的响应里出现 `mcp` 段，字段与 README §4.10 的表一致。（`MetricsSnapshot.mcp` 逐字段对应；运行期取值由 `mcp.metrics` 在 P4-018 取证）
+  - [x] `cargo build --workspace` 与 `cargo build --workspace --features metrics -p lib-web` 均通过。
   **测试要求**：无（`mcp.metrics` 在 P4-018，经 `api/probe/metrics` 取值）。
 
 ---

@@ -199,6 +199,8 @@ pub struct MetricsSnapshot {
     pub limit: LimitMetrics,
     /// 日志审计（P2.2-003）。
     pub audit: AuditMetrics,
+    /// MCP 的连接、工具与调用（P4-013）：状态现状取自 manager，累计量取自 `agent-mcp`。
+    pub mcp: agent_mcp::metrics::McpMetrics,
 }
 
 // 断连清理链。
@@ -357,12 +359,22 @@ pub fn snapshot() -> MetricsSnapshot {
                 secret_hits: audit.secret_hits,
                 panics: audit.panics,
             },
+            mcp: mcp_snapshot(),
         }
     }
     #[cfg(not(feature = "metrics"))]
     {
         MetricsSnapshot::default()
     }
+}
+
+/// MCP 段的转写：累计量来自 `agent-mcp` 的原子量，状态计数取 manager 的现状（不做累加）。
+#[cfg(feature = "metrics")]
+fn mcp_snapshot() -> agent_mcp::metrics::McpMetrics {
+    let counts = crate::holder::holder().map_or_else(agent_mcp::metrics::McpStateCounts::default, |installed| {
+        installed.mcp().state_counts()
+    });
+    agent_mcp::metrics::snapshot(counts)
 }
 
 /// 处理链的在场守卫：进入 +1、离开 -1，并累计耗时。

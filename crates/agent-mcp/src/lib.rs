@@ -20,6 +20,8 @@
 //! - [`discover`]：`tools/list` → 工具快照（翻页、按原名升序、冲突消解、声明落位）；
 //! - [`naming`]：模型可见名 `mcp__<server>__<tool>` 的唯一实现点；
 //! - [`tool`]：`McpTool` 适配器；[`result`]：调用结果到 `ToolOutput` 的映射；
+//! - `manager`：多 server 门面——状态快照、启停、退避重连与差集注册；
+//! - `vo`：管理面的契约快照；[`metrics`]：`metrics` 特性下的累计量；
 //! - [`error`]：固定文案表与到 `ToolError` 的归一；
 //! - [`config`]：装配层翻译过来的连接参数；[`file_access`]：`file_access` 的声明解析。
 
@@ -28,17 +30,25 @@ mod config;
 mod discover;
 mod error;
 mod file_access;
+mod manager;
+pub mod metrics;
 mod naming;
 mod result;
 mod state;
 mod tool;
 mod transport;
+mod vo;
 
 pub use client::{CLIENT_NAME, CloseOutcome, McpClient};
-pub use config::{DEFAULT_CONNECT_TIMEOUT_MS, McpServerSpec, McpTransport};
+pub use config::{
+    DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_RECONNECT_INITIAL_BACKOFF_MS, DEFAULT_RECONNECT_MAX_BACKOFF_MS, McpConfig,
+    McpServerSpec, McpTransport,
+};
 pub use discover::{McpToolSpec, RawTool};
 pub use error::{COMMUNICATION, CONNECT_TIMEOUT, INVALID_RESPONSE, McpError, SERVER_UNAVAILABLE, TOOL_NOT_FOUND};
 pub use file_access::FileAccessRules;
+pub use manager::{GRACEFUL_CLOSE_TIMEOUT, McpManager, McpManagerError};
 pub use naming::{MAX_NAME_LEN, NAME_PREFIX, disambiguate, visible_name};
 pub use state::McpState;
 pub use tool::McpTool;
+pub use vo::{McpAction, McpServerVO, McpStatusKind, McpToolVO};

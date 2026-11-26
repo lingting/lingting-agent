@@ -60,6 +60,10 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "serde_with",
+ "specta",
+ "strum",
+ "strum_macros",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2295,6 +2299,7 @@ name = "manager-agent"
 version = "26.11.0"
 dependencies = [
  "agent-core",
+ "agent-mcp",
  "agent-route",
  "agent-tool",
  "anyhow",

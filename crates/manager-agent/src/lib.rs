@@ -4,7 +4,8 @@
 //! 装到一起，并以进程级 holder 交给 Handler 使用。`agent + runtime + service` 之间的交互
 //! 全部收敛在这里（D-P2-035）：`service-core` 不持有运行时，也不感知 Agent。
 //!
-//! 依赖方向：`manager-agent -> service-core / lib-db / agent-route / agent-core / types-core / lib-core`；
+//! 依赖方向：`manager-agent -> service-core / lib-db / agent-route / agent-core / agent-tool / agent-mcp /
+//! types-core / lib-core`；
 //! `service-core` 与 `agent-route` 都不反向依赖本 Crate（`docs/workspace.md` 4.2）。
 //!
 //! `agent-route` 只用来持有 Provider 配置（[`ProviderService`]）：装配层是配置从启动方交到运行时的
@@ -22,6 +23,8 @@ pub use session::{
     cancel_run, create_session, get_run, list_messages, list_sessions, list_tool_calls, running_run_count, send_message,
 };
 
+/// MCP 管理面的契约类型：Handler 直接转发，不维护第二套 DTO（P4-014）。
+pub use agent_mcp::{McpAction, McpManagerError, McpServerVO, McpStatusKind, McpToolVO};
 /// Provider 配置服务：只读，装载结果由启动方经 [`AssemblyOptions`] 传入（P2-017）。
 pub use agent_route::ProviderService;
 /// 会话业务错误：与 `service-core` 同一套语义，`lib-web` 只在这里映射一次状态码。
@@ -30,3 +33,31 @@ pub use service_core::session::SessionError;
 pub use service_core::session::SessionService;
 /// 工具审计的契约类型：`lib-web` 的 Handler 直接用它做查询参数与响应载荷（P3-019）。
 pub use service_core::session::{ToolAuditListParams, ToolCallVO};
+
+/// 全部 MCP server 的状态快照（按 `id` 升序）。
+///
+/// 未装配时（只跑用例的进程）返回空清单：管理面看到的就是「没有 server」。
+pub fn mcp_servers() -> Vec<McpServerVO> {
+    holder().map_or_else(Vec::new, |installed| installed.mcp().snapshot())
+}
+
+/// 当前已发现的 MCP 工具快照（按模型可见名升序）；`server_id` 给定时只返回该 server 的。
+pub fn mcp_tools(server_id: Option<&str>) -> Vec<McpToolVO> {
+    let tools = holder().map_or_else(Vec::new, |installed| installed.mcp().tool_snapshot());
+    match server_id {
+        Some(server_id) => tools.into_iter().filter(|tool| tool.server_id == server_id).collect(),
+        None => tools,
+    }
+}
+
+/// 执行一个 MCP 管理动作，返回动作完成后的状态（P4-014 的 Handler 只调这里）。
+///
+/// 未知 `serverId` 是 [`McpManagerError::UnknownServer`]（接口层翻成 400 + 固定文案）。
+pub async fn mcp_update(server_id: &str, action: McpAction) -> anyhow::Result<McpServerVO> {
+    let installed = holder().ok_or_else(|| anyhow::anyhow!("MCP 门面未装配"))?;
+    installed
+        .mcp()
+        .apply(server_id, action)
+        .await
+        .map_err(anyhow::Error::new)
+}

@@ -88,9 +88,49 @@ impl Tool for McpTool {
             call = %ctx.tool_call_id,
             "MCP 工具调用"
         );
-        self.client
+        // 执行器的超时会把本 future 直接 drop：守卫据此区分「超时」与「Run 取消」。
+        let mut guard = CallGuard::new(ctx);
+        let result = self
+            .client
             .call_tool(&self.original_name, args)
             .await
-            .map_err(ToolError::from)
+            .map_err(ToolError::from);
+        guard.complete();
+        result
+    }
+}
+
+/// 调用未完成的守卫：被丢弃时按 `ToolContext::deadline` 判断是不是超时。
+///
+/// 超时的判定权在执行器（`[tools] timeout_ms`，D-P4-018）：MCP 侧不自己计时，只在
+/// **超时把 future 丢掉**这一事实发生时记一次 `call_timeouts`；Run 取消（未到 deadline）
+/// 不算超时。丢弃本身不会阻塞任何路径。
+struct CallGuard {
+    /// 执行器给出的截止时刻。
+    deadline: std::time::Instant,
+    /// 是否已正常拿到结果。
+    completed: bool,
+}
+
+impl CallGuard {
+    /// 进入一次调用。
+    fn new(ctx: &ToolContext) -> Self {
+        Self {
+            deadline: ctx.deadline,
+            completed: false,
+        }
+    }
+
+    /// 调用正常返回（成功或失败都算完成）。
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        if !self.completed && std::time::Instant::now() >= self.deadline {
+            crate::metrics::record_call_timeout();
+        }
     }
 }

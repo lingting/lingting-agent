@@ -24,12 +24,14 @@ use rmcp::service::{NotificationContext, Peer, RoleClient, RunningService};
 use rmcp::transport::IntoTransport;
 use rmcp::{ClientHandler, ServiceExt};
 use serde_json::Value;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{McpServerSpec, McpTransport};
 use crate::discover::{self, McpToolSpec, RawTool};
 use crate::error::McpError;
+use crate::metrics;
 use crate::state::McpState;
 use crate::transport;
 
@@ -63,6 +65,10 @@ pub struct McpClient {
     tools: Mutex<Vec<McpToolSpec>>,
     link: Mutex<Option<Link>>,
     tool_changed: Arc<AtomicU64>,
+    /// `tools/list_changed` 的唤醒点：manager 的监督任务靠它触发重新发现（不轮询）。
+    tool_changed_notify: Arc<Notify>,
+    /// 状态迁移的唤醒点：监督任务靠它发现「连接已结束」并排退避重连。
+    state_changed: Arc<Notify>,
     /// 连接代次：旧连接的完成监听不能覆盖新连接的状态。
     generation: AtomicU64,
 }
@@ -77,6 +83,8 @@ impl McpClient {
             tools: Mutex::new(Vec::new()),
             link: Mutex::new(None),
             tool_changed: Arc::new(AtomicU64::new(0)),
+            tool_changed_notify: Arc::new(Notify::new()),
+            state_changed: Arc::new(Notify::new()),
             generation: AtomicU64::new(0),
         }
     }
@@ -111,6 +119,24 @@ impl McpClient {
         self.tool_changed.swap(0, Ordering::Relaxed) > 0
     }
 
+    /// 等一次「工具清单可能变化」的信号（标记由 [`McpClient::take_tool_list_changed`] 消费）。
+    pub async fn wait_tool_list_changed(&self) {
+        self.tool_changed_notify.notified().await;
+    }
+
+    /// 等一次状态迁移（连接成功 / 失败 / 关闭）。
+    pub async fn wait_state_change(&self) {
+        self.state_changed.notified().await;
+    }
+
+    /// 只读探测：`READY` 时真发一次 `tools/list` 校验连通性，不改快照、不改状态。
+    ///
+    /// 非 `READY` 时按状态给出固定文案（不发请求）。
+    pub async fn probe(&self) -> Result<(), McpError> {
+        let peer = self.ready_peer()?;
+        discover::fetch(&peer, &self.spec.id).await.map(|_| ())
+    }
+
     /// 建立连接并完成握手：成功置 `Ready`，失败置 `Failed`。
     ///
     /// 已 `Ready` 时直接返回（幂等）；`connect_timeout_ms` 是「建 transport + initialize」的总上限，
@@ -123,6 +149,7 @@ impl McpClient {
         let cancel = CancellationToken::new();
         let handler = LingtingClientHandler {
             tool_changed: Arc::clone(&self.tool_changed),
+            tool_changed_notify: Arc::clone(&self.tool_changed_notify),
         };
         // 差异只在「怎么建 transport」：stdio 会在这里起动子进程。
         let result = match &self.spec.transport {
@@ -189,7 +216,15 @@ impl McpClient {
     /// （README §4.7「工具已被移除 → 调用期错误」）。`tool_name` 是 server 里的原名：server 不认
     /// 模型可见名，因此错误文案里出现的也是原名（可见名到原名的映射只有一层）。
     pub async fn call_tool(&self, tool_name: &str, args: Value) -> Result<ToolOutput, McpError> {
-        let peer = self.ready_peer()?;
+        // 计数口径见 `metrics` 模块：总数在入口记，失败在两条出口分别记。
+        metrics::record_call();
+        let peer = match self.ready_peer() {
+            Ok(peer) => peer,
+            Err(error) => {
+                metrics::record_call_error();
+                return Err(error);
+            }
+        };
         let params = match args {
             Value::Object(arguments) => CallToolRequestParams::new(tool_name.to_owned()).with_arguments(arguments),
             // 非对象参数无法表达成 `arguments`，按「不带参数」发出，由 server 判定。
@@ -198,6 +233,7 @@ impl McpClient {
         let result = match peer.call_tool(params).await {
             Ok(result) => result,
             Err(error) => {
+                metrics::record_call_error();
                 let error = McpError::from_service(&self.spec.id, Some(tool_name), &error);
                 if matches!(error, McpError::ToolNotFound { .. }) {
                     self.fail(&error);
@@ -205,7 +241,12 @@ impl McpClient {
                 return Err(error);
             }
         };
-        Ok(crate::result::map(result))
+        let output = crate::result::map(result);
+        if output.is_error {
+            // server 返回 `isError = true`：同样是失败调用，计入 `call_errors`。
+            metrics::record_call_error();
+        }
+        Ok(output)
     }
 
     /// 发现工具：自动翻页 → 命名与冲突消解 → 存快照。
@@ -266,6 +307,8 @@ impl McpClient {
     /// 置状态。
     fn set_state(&self, state: McpState) {
         *self.lock(&self.state) = state;
+        // 每次迁移都唤醒监督任务：它据此排退避重连（不轮询）。
+        self.state_changed.notify_one();
     }
 
     /// 记 / 清 `lastError`。
@@ -313,6 +356,8 @@ where
 /// 客户端处理器：只做两件事——带 `clientInfo`、把 `tools/list_changed` 记成一次待刷新。
 struct LingtingClientHandler {
     tool_changed: Arc<AtomicU64>,
+    /// 唤醒 manager 的监督任务（不轮询）。
+    tool_changed_notify: Arc<Notify>,
 }
 
 impl ClientHandler for LingtingClientHandler {
@@ -324,7 +369,8 @@ impl ClientHandler for LingtingClientHandler {
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        // 只记账，重新发现由 manager 触发（D-P4-010）：客户端不认识注册表。
+        // 只记账并唤醒，重新发现由 manager 触发（D-P4-010）：客户端不认识注册表。
         self.tool_changed.fetch_add(1, Ordering::Relaxed);
+        self.tool_changed_notify.notify_one();
     }
 }
