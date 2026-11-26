@@ -23,7 +23,7 @@
 | ID | 主题 | 状态 |
 |---|---|---|
 | D-P4-001 | 新增 `agent-mcp`，MCP 协议类型只在该 Crate；不依赖 `types-core` | DECIDED |
-| D-P4-002 | `rmcp` 3.11.0 与客户端特性集 | DECIDED (待验证) |
+| D-P4-002 | `rmcp` 3.11.0 与客户端特性集 | DECIDED |
 | D-P4-003 | `Tool` 契约放宽：`&str` + `ToolSchema::from_value` | DECIDED |
 | D-P4-004 | `ToolRegistry` 运行期可变（`RwLock` + 条目默认权限） | DECIDED |
 | D-P4-005 | 模型可见工具名 `mcp__<server>__<tool>` 与规范化规则 | DECIDED |
@@ -31,7 +31,7 @@
 | D-P4-007 | MCP 工具默认权限按 server 配置，缺省 `allow` | DECIDED |
 | D-P4-008 | 配置持久化：独立 `mcp.toml` 唯一来源，启停只在内存 | DECIDED |
 | D-P4-009 | 连接时机：启动期并发连接，失败不阻塞启动 | DECIDED |
-| D-P4-010 | 工具快照差量刷新与 `tools/list_changed` | DECIDED (待验证) |
+| D-P4-010 | 工具快照差量刷新与 `tools/list_changed` | DECIDED |
 | D-P4-011 | 退避重连策略与关闭开关 | DECIDED |
 | D-P4-012 | `tools/list` 自动翻页与单 server 工具数处理 | DECIDED |
 | D-P4-013 | stdio 安全边界：显式 `enabled`，不做可执行路径白名单 | DECIDED |
@@ -102,6 +102,10 @@
   - `cargo tree -i rmcp` 只命中 `agent-mcp`（本批尚无 `bin-tests` 的 `server` 特性）。
   - `cargo tree -i reqwest` 只有 **0.13.5 一份**（`rmcp` 与 `framework-http` 共用 workspace 版本），没有「两份 reqwest」的构建代价。
   - `cargo tree -p agent-mcp` 里不出现 `agent-runtime` / `agent-route` / `rig-core` / `service-core` / `types-core` / `lib-db` / `lib-web*` / `bin-*`。
+- **实测结果（P4-017 / P4-018，2026-11-26）**：
+  - 测试替身需要 **server 侧**特性：`bin-tests` 在 workspace 声明的客户端特性之上追加 `server` + `transport-io` + `transport-streamable-http-server`（`crates/bin-tests/Cargo.toml`）；正式构建（`agent-mcp`）的特性清单不变。
+  - `cargo tree -i rmcp` 现在命中 `agent-mcp` 与 `bin-tests` 两处，符合 A-2 的口径；`cargo tree -i reqwest` 仍只有 0.13.5 一份。
+  - 替身的 HTTP 监听用 workspace 的 `axum` 0.8 组合 `StreamableHttpService`；stdio 用 `rmcp::transport::stdio()`。两条路径都由 `mcp.discover` / `mcp.http` 实际跑通。
 
 ---
 
@@ -299,7 +303,7 @@
 
 ## D-P4-010 工具快照差量刷新与 `tools/list_changed`
 
-- **状态**：`DECIDED (待验证)`
+- **状态**：`DECIDED`（P4-018 实测通过，见下方「实测结果」）
 - **问题**：发现到的工具怎么进注册表？server 侧工具变化了怎么办？
 - **背景与证据**：
   - MCP 规范有 `notifications/tools/list_changed` 通知；`rmcp` 的 `ClientHandler` 提供通知回调（具体方法名在 3.11 的 docs 里以 `on_*` 形式出现，需 P4-005 实测确认）。
@@ -318,6 +322,7 @@
   - 发现失败时保留上一份快照，不清空（避免一次抖动让工具消失）。
   - 刷新与启停/重连共用同一把按 server 分段的锁，不持全局锁。
 - **承接任务**：P4-007、P4-010。
+- **实测结果（P4-018，2026-11-26）**：`rmcp` 3.11 的通知回调是 `ClientHandler::on_tool_list_changed`（`agent-mcp/src/client.rs` 只记账并唤醒监督任务，重新发现由 manager 触发）。`mcp.discover` 用替身的 `list_changed` 剧本取证：第一次 `tools/list` 只有 `echo`，替身发出 `notifications/tools/list_changed` 后自动重新发现，`tool/list` 与下一轮请求体的 `tools` 同步出现 `late_tool`（差集只新增一条）。
 
 ---
 

@@ -6,6 +6,7 @@
 pub(crate) mod context;
 pub(crate) mod flow;
 pub(crate) mod frontend;
+pub(crate) mod mcp;
 pub(crate) mod observability;
 pub(crate) mod paths;
 pub(crate) mod prepare;

@@ -1,6 +1,6 @@
 # P4：MCP Integration
 
-**状态：已细化，待开工（20 个任务 / 5 个批次，23 项决策全部定案）。** 任务与批次见 [tasks.md](tasks.md)，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已完成（2026-11-26；20 个任务 / 5 个批次，23 项决策全部定案）。** 任务与批次见 [tasks.md](tasks.md)，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)，阶段验收报告见 [`docs/reports/p4-020-acceptance.md`](../../docs/reports/p4-020-acceptance.md)。
 
 > 依据：P3 的验收结论（[`docs/reports/p3-032-acceptance.md`](../../docs/reports/p3-032-acceptance.md)）、`docs/workspace.md` 的 `agent-mcp` 职责、`docs/develop.md` 的 API 契约规范、`docs/api/readme.md` 的路径动作词表，以及仓库实际代码（`crates/agent-tool`、`crates/agent-runtime`、`crates/manager-agent`、`crates/lib-web`、`crates/types-core`、`crates/lib-bin-cli`、`crates/bin-tests`）。凡文档与代码不一致之处，以代码为准并记入 [decisions.md](decisions.md)。
 >
@@ -353,7 +353,7 @@ A ──► B ──► C ──► D ──► E
 
 ## 七、已知限制与风险
 
-1. **rmcp 的 API 稳定性**：3.11 已是可用的正式版本，但 `serve` / `RunningService` / `ClientHandler` 的细节仍需在 P4-001 与 P4-005 实测确认；发现不一致时以代码为准并回填决策（D-P4-002 状态为「DECIDED（待验证）」的同类处理）。
+1. **rmcp 的 API 稳定性（已实测闭环）**：3.11 的 `serve` / `RunningService` / `ClientHandler`（含 `on_tool_list_changed`）已由 P4-005 ~ P4-010 落地并回填 D-P4-002 / D-P4-010；后续升级仍以代码为准并回填决策。
 2. **依赖体积与重复 reqwest**：`rmcp` 的 HTTP transport 可能带入与 workspace 不同版本的 `reqwest`（workspace 是 0.13）。P4-001 要核对 `cargo tree -i reqwest`，若出现两份则记录为已知构建代价（不强行统一版本，避免动 P2 的 Provider 链路）。
 3. **工具名规范化会失真**：`mcp__<server>__<tool>` 经过小写化、非法字符替换与超长截断后，模型看到的名字可能不等于 server 原名。原名只在 `McpToolVO.originalName` 里保留；这会让「按文档手动调工具」的人需要查一次接口。
 4. **文件操作声明是自述，不是校验**：`file_access` 由配置声明（缺省 `None`，精确名 + `*` 通配，前者优先），系统只用它推导并发语义与写审计，不会验证 server 实际动了什么。把会写文件的 server 声明成 `none`（或漏配匹配模式）会让它的工具按并行执行；命中 `write` / `read-write` 才会自动串行。通配只是字符串匹配，不理解语义——`*` 写宽了就会把只读工具也标成写（只会更保守），写窄了则漏标。这不是沙箱，真正的隔离留给 P6。
@@ -376,7 +376,7 @@ A ──► B ──► C ──► D ──► E
 | 编号 | 事项 | 状态 |
 |---|---|---|
 | D-P4-001 | 新增 `agent-mcp`，MCP 协议类型只在该 Crate | 已定案 |
-| D-P4-002 | `rmcp` 3.11.0 + 特性集（client / child-process / streamable-http-client-reqwest） | 已定案（待验证） |
+| D-P4-002 | `rmcp` 3.11.0 + 特性集（client / child-process / streamable-http-client-reqwest；测试替身另加 server 侧特性） | 已定案（实测回填） |
 | D-P4-003 | `Tool` 契约放宽为 `&str` + `ToolSchema::from_value`（MCP 动态名字与外部 schema） | 已定案 |
 | D-P4-004 | `ToolRegistry` 运行期可变（`RwLock` + 条目默认权限） | 已定案 |
 | D-P4-005 | 模型可见工具名 `mcp__<server>__<tool>` + 规范化与冲突规则 | 已定案（需求方确认前缀） |

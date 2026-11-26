@@ -167,6 +167,22 @@ fn snapshot_table(metrics: &MetricsSnapshot) -> String {
         "| Run 执行 | 同时执行峰值 {}，读取瞬间 {} 个在跑 |\n",
         metrics.limit.running_max, metrics.limit.running_now
     ));
+    // MCP 段（P4-013）：状态现状 + 本次运行的累计量。
+    text.push_str(&format!(
+        "| MCP | server {}（READY {}｜FAILED {}｜DISABLED {}），工具 {}｜连接 {}（失败 {}｜自动重连 {}）｜调用 {}（失败 {}｜超时 {}）｜关闭强杀 {} |\n",
+        metrics.mcp.servers,
+        metrics.mcp.ready,
+        metrics.mcp.failed,
+        metrics.mcp.disabled,
+        metrics.mcp.tools,
+        metrics.mcp.connects,
+        metrics.mcp.connect_failures,
+        metrics.mcp.reconnects,
+        metrics.mcp.calls,
+        metrics.mcp.call_errors,
+        metrics.mcp.call_timeouts,
+        metrics.mcp.shutdown_kills
+    ));
     text.push_str(&format!(
         "| 日志审计 | 事件 {}（ERROR {}｜WARN {}），敏感串命中 {}，panic {} |\n\n",
         metrics.audit.total, metrics.audit.error, metrics.audit.warn, metrics.audit.secret_hits, metrics.audit.panics

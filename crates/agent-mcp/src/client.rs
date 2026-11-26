@@ -298,9 +298,12 @@ impl McpClient {
     }
 
     /// 置失败状态并记原因（唯一写入者）。
+    ///
+    /// 必须走 [`McpClient::set_state`]：失败也是一次状态迁移，监督任务靠这次唤醒排退避重连
+    /// （D-P4-011）。直接写状态会让「自动重连」永远不触发，只能靠手动 `RECONNECT`。
     fn fail(&self, error: &McpError) {
         let reason = error.to_string();
-        *self.lock(&self.state) = McpState::Failed { reason: reason.clone() };
+        self.set_state(McpState::Failed { reason: reason.clone() });
         self.set_last_error(Some(reason));
     }
 

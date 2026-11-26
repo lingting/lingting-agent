@@ -94,11 +94,26 @@ impl Server {
     }
 
     /// 同 [`Self::start_with`]，但自定义日志级别：需要检索日志内容的用例（`llm.canary`）用 `trace`。
+    /// 同 [`Self::start_with`]，但自定义日志级别：需要检索日志内容的用例（`llm.canary`）用 `trace`。
     pub async fn start_with_level(port: u16, log_dir: PathBuf, config: &str, level: &str) -> Result<Self> {
+        Self::start_inner(port, log_dir, config, None, level).await
+    }
+
+    /// 同时写 `mcp.toml` 启动：MCP 用例要的是「服务端按配置连替身」（P4-018）。
+    pub async fn start_with_mcp(port: u16, log_dir: PathBuf, config: &str, mcp: &str) -> Result<Self> {
+        Self::start_inner(port, log_dir, config, Some(mcp), "warn").await
+    }
+
+    /// 真正的启动流程：配置随应用根目录落地 → 起子进程 → 等探活。
+    async fn start_inner(port: u16, log_dir: PathBuf, config: &str, mcp: Option<&str>, level: &str) -> Result<Self> {
         std::fs::create_dir_all(&log_dir).with_context(|| format!("创建测试目录失败：{}", log_dir.display()))?;
         // 配置随应用根目录落地：`[provider]` 段存在时 `session/create` 会校验模型归属（D-P2-015）。
         std::fs::write(log_dir.join(CONFIG_FILE), config)
             .with_context(|| format!("写入测试配置失败：{}", log_dir.display()))?;
+        // MCP 配置独立于 `config.toml`：同一应用根目录跑第二次时按这次传的内容覆盖。
+        if let Some(mcp) = mcp {
+            crate::util::mcp::write_config(&log_dir, mcp)?;
+        }
         // 追加写：同一 `AGENT_HOME` 重启时保留上一次运行的日志，便于排查启动失败。
         let output = std::fs::OpenOptions::new()
             .create(true)
@@ -205,7 +220,31 @@ pub(crate) async fn serve_once<T>(
     config: &str,
     body: impl Future<Output = Result<T>>,
 ) -> Result<T> {
-    let server = Server::start_with(context.port()?, context.home().to_path_buf(), config).await?;
+    serve_once_inner(context, config, None, body).await
+}
+
+/// 同 [`serve_once`]，但先把 `mcp.toml` 写进同一个应用根目录：MCP 用例走这里（P4-018）。
+pub(crate) async fn serve_once_mcp<T>(
+    context: &TestContext,
+    config: &str,
+    mcp: &str,
+    body: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    serve_once_inner(context, config, Some(mcp), body).await
+}
+
+/// 启动 → 跑用例 → 采集快照 → 停止；`mcp` 为空时不写 `mcp.toml`。
+async fn serve_once_inner<T>(
+    context: &TestContext,
+    config: &str,
+    mcp: Option<&str>,
+    body: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let home = context.home().to_path_buf();
+    let server = match mcp {
+        Some(mcp) => Server::start_with_mcp(context.port()?, home, config, mcp).await?,
+        None => Server::start_with(context.port()?, home, config).await?,
+    };
     let result = body.await;
     // 采集必须在停止之前：停止走 `start_kill`，进程一退就再也取不到快照（P2.2-005）。
     context.observe_metrics(server.metrics().await);

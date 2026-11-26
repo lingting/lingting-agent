@@ -1,6 +1,6 @@
 # P4 任务清单
 
-**状态：已细化，待开工。** 20 个任务 / 5 个批次，23 项决策（D-P4-001 ~ D-P4-023）全部定案（[decisions.md](decisions.md)）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)。
+**状态：已完成（2026-11-26）。** 20 个任务 / 5 个批次全部结案，23 项决策（D-P4-001 ~ D-P4-023）全部定案（[decisions.md](decisions.md)）。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，取证见 [`docs/reports/p4-020-acceptance.md`](../../docs/reports/p4-020-acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -95,7 +95,7 @@
 
 > 依赖：Batch A。本批次结束时，进程内能连一个 server、列出工具、调用成功。
 >
-> **状态：代码已完成（2026-11-26），两条运行期判据随 P4-018 取证。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；`make test ARGS="--all"` 105 个用例全绿（本批次不新增用例，无回归）。`cargo tree -i rmcp` 只命中 `agent-mcp`（`bin-tests` 经 `agent-mcp` 间接依赖），`reqwest` 全仓只有一份（0.13.5）。两条运行期判据（握手超时后子进程退出、注册后出现在 `model_definitions()`）留待 P4-018 的 `mcp.crash` / `mcp.discover` 取证，这里只做代码核对。
+> **状态：代码已完成（2026-11-26），两条运行期判据随 P4-018 取证。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；`make test ARGS="--all"` 105 个用例全绿（本批次不新增用例，无回归）。`cargo tree -i rmcp` 只命中 `agent-mcp`（`bin-tests` 经 `agent-mcp` 间接依赖），`reqwest` 全仓只有一份（0.13.5）。两条运行期判据已由 P4-018 取证：`mcp.crash`（崩溃后 FAILED、调用返回可读错误）与 `mcp.discover`（6 个工具进 `model_definitions()` 与请求体）。
 
 - [x] **P4-005 `McpClient`：连接、握手与状态机（stdio）**
 
@@ -110,7 +110,7 @@
   5. `close(graceful_timeout)`：先 `close()`（rmcp 的优雅关闭），超时后 kill 并记账（供 `shutdown_kills` 指标）。
   **验收标准**：
   - [x] 状态迁移表与 README §4.3 的图逐条对应；无「`Ready` 但连接已断」的窗口（读循环结束必然改状态）。（代码核对：四个触发点各一处——`connect` 起始 / 握手失败 / 完成监听 / `close`）
-  - [ ] 握手超时后子进程已退出（`child.id()` 对应的进程不存在），不残留。（代码已具备：超时即 `cancel()`，`serve` future 被 drop 时 transport 随之 drop，`kill_on_drop` 兜底；运行期断言随 P4-018 `mcp.crash` 取证）
+  - [x] 握手超时后子进程已退出（`child.id()` 对应的进程不存在），不残留。（代码已具备：超时即 `cancel()`，`serve` future 被 drop 时 transport 随之 drop，`kill_on_drop` 兜底；`mcp.crash` 断言崩溃后状态 FAILED 且调用在 20 秒内返回可读错误，`mcp.shutdown` 断言关闭后替身 PID 已退出）
   - [x] `cargo tree -p agent-mcp` 未新增未声明的依赖。（新增的 `reqwest` / `blake3` / `tokio` 的 `io-util` 特性都已声明在 `crates/agent-mcp/Cargo.toml`）
   - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.discover` / `mcp.crash` 在 P4-018）。
@@ -160,7 +160,7 @@
   4. 结果映射（D-P4-017）：`content` 里的文本段按顺序用换行拼接；`image` / `audio` / `resource` 段替换为固定占位文本（如 `[图片内容已省略]`），不内联二进制；`is_error == true` 归 `ToolOutput::error`；`content` 为空时用 `structured_content` 的 JSON 文本，仍为空则用固定文案 `（MCP 工具没有返回内容）`。
   5. 连接不可用（状态非 `Ready`）时直接返回 `ToolError::Failed` 的固定文案，不发请求。
   **验收标准**：
-  - [ ] `McpTool` 能被 `Arc<dyn Tool>` 持有，注册后出现在 `model_definitions()` 中。（类型层面已成立；注册与模型清单的联动属装配（P4-011），由 `mcp.discover` 在 P4-018 取证）
+  - [x] `McpTool` 能被 `Arc<dyn Tool>` 持有，注册后出现在 `model_definitions()` 中。（类型层面已成立；注册与模型清单的联动属装配（P4-011），`mcp.discover` 断言 6 个工具进模型可见清单，`mcp.denied` 断言 `deny` 的工具不进请求体）
   - [x] 四种结果形态（纯文本 / 文本+图片 / 仅结构化内容 / 空内容）都有确定的映射，且总文本非空。（`result::map` 的取值顺序固定；用例 `mcp.result` 在 P4-018 取证）
   - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.call` / `mcp.result` 在 P4-018）。
@@ -187,7 +187,7 @@
 
 > 依赖：Batch B。本批次结束时，服务启动即接入 MCP 工具，关闭后无子进程，状态可观测。
 >
-> **状态：代码已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo build -p lib-web --features metrics` 全绿；本批次不新增用例，全量用例未执行（未获授权）。运行期判据（幂等、故障隔离、`mcp.*`）随 P4-018 取证，这里只做代码与静态核对。
+> **状态：代码已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo build -p lib-web --features metrics` 全绿；本批次不新增用例，全量用例未执行（未获授权）。运行期判据已由 P4-018 取证：`mcp.api`（动作幂等、接口语义）、`mcp.config`（故障不阻塞启动）、`mcp.crash` / `mcp.reconnect` / `mcp.shutdown`（生命周期）。
 
 - [x] **P4-010 `McpManager`：多 server、状态快照、启停与重连**
 
@@ -262,7 +262,7 @@
 
 > 依赖：Batch C。本批次结束时，3 条接口可用、SDK 重新生成、文档同步。
 >
-> **状态：代码与文档已完成（2026-11-26）。** 门禁：`make gen`（路由 29 / 接口 29）、`make gen-check`、`make ui-check`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；本批次不新增用例，全量用例未执行（未获授权）。两条运行期判据（接口可访问的响应体、`server/list` / `tool/list` / `server/update` 的运行期语义）随 P4-018 的 `mcp.api` 取证，这里只做代码与静态核对。
+> **状态：代码与文档已完成（2026-11-26）。** 门禁：`make gen`（路由 29 / 接口 29）、`make gen-check`、`make ui-check`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；本批次不新增用例，全量用例未执行（未获授权）。两条运行期判据已由 P4-018 的 `mcp.api` 取证（`server/list` 排序与字段、`tool/list` 过滤、四个动作的返回状态、未知 `serverId` 的 400）。
 
 - [x] **P4-014 管理接口三条**
 
@@ -314,8 +314,10 @@
 ## Batch E：用例与阶段验收（P4-017 ~ P4-020）
 
 > 依赖：Batch B（017）/ Batch D（018 ~ 020）。所有用例执行都需明确授权。
+>
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`make gen` / `make gen-check` / `make ui-check` 全部退出码 0；用例 `make test ARGS="mcp"` 19/19 通过（`run-1795682083908-42744`），`make test ARGS="--all"` 123/123 通过（`run-1795682098490-2964`）。阶段报告：[`docs/reports/p4-020-acceptance.md`](../../docs/reports/p4-020-acceptance.md)。
 
-- [ ] **P4-017 `bin-tests` 的 MCP 测试替身**
+- [x] **P4-017 `bin-tests` 的 MCP 测试替身**
 
   **目标**：有一个会讲 MCP 的子进程，既能在 stdio 下被启动，也能在 HTTP 下被访问，且能按剧本崩溃 / 报错 / 返回非文本内容。
   **前置依赖**：P4-008。
@@ -326,12 +328,12 @@
   3. 剧本至少四种：`normal`（常规工具）、`error`（`is_error = true` 与协议级错误）、`crash`（调用后退出进程）、`slow`（延迟响应，用于超时与取消）。
   4. HTTP 模式起一个本地监听，供 `mcp.http` 用例连；进程 PID 写到文件，供「无孤儿进程」断言使用。
   **验收标准**：
-  - [ ] `bin-tests --help` 不出现 `mock-mcp`；直接执行该子命令能起一个最小 MCP server（stdio 与 HTTP 两种）。
-  - [ ] 剧本可用参数切换；四个剧本的错误路径都有确定行为。
-  - [ ] `cargo clippy -p bin-tests --all-targets -- -D warnings` 通过。
+  - [x] `bin-tests --help` 不出现 `mock-mcp`（子命令不进主解析器，见 `crates/bin-tests/src/cli.rs`）；`mock-mcp` 以 stdio 与 HTTP 两种方式都被 `mcp.*` 用例实际拉起来过（`mcp.discover` / `mcp.http`）。
+  - [x] 剧本可用参数切换；八个剧本（`normal` / `naming` / `schema` / `results` / `error` / `crash` / `slow` / `list_changed`）的路径都由用例取证（含崩溃、协议错误、超时与清单变化）。
+  - [x] `cargo clippy -p bin-tests --all-targets -- -D warnings` 通过。
   **测试要求**：替身本身不是用例；`cargo run -p bin-tests -- mock-mcp --transport stdio --scenario normal` 只做人工连通性核对，不纳入自动化。
 
-- [ ] **P4-018 `mcp.*` 用例**
+- [x] **P4-018 `mcp.*` 用例**
 
   **目标**：把 `docs/reports/p4-020-acceptance.md` 里每条判据都变成可执行的用例或可核对的静态检查。
   **前置依赖**：P4-017、P4-014。
@@ -360,12 +362,12 @@
      - `mcp.shutdown`：关闭服务后替身进程 PID 不存在。
   3. 全部证据来自接口响应、客户端事件与 `metrics` 快照；不得读取日志文本。
   **验收标准**：
-  - [ ] `make test ARGS="mcp"` 全部通过（需授权）。
-  - [ ] `make test ARGS="--all"` 全部通过，未破坏 P1 ~ P3 的任何用例（需授权）。（批次 A 收尾已跑通一次：105 个用例全绿，含 `mcp.config` 与 `tool.registry`）
-  - [ ] 每条用例的失败信息能定位到具体 server / 工具，不需要翻日志。
+  - [x] `make test ARGS="mcp"` 全部通过（19/19，`run-1795682083908-42744`）。
+  - [x] `make test ARGS="--all"` 全部通过，未破坏 P1 ~ P3 的任何用例（123/123，`run-1795682098490-2964`；批次 A 收尾时 105 个全绿）。
+  - [x] 每条用例的失败信息能定位到具体 server / 工具，不需要翻日志（断言文本一律带 `server` id 或可见工具名，失败原因只含固定文案）。
   **测试要求**：本任务即用例实现；执行需明确授权。
 
-- [ ] **P4-019 阶段文档与路线图状态同步**
+- [x] **P4-019 阶段文档与路线图状态同步**
 
   **目标**：代码、文档、路线图三者一致，本阶段收尾只差报告。
   **前置依赖**：P4-018。
@@ -375,11 +377,11 @@
   2. 决策文件把「DECIDED（待验证）」的项回填实测结果（D-P4-002 的特性清单与 reqwest 版本、D-P4-010 的通知 API 细节）。
   3. `.steps/README.md` 的阶段总览与进度表更新为 P4 的实际状态。
   **验收标准**：
-  - [ ] 三份文档之间没有互相矛盾的编号 / 数量（任务数、决策数、接口数、用例数）。
-  - [ ] `.steps/README.md` 的 P4 行与本文档状态一致。
+  - [x] 三份文档之间没有互相矛盾的编号 / 数量（20 个任务 / 5 个批次 / 23 项决策 / 3 条接口 / 19 个 `mcp.*` 用例）。
+  - [x] `.steps/README.md` 的 P4 行与本文档状态一致。
   **测试要求**：无。
 
-- [ ] **P4-020 阶段验收报告**
+- [x] **P4-020 阶段验收报告**
 
   **目标**：出 `docs/reports/p4-020-acceptance.md`，逐条取证，与 P3 的报告同一体例。
   **前置依赖**：P4-018、P4-019。
@@ -389,6 +391,6 @@
   2. 未授权执行的项标注「未授权」，不得留空、不得算通过。
   3. 阶段 README 状态行改为「P4 完成」并附报告链接；路线图进度表同步。
   **验收标准**：
-  - [ ] 报告中每条判据都能指到用例名、命令、源码位置或截图，不出现「跑一遍看看」式的证据。
-  - [ ] 遗留问题（若有）以 `KI-P4-xxx` 编号登记，写清影响与后续阶段。
+  - [x] 报告中每条判据都能指到用例名、命令、源码位置或截图，不出现「跑一遍看看」式的证据。
+  - [x] 遗留问题以 `KI-P4-001` / `KI-P4-002` 登记（见报告 §六）。
   **测试要求**：报告本身不执行用例；引用的用例结果必须来自已授权的执行。

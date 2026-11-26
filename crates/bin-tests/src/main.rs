@@ -27,16 +27,27 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let cli::Command::Run(config) = command else {
-        return ExitCode::SUCCESS;
-    };
-
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("创建 Tokio 运行时失败：{error}");
             return ExitCode::FAILURE;
         }
+    };
+
+    // 隐藏子命令 `mock-mcp`：同一个二进制既是测试入口，也是 MCP 测试替身（P4-017）。
+    if let cli::Command::MockMcp(config) = command {
+        return match runtime.block_on(mock::mcp::serve(config)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    let cli::Command::Run(config) = command else {
+        return ExitCode::SUCCESS;
     };
 
     match runtime.block_on(runner::execute(config)) {

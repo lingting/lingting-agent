@@ -36,6 +36,17 @@ futures-util = { workspace = true }
 sqlx = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "process"] }
+# MCP 测试替身（P4-017）：只在这里追加 `server` 侧特性，正式构建仍只有客户端（D-P4-002）。
+rmcp = { workspace = true, features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+# 替身的 HTTP 监听（与 rmcp 的 streamable HTTP server 组合成最小 tower 栈）。
+axum = { workspace = true }
+tokio-util = { workspace = true }
+# 「替身进程是否还在」的断言：读进程表，不调用系统管理命令。
+sysinfo = { workspace = true }
 
 [lints]
 workspace = true
