@@ -18,7 +18,12 @@ lib-core = { workspace = true }
 # MCP 协议栈：本 Crate 是 `rmcp` 的唯一落点（D-P4-002），特性只有客户端与两种 transport。
 rmcp = { workspace = true }
 # stdio 子进程与超时（`process` / `time`），握手与状态机用 `sync`。
-tokio = { workspace = true, features = ["process"] }
+# stdio 子进程（`process`）、超时（`time`）、锁与通道（`sync`）、读子进程 stderr（`io-util`）。
+tokio = { workspace = true, features = ["process", "io-util"] }
+# http transport 的底层客户端：rmcp 只提供 `with_client`，客户端由本 Crate 构造（P4-006）。
+reqwest = { workspace = true }
+# 短哈希：`blake3` 已在 workspace 依赖里（超长名与命名冲突的可复算后缀，D-P4-005）。
+blake3 = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 # 取消信号（`CancellationToken`）：关闭与重连都以取消收口（同 `agent-tool` 的口径）。

@@ -94,8 +94,10 @@
 ## Batch B：连接、传输与适配器（P4-005 ~ P4-009）
 
 > 依赖：Batch A。本批次结束时，进程内能连一个 server、列出工具、调用成功。
+>
+> **状态：代码已完成（2026-11-26），两条运行期判据随 P4-018 取证。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；`make test ARGS="--all"` 105 个用例全绿（本批次不新增用例，无回归）。`cargo tree -i rmcp` 只命中 `agent-mcp`（`bin-tests` 经 `agent-mcp` 间接依赖），`reqwest` 全仓只有一份（0.13.5）。两条运行期判据（握手超时后子进程退出、注册后出现在 `model_definitions()`）留待 P4-018 的 `mcp.crash` / `mcp.discover` 取证，这里只做代码核对。
 
-- [ ] **P4-005 `McpClient`：连接、握手与状态机（stdio）**
+- [x] **P4-005 `McpClient`：连接、握手与状态机（stdio）**
 
   **目标**：把「怎么连一个 server」收敛到一个类型里，状态机的每次迁移都有明确的触发点与可见结果。
   **前置依赖**：P4-001、P4-004。
@@ -107,13 +109,13 @@
   4. `await` `RunningService` 的完成信号，完成即把 `Ready` 改为 `Failed`（读循环结束 = 断开 / 崩溃），并记录可读原因。
   5. `close(graceful_timeout)`：先 `close()`（rmcp 的优雅关闭），超时后 kill 并记账（供 `shutdown_kills` 指标）。
   **验收标准**：
-  - [ ] 状态迁移表与 README §4.3 的图逐条对应；无「`Ready` 但连接已断」的窗口（读循环结束必然改状态）。
-  - [ ] 握手超时后子进程已退出（`child.id()` 对应的进程不存在），不残留。
-  - [ ] `cargo tree -p agent-mcp` 未新增未声明的依赖。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [x] 状态迁移表与 README §4.3 的图逐条对应；无「`Ready` 但连接已断」的窗口（读循环结束必然改状态）。（代码核对：四个触发点各一处——`connect` 起始 / 握手失败 / 完成监听 / `close`）
+  - [ ] 握手超时后子进程已退出（`child.id()` 对应的进程不存在），不残留。（代码已具备：超时即 `cancel()`，`serve` future 被 drop 时 transport 随之 drop，`kill_on_drop` 兜底；运行期断言随 P4-018 `mcp.crash` 取证）
+  - [x] `cargo tree -p agent-mcp` 未新增未声明的依赖。（新增的 `reqwest` / `blake3` / `tokio` 的 `io-util` 特性都已声明在 `crates/agent-mcp/Cargo.toml`）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.discover` / `mcp.crash` 在 P4-018）。
 
-- [ ] **P4-006 streamable HTTP transport**
+- [x] **P4-006 streamable HTTP transport**
 
   **目标**：远程 server 与本地 server 走同一套状态机与调用路径，差别只在建 transport。
   **前置依赖**：P4-005。
@@ -123,12 +125,12 @@
   2. 复用 P4-005 的握手、完成监听与关闭路径；不做 transport 分支的状态机复制。
   3. `HEAD`/`GET` 的 SSE 重连由 rmcp 负责，本项目不额外实现（写进注释）；连接失败与 stdio 一样归 `Failed`。
   **验收标准**：
-  - [ ] 两种 transport 共用同一份 `connect` / `close` / 状态更新代码（`git diff` 可见只有构造函数分支）。
-  - [ ] `headers` 出现在请求里，且不出现在任何错误文本或日志之外的地方（错误文案不含 header 值）。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [x] 两种 transport 共用同一份 `connect` / `close` / 状态更新代码（`git diff` 可见只有构造函数分支）。（`client::connect` 的 match 只选 transport 构造；握手 / 监听 / 关闭 / 调用各一份）
+  - [x] `headers` 出现在请求里，且不出现在任何错误文本或日志之外的地方（错误文案不含 header 值）。（原样进 `custom_headers`；`debug` 只记头名，不记头值）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.http` 在 P4-018，配合 P4-017 的 HTTP 替身）。
 
-- [ ] **P4-007 工具发现与命名映射**
+- [x] **P4-007 工具发现与命名映射**
 
   **目标**：把 `tools/list` 变成稳定的、可复算的模型可见清单；命名规则只有一个实现点。
   **前置依赖**：P4-002、P4-005。
@@ -140,13 +142,13 @@
   4. 发现结果产出 `Vec<McpToolSpec { server_id, tool_name, original_name, description, schema, risk, file_access }>`，`schema` 用 `ToolSchema::from_value` 包装 `inputSchema`，`file_access` 按 D-P4-006 的优先级解析。
   5. 发现失败（`tools/list` 报错）时保留上一次的 spec 快照，`lastError` 记原因，状态保持 `Ready`。
   **验收标准**：
-  - [ ] 同一份 server 工具列表两次发现产出完全相同的可见名（可复算）。
-  - [ ] 非法字符 / 大写 / 超长 / 空名四种输入都有确定的输出，且输出满足 `validate_name`。
-  - [ ] 冲突用例的输出稳定（先注册者不变、后来者带哈希后缀）。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [x] 同一份 server 工具列表两次发现产出完全相同的可见名（可复算）。（发现结果按原名升序，后缀取 `blake3(原名)` 前 8 位）
+  - [x] 非法字符 / 大写 / 超长 / 空名四种输入都有确定的输出，且输出满足 `validate_name`。（规则集中在 `naming::sanitize` / `naming::visible_name`；用例 `mcp.name` 在 P4-018 取证）
+  - [x] 冲突用例的输出稳定（先注册者不变、后来者带哈希后缀）。（`discover::resolve` 按固定顺序处理，后到者走 `naming::disambiguate`）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.name` / `mcp.discover` 在 P4-018）。
 
-- [ ] **P4-008 `McpTool` 适配器：`Tool` 实现与结果映射**
+- [x] **P4-008 `McpTool` 适配器：`Tool` 实现与结果映射**
 
   **目标**：MCP 工具在运行时眼里就是一个普通工具；调用结果映射成 P3 的 `ToolOutput`。
   **前置依赖**：P4-002、P4-003、P4-007。
@@ -158,12 +160,12 @@
   4. 结果映射（D-P4-017）：`content` 里的文本段按顺序用换行拼接；`image` / `audio` / `resource` 段替换为固定占位文本（如 `[图片内容已省略]`），不内联二进制；`is_error == true` 归 `ToolOutput::error`；`content` 为空时用 `structured_content` 的 JSON 文本，仍为空则用固定文案 `（MCP 工具没有返回内容）`。
   5. 连接不可用（状态非 `Ready`）时直接返回 `ToolError::Failed` 的固定文案，不发请求。
   **验收标准**：
-  - [ ] `McpTool` 能被 `Arc<dyn Tool>` 持有，注册后出现在 `model_definitions()` 中。
-  - [ ] 四种结果形态（纯文本 / 文本+图片 / 仅结构化内容 / 空内容）都有确定的映射，且总文本非空。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [ ] `McpTool` 能被 `Arc<dyn Tool>` 持有，注册后出现在 `model_definitions()` 中。（类型层面已成立；注册与模型清单的联动属装配（P4-011），由 `mcp.discover` 在 P4-018 取证）
+  - [x] 四种结果形态（纯文本 / 文本+图片 / 仅结构化内容 / 空内容）都有确定的映射，且总文本非空。（`result::map` 的取值顺序固定；用例 `mcp.result` 在 P4-018 取证）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.call` / `mcp.result` 在 P4-018）。
 
-- [ ] **P4-009 错误归一化与固定文案**
+- [x] **P4-009 错误归一化与固定文案**
 
   **目标**：MCP 侧的错误只有一份文案表，模型与客户端看到的是可读中文，不含凭证、URL、命令行与堆栈。
   **前置依赖**：P4-005、P4-008。
@@ -174,9 +176,9 @@
   3. 与 `agent-tool::ToolError` 的映射集中在 `impl From<McpError> for ToolError`：统一落到 `ToolError::Failed`（超时由执行器自己判定，不在这里造 `Timeout`）。
   4. 文案表以常量形式写在一个地方，便于判据逐条比对。
   **验收标准**：
-  - [ ] 每个错误取值都有唯一文案，且文案里不出现 `http` / `Bearer` / 命令行 / 路径。
-  - [ ] 全仓检索 `rmcp::` 只在 `agent-mcp`（`bin-tests` 的替身除外）。
-  - [ ] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
+  - [x] 每个错误取值都有唯一文案，且文案里不出现 `http` / `Bearer` / 命令行 / 路径。（五个取值各一句前缀常量，只拼 `server_id` / 工具名）
+  - [x] 全仓检索 `rmcp::` 只在 `agent-mcp`（`bin-tests` 的替身除外）。（`crates/` 下只有 `agent-mcp` 的五个模块引用 `rmcp`）
+  - [x] `cargo clippy -p agent-mcp --all-targets -- -D warnings` 通过。
   **测试要求**：无（`mcp.call_error` 与判据 E-1 ~ E-3 在 P4-018 取证）。
 
 ---
