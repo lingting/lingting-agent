@@ -35,6 +35,8 @@ const DATABASE_FILE: &str = "agent.db";
 const LEGACY_SESSION: &str = "0001-era-session";
 const LEGACY_MESSAGE: &str = "0001-era-message";
 const LEGACY_CONTENT: &str = "P2 时期的消息";
+/// 「`0001` 时代」预置的 Run：那时 `runs` 还没有恢复列（`interrupted_reason` 等）。
+const LEGACY_RUN: &str = "0001-era-run";
 
 /// 持久化领域用例。
 pub(crate) fn cases() -> Vec<Case> {
@@ -236,7 +238,7 @@ async fn session_restore_body(context: &TestContext) -> Result<CaseOutcome> {
 /// 用例主体：先造一个「`0001` 时代」的库，再连续两次启动同一 data 目录。
 async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
     let port = context.port()?;
-    // 服务端首次启动时只会补 0002：旧库里的数据必须仍然可读，新列取 NULL（P3-017 / R-6）。
+    // 服务端首次启动时只会补 0002 / 0003：旧库里的数据必须仍然可读，新列取 NULL / 0（P3-017 / P6A-002）。
     seed_0001_database(context.home()).await?;
     let server = start(context).await?;
     let session = create_session(context, "迁移会话").await?;
@@ -261,10 +263,26 @@ async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
         old.tool_call_id.is_none() && old.tool_name.is_none() && old.tool_calls.is_none(),
         "0001 时代消息的工具字段应为 null：{old:?}"
     );
-    // 0002 是「补」在旧库上的：账本里 1 与 2 都在。
+    // 0001 时代的 Run：升级后逐字段可读，三个恢复列取缺省值（P6A-002 的 P-2）。
+    let legacy_run = run_of(context, LEGACY_RUN).await?;
     ensure!(
-        ledger_versions(context.home()).await? == [1, 2],
-        "迁移账本应是 [1, 2]（0002 补在 0001 之上）"
+        legacy_run.status == RunStatus::Completed
+            && legacy_run.input_tokens == Some(3)
+            && legacy_run.output_tokens == Some(5),
+        "0001 时代的 Run 应仍可读且旧列不变：{legacy_run:?}"
+    );
+    ensure!(
+        legacy_run.resume_count == 0
+            && legacy_run.interrupted_reason.is_none()
+            && legacy_run.last_checkpoint_seq.is_none(),
+        "旧 Run 的恢复列应取缺省值（resumeCount = 0，其余 null）：{legacy_run:?}"
+    );
+    // 0003 的落地形态：检查点表只有一张、runs 的三个新列各一份、审计表有开始标记列。
+    let shape = schema_shape(context.home()).await?;
+    // 0002 / 0003 是「补」在旧库上的：账本里 1、2、3 都在。
+    ensure!(
+        ledger_versions(context.home()).await? == [1, 2, 3],
+        "迁移账本应是 [1, 2, 3]（0002 / 0003 依次补在 0001 之上）"
     );
     // 第二次启动不应有 ERROR 级事件、也不应有写锁争用：两项都由进程内计数给出（P2.2-003）。
     let metrics = metrics_of(context).await?;
@@ -284,10 +302,12 @@ async fn migration_repeat_body(context: &TestContext) -> Result<CaseOutcome> {
         "同一 data 目录连续启动两次：第二次成功且数据保留".to_string(),
         "第二次启动 audit.error = 0、database.errors = 0（ERROR 级事件与写锁争用均为 0）".to_string(),
         format!(
-            "0001 时代的会话与消息仍可读（{}），工具字段均为 null，迁移账本 {:?}",
+            "0001 时代的会话、消息与 Run 仍可读（{} / {}），旧列不变、恢复列取缺省值，迁移账本 {:?}",
             LEGACY_MESSAGE,
+            LEGACY_RUN,
             ledger_versions(context.home()).await?
         ),
+        format!("0003 落地形态：{shape}"),
     ])
 }
 
@@ -325,11 +345,21 @@ async fn seed_0001_database(home: &Path) -> Result<()> {
         .execute(&pool)
         .await
         .context("写入 0001 时代消息失败")?;
+    // 0001 的 `runs` 没有恢复列：这正是「升级后恢复列取缺省值」的那一行。
+    sqlx::query(
+        "INSERT INTO runs (id, session_id, status, model, input_tokens, output_tokens, created_at_ms, \
+         updated_at_ms, finished_at_ms) VALUES (?, ?, 'COMPLETED', 'mock-model', 3, 5, 0, 0, 0)",
+    )
+    .bind(LEGACY_RUN)
+    .bind(LEGACY_SESSION)
+    .execute(&pool)
+    .await
+    .context("写入 0001 时代 Run 失败")?;
     pool.close().await;
     Ok(())
 }
 
-/// 迁移账本里的版本号（升序）：`[1, 2]` 证明 0002 是补在旧库上的。
+/// 迁移账本里的版本号（升序）：`[1, 2, 3]` 证明 0002 / 0003 是依次补在旧库上的。
 async fn ledger_versions(home: &Path) -> Result<Vec<i64>> {
     let pool = open_pool(&home.join("data").join(DATABASE_FILE)).await?;
     let rows = sqlx::query("SELECT version FROM schema_migrations ORDER BY version")
@@ -340,7 +370,43 @@ async fn ledger_versions(home: &Path) -> Result<Vec<i64>> {
     Ok(rows.iter().map(|row| row.get::<i64, _>("version")).collect())
 }
 
-/// 打开库文件（不存在则创建）：只给「0001 时代」夹具与账本回读用。
+/// `0003` 的落地形态：检查点表只有一张、`runs` 的三个新列各一份、审计表有开始标记列。
+///
+/// 重复执行迁移不得把表或列建两遍：这里直接读 `sqlite_master` 与 `PRAGMA table_info`，
+/// 与账本回读同一口径（只做夹具核对，业务断言仍走 SDK）。
+async fn schema_shape(home: &Path) -> Result<String> {
+    let pool = open_pool(&home.join("data").join(DATABASE_FILE)).await?;
+    let tables: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'run_checkpoints'")
+            .fetch_one(&pool)
+            .await
+            .context("读取 sqlite_master 失败")?;
+    ensure!(tables == 1, "run_checkpoints 应只有一张表，实际 {tables}");
+    let runs = columns(&pool, "runs").await?;
+    for column in ["interrupted_reason", "resume_count", "last_checkpoint_seq"] {
+        let hits = runs.iter().filter(|name| *name == column).count();
+        ensure!(hits == 1, "runs 应有且只有一个 {column} 列，实际 {hits}（{runs:?}）");
+    }
+    let tools = columns(&pool, "tool_calls").await?;
+    ensure!(
+        tools.iter().filter(|name| *name == "started_at_ms").count() == 1,
+        "tool_calls 应有且只有一个 started_at_ms 列：{tools:?}"
+    );
+    pool.close().await;
+    Ok("run_checkpoints 一张表；runs 三个恢复列各一份；tool_calls.started_at_ms 一份".to_owned())
+}
+
+/// 某表的列名（`PRAGMA table_info`）。
+async fn columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
+    let sql = format!("PRAGMA table_info({table})");
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("读取 {table} 的列清单失败"))?;
+    Ok(rows.iter().map(|row| row.get::<String, _>("name")).collect())
+}
+
+/// 打开库文件（不存在则创建）：只给「0001 时代」夹具与账本 / 形态回读用。
 async fn open_pool(path: &Path) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)

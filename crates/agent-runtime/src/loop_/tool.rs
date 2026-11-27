@@ -12,7 +12,7 @@
 //! 模型可读文本，本轮照常进入下一轮；只有**结构性问题**（落库失败、轨迹损坏）才让 Run 落
 //! `FAILED`。本模块不认识任何具体工具：并发语义、风险等级、文件操作声明全部由工具自述提供。
 
-use agent_core::session::{Message, Run, RunEventKind, ToolCallStatus};
+use agent_core::session::{CheckpointPhase, Message, Run, RunEventKind, ToolCallStatus};
 use agent_route::{LlmToolCall, LlmToolDefinition};
 use agent_tool::{ExecOutcome, ToolCall, ToolCallRecord, ToolFileAccess, redact_arguments};
 use serde_json::Value;
@@ -23,6 +23,7 @@ use crate::error;
 use crate::feed::Feed;
 use crate::port::AgentRuntime;
 
+use super::checkpoint;
 use super::trace::{self, Recovered, Trace};
 
 /// 一轮工具执行的结局。
@@ -91,7 +92,7 @@ pub(crate) async fn run_round(
 ) -> Step {
     let Turn { round, content, calls } = turn;
     let entries: Vec<ToolCall> = calls.iter().map(|call| to_call(run, round, call)).collect();
-    let executed = match execute(runtime, feed, &entries, cancel).await {
+    let executed = match execute(runtime, run, feed, &entries, cancel).await {
         Ok(executed) => executed,
         Err(step) => return step,
     };
@@ -109,8 +110,26 @@ pub(crate) async fn run_round(
             Err(public) => return Step::Failed(public),
         }
     }
-    audit(runtime, run, &executed.records).await;
+    if let Err(public) = audit(runtime, run, &executed.records).await {
+        return Step::Failed(public);
+    }
     if let Err(public) = append(runtime, &messages).await {
+        return Step::Failed(public);
+    }
+    // 本轮的两个边界都已提交：模型轮次（assistant 调用）与工具批次（结果）同一事务落库，
+    // 因此检查点只能写在这之后（D-P6-001）；写不进去即 FAILED，不降级继续（D-P6-010）。
+    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ModelDone, round, Vec::new()).await {
+        return Step::Failed(public);
+    }
+    if let Err(public) = checkpoint::append(
+        runtime,
+        run,
+        CheckpointPhase::ToolsDone,
+        round,
+        checkpoint::digests(&executed.records),
+    )
+    .await
+    {
         return Step::Failed(public);
     }
     if !emit_completed(feed, &executed.records).await {
@@ -150,12 +169,18 @@ pub(crate) async fn resume(
                 .iter()
                 .map(|call| ToolCallRecord::pending(call, file_access(runtime, &call.tool_name)).rejected())
                 .collect();
-            audit(runtime, run, &records).await;
+            // 审计行已由唤醒事务置为 `DENIED`（`with_resume_run`），这里不再二次收尾：
+            // 收尾只命中 `PENDING` 行，重写会得到 0 行并被判成轨迹损坏（P6A-006）。
             let messages = match tool_messages(run, &records) {
                 Ok(messages) => messages,
                 Err(public) => return Resumed::Failed(public),
             };
             if let Err(public) = append(runtime, &messages).await {
+                return Resumed::Failed(public);
+            }
+            // 驳回同样是这一组的终结：结果消息提交后补一条检查点，恢复时不必再解释这组调用。
+            let digests = checkpoint::digests(&records);
+            if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
                 return Resumed::Failed(public);
             }
             // 驳回也是一次终结：补完成事件，客户端的开始事件因此不会悬挂。
@@ -176,12 +201,19 @@ pub(crate) async fn resume(
             if executed.cancelled {
                 return Resumed::Cancelled;
             }
-            audit(runtime, run, &executed.records).await;
+            if let Err(public) = audit(runtime, run, &executed.records).await {
+                return Resumed::Failed(public);
+            }
             let messages = match tool_messages(run, &executed.records) {
                 Ok(messages) => messages,
                 Err(public) => return Resumed::Failed(public),
             };
             if let Err(public) = append(runtime, &messages).await {
+                return Resumed::Failed(public);
+            }
+            // 批准后的工具批次同样是一个已提交边界：唤醒前的 `AWAITING_CONFIRM` 到此才真正收尾。
+            let digests = checkpoint::digests(&executed.records);
+            if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
                 return Resumed::Failed(public);
             }
             if !emit_completed(feed, &executed.records).await {
@@ -207,17 +239,41 @@ struct Executed {
     cancelled: bool,
 }
 
-/// 执行一批调用：开始事件 → 执行 → 完成事件。
+/// 执行一批调用：开始标记 → 开始事件 → 执行 → 完成事件。
 async fn execute(
     runtime: &AgentRuntime,
+    run: &Run,
     feed: &mut Feed<'_>,
     calls: &[ToolCall],
     cancel: &RunCancel,
 ) -> Result<Executed, Step> {
+    begin(runtime, run, calls).await?;
     if !emit_started(feed, calls).await {
         return Err(Step::SessionGone);
     }
     drive_batch(runtime, feed, calls, cancel, false).await
+}
+
+/// 执行前写入本批调用的开始标记（`PENDING` + `started_at_ms`，P6A-006）。
+///
+/// 这一步是「这次调用可能已经执行」的唯一证据：崩溃后 `PENDING` 行留着，恢复时不重放它，
+/// 只回灌中断通知（D-P6-007）。同一 `tool_call_id` 已有记录说明库里已不一致，直接失败。
+async fn begin(runtime: &AgentRuntime, run: &Run, calls: &[ToolCall]) -> Result<(), Step> {
+    for call in calls {
+        let record = ToolCallRecord::pending(call, file_access(runtime, &call.tool_name));
+        match runtime.service.begin_tool_call(&run.id, &run.session_id, &record).await {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(run_id = %run.id, tool_call_id = %call.tool_call_id, "工具开始标记已存在，按数据不一致处理");
+                return Err(Step::Failed(error::TOOL_TRACE_BROKEN.to_string()));
+            }
+            Err(error) => {
+                warn!(run_id = %run.id, tool_call_id = %call.tool_call_id, %error, "写入工具开始标记失败");
+                return Err(Step::Failed(error::TOOL_TRACE_STORAGE.to_string()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 执行一批「客户端已批准」的调用：跳过 `confirm` 权限判定，其余顺序不变。
@@ -277,18 +333,11 @@ async fn drive_batch(
     })
 }
 
-/// 挂起：`PENDING` 审计 → `RUNNING` 转 `WAITING` → 发确认事件。
+/// 挂起：`RUNNING` 转 `WAITING` → `AWAITING_CONFIRM` 检查点 → 发确认事件。
 ///
-/// `PENDING` 插入失败必须让本轮失败——它是挂起的事实源，插不进去就没有「在等哪一次调用」。
+/// `PENDING` 审计在执行前就写好了（[`begin`]），这里只推进状态：这样「在等哪一次调用」
+/// 与「库里这次调用有开始无结束」两个事实同时成立（D-P3-027 / P6A-006）。
 async fn suspend(runtime: &AgentRuntime, run: &Run, feed: &mut Feed<'_>, pending: ToolCallRecord) -> Step {
-    if let Err(error) = runtime
-        .service
-        .record_tool_call(&run.id, &run.session_id, &pending)
-        .await
-    {
-        warn!(run_id = %run.id, %error, "待确认审计写入失败，本轮失败");
-        return Step::Failed(error::TOOL_TRACE_STORAGE.to_string());
-    }
     match runtime
         .service
         .suspend_run(&run.id, &pending.tool_call_id, pending.tool_round)
@@ -301,6 +350,19 @@ async fn suspend(runtime: &AgentRuntime, run: &Run, feed: &mut Feed<'_>, pending
             warn!(run_id = %run.id, %error, "挂起 Run 失败");
             return Step::Failed(error::STORAGE.to_string());
         }
+    }
+    // 挂起事务已提交：写 `AWAITING_CONFIRM` 检查点，恢复时据此知道「停在确认点」（D-P6-001）。
+    let digest = checkpoint::digest(&pending);
+    if let Err(public) = checkpoint::append(
+        runtime,
+        run,
+        CheckpointPhase::AwaitingConfirm,
+        pending.tool_round,
+        vec![digest],
+    )
+    .await
+    {
+        return Step::Failed(public);
     }
     let mut event = feed.event(RunEventKind::ToolCallConfirmRequired);
     event.tool_call_id = Some(pending.tool_call_id.clone());
@@ -326,13 +388,22 @@ async fn rejected(runtime: &AgentRuntime, run: &Run, calls: &[ToolCall]) -> Resu
     }))
 }
 
-/// 终态审计：写库失败只记日志（审计不该把成功 Run 打成失败，P3-018）。
-async fn audit(runtime: &AgentRuntime, run: &Run, records: &[ToolCallRecord]) {
+/// 终态审计：只命中执行前写入的 `PENDING` 行（P6A-006）。
+///
+/// 0 行说明这次调用没有开始标记（数据不一致）→ 轨迹损坏，本轮失败；写库失败只记日志，
+/// 审计不该把已经成功的 Run 打成失败（P3-018）。
+async fn audit(runtime: &AgentRuntime, run: &Run, records: &[ToolCallRecord]) -> Result<(), String> {
     for record in records {
-        if let Err(error) = runtime.service.record_tool_call(&run.id, &run.session_id, record).await {
-            warn!(run_id = %run.id, tool_call_id = %record.tool_call_id, %error, "工具审计写入失败");
+        match runtime.service.finish_tool_call(&run.id, record).await {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(run_id = %run.id, tool_call_id = %record.tool_call_id, "工具审计收尾未命中开始标记");
+                return Err(error::TOOL_TRACE_BROKEN.to_string());
+            }
+            Err(error) => warn!(run_id = %run.id, tool_call_id = %record.tool_call_id, %error, "工具审计写入失败"),
         }
     }
+    Ok(())
 }
 
 /// 一轮轨迹落库：写不进去就本轮失败（D-P3-024，不允许「事件已发但库里没有」）。

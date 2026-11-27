@@ -214,29 +214,52 @@ impl SessionService {
             .map_err(internal)
     }
 
-    /// 写一条工具调用的审计记录：`Pending` 是挂起时的插入，其余状态是收尾覆盖（P3-018）。
+    /// 执行前写入本批调用的开始标记（`PENDING` + `started_at_ms`，P6A-006）。
     ///
-    /// `PENDING` 插入失败必须让本轮失败——它是挂起的事实源；终态覆盖失败只记日志，
-    /// 不影响已经成功的 Run（审计不该把成功 Run 打成失败）。
-    pub async fn record_tool_call(
+    /// 返回是否为本次插入：已存在同键行说明库里已有这条调用的记录（数据不一致），
+    /// 调用方据此把 Run 落 `FAILED`，不覆盖既有行。
+    pub async fn begin_tool_call(
         &self,
         run_id: &str,
         session_id: &str,
         record: &ToolCallRecord,
-    ) -> Result<(), SessionError> {
+    ) -> Result<bool, SessionError> {
         let id = next_id()?;
-        let written = if record.status == ToolCallStatus::Pending {
-            self.repository.insert_tool_call(&id, run_id, session_id, record).await
-        } else {
-            // 收尾走 upsert：挂起记录缺失时也要留下一条完整审计（宁可多一条，不要漏一条）。
-            self.repository.finish_tool_call(&id, run_id, session_id, record).await
-        };
-        written.map_err(internal)
+        self.repository
+            .insert_tool_call(&id, run_id, session_id, record)
+            .await
+            .map_err(internal)
+    }
+
+    /// 收尾一条工具调用：只命中执行前写入的 `PENDING` 行（P6A-006）。
+    ///
+    /// 返回是否命中：0 行说明没有开始标记（数据不一致），由调用方按轨迹损坏处理；
+    /// 写库失败只是环境问题，不影响已经成功的 Run（P3-018）。
+    pub async fn finish_tool_call(&self, run_id: &str, record: &ToolCallRecord) -> Result<bool, SessionError> {
+        self.repository.finish_tool_call(run_id, record).await.map_err(internal)
     }
 
     /// 某个 Run 的审计记录，按产生时间升序；没有记录时返回空列表。
+    ///
+    /// 含 `PENDING` 行：恢复判定要区分「有开始无结束」与「从未开始」（D-P6-007）。
     pub async fn tool_calls_of_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, SessionError> {
         self.repository.tool_calls(run_id).await.map_err(internal)
+    }
+
+    /// 某个 Run 的审计记录（查询口径）：**不含 `PENDING` 行**（D-P6-008）。
+    ///
+    /// `PENDING` 是「已开始、未结束」的过程量，不是结果；对外暴露会让客户端看到
+    /// 永不结束的调用。行在库里保留，恢复判定仍用 [`Self::tool_calls_of_run`]。
+    pub async fn tool_audit_of_run(&self, run_id: &str) -> Result<Vec<ToolCallRecord>, SessionError> {
+        let records = self.repository.tool_calls(run_id).await.map_err(internal)?;
+        Ok(records
+            .into_iter()
+            .filter(|record| record.status != ToolCallStatus::Pending)
+            .collect())
+    }
+    /// 会话已提交消息的 `seq` 上界：检查点用它记录「进度到哪一条」（D-P6-001）。
+    pub async fn last_message_seq(&self, session_id: &str) -> Result<i64, SessionError> {
+        self.repository.max_message_seq(session_id).await.map_err(internal)
     }
 
     /// 追加一条检查点：插行与 `runs.last_checkpoint_seq` 在同一事务里完成，返回本次序号（D-P6-001）。

@@ -645,10 +645,7 @@ fn is_terminal(status: RunStatus) -> bool {
 
 /// 域状态是否已抵终态（进程内用例直接用域类型，不经过 SDK）。
 fn is_domain_terminal(status: domain::RunStatus) -> bool {
-    matches!(
-        status,
-        domain::RunStatus::Completed | domain::RunStatus::Failed | domain::RunStatus::Cancelled
-    )
+    status.is_terminal()
 }
 
 /// 读取会话消息列表。

@@ -12,5 +12,6 @@ pub(crate) mod paths;
 pub(crate) mod prepare;
 pub(crate) mod process;
 pub(crate) mod server;
+pub(crate) mod store;
 pub(crate) mod stress;
 pub(crate) mod support;

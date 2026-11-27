@@ -13,7 +13,7 @@
 //!   提示词、`AGENTS.md` 内容与 Provider 原始响应。
 
 use agent_core::session::{CHECKPOINT_FORMAT_VERSION, CheckpointDecodeError, CheckpointPayload, RunCheckpoint};
-use lib_db::{DbError, Transaction};
+use lib_db::DbError;
 use sqlx::Row;
 use std::fmt::{Display, Formatter};
 
@@ -79,27 +79,34 @@ impl std::error::Error for CheckpointError {
 impl Repository {
     /// 追加一条检查点并推进 `runs.last_checkpoint_seq`，返回本次分配的 `seq_no`。
     ///
-    /// 序号取「该 Run 当前最大序号 + 1」：与插行同一事务，冲突由 `UNIQUE (run_id, seq_no)` 报错，
-    /// 不重试（写放大在这些边界上出现说明调用点错了）。
+    /// 序号取「该 Run 当前最大序号 + 1」，**在插入语句里现算**：事务的第一条语句就是写，
+    /// 因此写锁由 `busy_timeout` 等待；先 `SELECT` 再 `INSERT` 会让事务以读快照起步，
+    /// 期间别的连接一旦提交，升级成写锁会直接得到 `SQLITE_BUSY_SNAPSHOT`（不等超时），
+    /// 并发 Run 的检查点就会被误判成写失败。冲突仍由 `UNIQUE (run_id, seq_no)` 报错，不重试。
     pub async fn append_checkpoint(&self, run_id: &str, checkpoint: &RunCheckpoint) -> Result<i64, CheckpointError> {
         let payload = encode_payload(checkpoint)?;
         let mut transaction = self.begin().await?;
-        let seq_no = next_seq_no(&mut transaction, run_id).await?;
-        sqlx::query(
+        // 主键与序号同构（`<run_id>:<seq_no>`）：两者由同一个子查询给出，排障时直接可读。
+        let seq_no: i64 = sqlx::query_scalar(
             "INSERT INTO run_checkpoints \
              (id, run_id, seq_no, phase, tool_round, last_message_seq, payload, format_version, created_at_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (? || ':' || (SELECT COALESCE(MAX(seq_no), 0) + 1 FROM run_checkpoints WHERE run_id = ?), \
+                     ?, \
+                     (SELECT COALESCE(MAX(seq_no), 0) + 1 FROM run_checkpoints WHERE run_id = ?), \
+                     ?, ?, ?, ?, ?, ?) \
+             RETURNING seq_no",
         )
-        .bind(checkpoint_id(run_id, seq_no))
         .bind(run_id)
-        .bind(seq_no)
+        .bind(run_id)
+        .bind(run_id)
+        .bind(run_id)
         .bind(checkpoint.phase.to_string())
         .bind(checkpoint.tool_round)
         .bind(checkpoint.last_message_seq)
         .bind(payload)
         .bind(checkpoint.format_version)
         .bind(checkpoint.created_at_ms)
-        .execute(transaction.connection())
+        .fetch_one(transaction.connection())
         .await?;
         sqlx::query("UPDATE runs SET last_checkpoint_seq = ? WHERE id = ?")
             .bind(seq_no)
@@ -142,23 +149,6 @@ impl Repository {
         .rows_affected();
         Ok(usize::try_from(affected).unwrap_or(usize::MAX))
     }
-}
-
-/// 该 Run 的下一个检查点序号：同一 Run 内从 1 开始、无缺口。
-async fn next_seq_no(transaction: &mut Transaction, run_id: &str) -> Result<i64, DbError> {
-    let seq_no = sqlx::query_scalar("SELECT COALESCE(MAX(seq_no), 0) + 1 FROM run_checkpoints WHERE run_id = ?")
-        .bind(run_id)
-        .fetch_one(transaction.connection())
-        .await?;
-    Ok(seq_no)
-}
-
-/// 检查点行的主键：`<run_id>:<seq_no>`。
-///
-/// 用确定性取值而不是再加一个 ID 生成入口：序号本身就在唯一键里，主键与它同构让「这是哪一条
-/// 检查点」在排障时直接可读。
-fn checkpoint_id(run_id: &str, seq_no: i64) -> String {
-    format!("{run_id}:{seq_no}")
 }
 
 /// 载荷 → 列值。

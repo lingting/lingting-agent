@@ -1,8 +1,8 @@
 //! 工具确认链路用例（F-1 ~ F-7）：挂起、不占并发位、不阻塞同会话、批准 / 驳回、重连补发与断连收尾。
 //!
 //! 口径：挂起态是 `RunStatus::Waiting`（D-P3-027），「在等哪一次调用」以
-//! `tool_call_confirm_required` 的 `toolCallId` 与审计里的 `PENDING` 记录为准；
-//! `Run` 契约里没有 `pendingToolCallId` 字段，因此不从 `run/get` 反推。
+//! `tool_call_confirm_required` 的 `toolCallId` 与库内的 `PENDING` 行为准（查询接口不返回
+//! `PENDING`，见 D-P6-008）；`Run` 契约里没有 `pendingToolCallId` 字段，因此不从 `run/get` 反推。
 //!
 //! 挂起用例要在服务端**仍然存活**时取 `metrics` 快照，所以快照走
 //! `util::server::capture`（`serve_once` 只在收尾时采集一次）。
@@ -26,6 +26,7 @@ use crate::case::{Case, CaseFuture, CaseKind};
 use crate::mock::llm::{MockServer, observe};
 use crate::util::context::TestContext;
 use crate::util::flow::{self, Occupied};
+use crate::util::store;
 
 /// 驳回时回灌给模型的固定文本（`agent-tool` 的 `REJECTED_TEXT`）。
 const REJECTED_TEXT: &str = "用户拒绝调用该工具";
@@ -169,12 +170,21 @@ fn approve(context: &TestContext) -> CaseFuture<'_> {
                 confirm.tool_arguments
             );
 
-            // F-1：确认前工具没有被调用，审计是 PENDING 且没有结果。
+            // F-1：确认前工具没有被调用，库里留下 PENDING 开始标记且没有结果。
+            // 查询口径不返回 PENDING（D-P6-008），所以这一条只能从库内行核对；
+            // 执行前写入的开始标记同时带 `startedAtMs`（P6A-006）。
             ensure!(stub.hits() == 0, "确认前不应执行工具");
-            let pending = audit(context, &run_id).await?;
+            let pending = store::tool_calls(context, &run_id).await?;
             ensure!(
-                pending.len() == 1 && pending[0].status == ToolCallStatus::Pending && pending[0].result.is_none(),
-                "挂起时应有一条无结果的 PENDING 审计：{pending:?}"
+                pending.len() == 1
+                    && pending[0].status == agent_tool::ToolCallStatus::Pending
+                    && pending[0].result.is_none()
+                    && pending[0].started_at_ms.is_some(),
+                "挂起时库里应有一条无结果、带开始标记的 PENDING 审计：{pending:?}"
+            );
+            ensure!(
+                audit(context, &run_id).await?.is_empty(),
+                "PENDING 行不应出现在审计查询结果里（D-P6-008）"
             );
 
             // F-2：Run 回 WAITING（D-P3-027），且不占并发位。

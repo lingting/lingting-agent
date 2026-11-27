@@ -135,7 +135,23 @@
 
 > 依赖：Batch A。本批次结束时，一次正常 Run 的每个已提交边界都有检查点；工具执行有「开始标记」；恢复前能判定「可恢复 / 损坏」；未配对调用一律不重放并产出中断通知。此时还**没有**恢复触发路径，也还没改自愈。
 
-- [ ] **P6A-005 轮次边界的检查点写入**
+> **Batch B 结案（已执行；范围收敛到 P6A-005 / 006）**：按需求方决定，P6A-007（恢复点解析）与 P6A-008（中断通知）结转到 Batch C 的恢复入口（P6A-010）一起落地——本批次内它们没有调用方，提前定义会被 `clippy -D warnings` 的 `dead_code` 判失败（与 Batch A 结转 P6A-004 文案同一做法）。
+>
+> 验收证据：`cargo check --workspace --all-targets`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全部 0 退出；`make gen` 路由 / 接口各 32 条（未新增）；`make test ARGS="--all"` **139 个用例全通过**（含 `resume.checkpoint` 的运行时三段与 `tool` / `mcp` / `skill` / `run` / `persist` / `web` / `tui` 回归）。
+>
+> 口径变更（都由 P6A-006 的「执行前写开始标记」引起，已在用例注释里登记）：
+>
+> 1. `tool.confirm` 的 F-1 与 `mcp.confirm`：挂起期间「审计查询能看到 `PENDING` 行」不再成立——查询口径按 D-P6-008 过滤 `PENDING`，断言改为直接读库内行。
+> 2. `tool.cancel` 与 `mcp.cancel`：「取消的批次不落库（审计为空）」不再成立——取消的批次会留下一条收尾为 `CANCELLED`、没有结果的开始标记。
+>
+> 需要回填的口径差异：
+>
+> 1. P6A-005 第 1 条要求起点 `MODEL_DONE` 的 payload 记 `assistant_message_id`：本轮**未加**该字段（`CheckpointPayload` 仍是「版本 + 工具组摘要」），因为它的唯一使用点是 P6A-010 的重发 `run_started`；届时应与恢复入口一起加，避免现在加一个没有读取点的字段。
+> 2. 工具边界的条数口径：一轮工具提交后写 `MODEL_DONE` 与 `TOOLS_DONE` 各一条，因此「两轮工具 + 正常完成」= 5 条（起点 1 + 每轮 2），与 P6A-018 的数字一致。
+> 3. `append_checkpoint` 的序号改为「插入语句内现算 + `RETURNING seq_no`」：原实现先 `SELECT` 再 `INSERT`，事务以读快照起步，并发 Run 时升级写锁会直接拿到 `SQLITE_BUSY_SNAPSHOT`（不等 `busy_timeout`）；`run.concurrency` 因此暴露过一次「检查点写入失败」。属实现细节，不改验收口径。
+> 4. `make ui-check` 仍是既有失败：`Run` 的三个新字段自 Batch A 起没有同步到 UI 测试夹具（`tests/tool-events.test.tsx` / `tests/use-chat.test.tsx` 缺 `resumeCount` 等），与本次改动无关，留给 P6A-019 的门禁收口。
+
+- [x] **P6A-005 轮次边界的检查点写入**
 
   **目标**：每个「模型轮次完成」「工具批次提交」「工具确认挂起」都留检查点，且检查点只在对应事务已提交之后出现。
 
@@ -151,14 +167,13 @@
   5. 取消路径不写检查点（D-P6-005 的终态路径）。
 
   **验收标准**：
-  - [ ] 三种 phase 各只有一个构造函数（可被多次调用，但构造与追加只有一处）（静态核对调用点数量）。
-  - [ ] 检查点写入点全部位于对应提交之后：先 `append` / 终态事务提交，再 `append_checkpoint`。
-  - [ ] 一次「两轮工具 + 正常完成」的 Run，检查点条数与「起点 + 每轮模型边界 + 每轮工具边界」之和相等，且 `seq_no` 连续。
-  - [ ] 检查点写失败时 Run 落 `FAILED`，`runs.error` 是固定文案，且**不产生**助手消息。
+  - [x] 三种 phase 各只有一个构造函数（可被多次调用，但构造与追加只有一处）（静态核对调用点数量）。（结案：构造与追加只有 `loop_/checkpoint.rs` 的 `append` 一处，`RunCheckpoint::new` 全仓只在它里面出现。）
+  - [x] 检查点写入点全部位于对应提交之后：先 `append` / 终态事务提交，再 `append_checkpoint`。（结案：四处写入点都在 `run_started` 发出后、`append(messages)` 提交后、`suspend_run` 提交后、唤醒收尾的 `append(messages)` 提交后。）
+  - [x] 一次「两轮工具 + 正常完成」的 Run，检查点条数与「起点 + 每轮模型边界 + 每轮工具边界」之和相等，且 `seq_no` 连续。（结案：`resume.checkpoint` 断言 5 条、序号 1..5、phase 依次 `MODEL_DONE` / `MODEL_DONE` / `TOOLS_DONE` / `MODEL_DONE` / `TOOLS_DONE`，`lastCheckpointSeq = 5`。）
+  - [x] 检查点写失败时 Run 落 `FAILED`，`runs.error` 是固定文案，且**不产生**助手消息。（结案：`resume.checkpoint` 的注入段——触发器让 `run_checkpoints` 插入失败，`run_failed` 与 `run/get` 的 `error` 都是「检查点写入失败」，该 Run 的检查点 0 条、消息里没有助手消息。）
 
-  **测试要求**：由 P6A-016 的 `resume.checkpoint` 覆盖（正常 Run 的检查点清单与条数、写失败路径由注入式失败构造）。
-
-- [ ] **P6A-006 工具调用的「开始标记」前移**
+  **测试要求**：由 P6A-016 的 `resume.checkpoint` 覆盖（正常 Run 的检查点清单与条数、写失败路径由注入式失败构造）。（结案：已授权执行，运行时三段全绿。）
+- [x] **P6A-006 工具调用的「开始标记」前移**
 
   **目标**：崩溃时能区分「这次调用从未开始」与「可能已经执行」——这是中断通知口径与审计完整性的唯一事实来源（恢复时**不放行任何重放**，见 P6A-008）。
 
@@ -174,14 +189,14 @@
   5. `ToolCallRecord` 增加 `started_at_ms: Option<i64>`，审计查询映射同步（可见性由 D-P6-008 定）。
 
   **验收标准**：
-  - [ ] 正常路径的 `tool_calls` 行在结果、时长、`tool_round` 上与改动前逐字段相等（旧用例断言不变）。
-  - [ ] 模拟「写入后、更新前崩溃」：库里留下 `PENDING` 行且 `started_at_ms` 有值。
-  - [ ] `WHERE status = 'PENDING'` 的条件更新是唯一收尾路径，全仓无第二处无条件 `UPDATE tool_calls SET status`。
-  - [ ] `agent-tool` 的错误分类、重试与超时判定零改动（`git diff` 限定到该 crate 时只有 `audit.rs` 的字段与 `executor.rs` 的透传）。
+  - [x] 正常路径的 `tool_calls` 行在结果、时长、`tool_round` 上与改动前逐字段相等（旧用例断言不变）。（结案：`make test ARGS="tool"` 28 条、`ARGS="mcp"` 19 条全绿，断言口径未放宽。）
+  - [x] 模拟「写入后、更新前崩溃」：库里留下 `PENDING` 行且 `started_at_ms` 有值。（结案：以挂起段等价取证——`resume.checkpoint` 断言库里是 `PENDING`、`started_at_ms` 有值且没有结果；真正强杀留给 `resume.crash`。）
+  - [x] `WHERE status = 'PENDING'` 的条件更新是唯一收尾路径，全仓无第二处无条件 `UPDATE tool_calls SET status`。（结案：`Repository::finish_tool_call` 只命中 `PENDING`；`set_tool_call_status_in` 与取消链路的批量收尾也都带 `AND status = 'PENDING'`。）
+  - [x] `agent-tool` 的错误分类、重试与超时判定零改动（`git diff` 限定到该 crate 时只有 `audit.rs` 的字段与 `executor.rs` 的透传）。（结案：只有 `audit.rs` 改了字段——`pending()` 写开始标记、`ToolCallVO` 新增 `startedAtMs`；`executor.rs` 零改动。）
 
-  **测试要求**：由 P6A-016 的 `resume.checkpoint`（`PENDING` 残留）与既有 `tool.audit` 回归覆盖；回归执行需授权。
+  **测试要求**：由 P6A-016 的 `resume.checkpoint`（`PENDING` 残留）与既有 `tool.audit` 回归覆盖；回归执行需授权。（结案：已授权执行，`resume.checkpoint` 的开始标记段与 `tool` / `mcp` 回归全绿；两条旧断言的口径变更见上方 Batch B 结案说明。）
 
-- [ ] **P6A-007 恢复点解析：检查点与工具轨迹的一致性校验**
+- [ ] **P6A-007 恢复点解析：检查点与工具轨迹的一致性校验**（**结转到 Batch C 的 P6A-010**：本批次内没有调用方，`clippy -D warnings` 的 `dead_code` 会判失败；恢复入口落地时一起实现）
 
   **目标**：恢复前先判定「能不能恢复」。可恢复 → 产出确定的恢复点；不可恢复 → 直接终态，绝不半恢复。
 
@@ -204,7 +219,7 @@
 
   **测试要求**：由 P6A-016 的 `resume.broken` 覆盖（五类损坏 + `NoCheckpoint`）。
 
-- [ ] **P6A-008 恢复不重放：中断通知与简短原因**
+- [ ] **P6A-008 恢复不重放：中断通知与简短原因**（**结转到 Batch C 的 P6A-010**：`Unrecoverable` / 中断通知都只在恢复路径上有调用点，本批次无恢复入口）
 
   **目标**：把「恢复时一次工具调用都不重跑」写死成可检规则，并把「上次没跑完」这件事以固定文本告知模型；`agent-tool` 的契约保持不变。
 

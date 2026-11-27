@@ -15,3 +15,5 @@ pub(crate) const TOOL_ROUNDS_EXCEEDED: &str = "工具调用轮次超过上限";
 pub(crate) const TOOL_TRACE_STORAGE: &str = "工具轨迹落库失败";
 /// 工具轨迹不完整：历史里出现多处未配对的调用或孤儿结果（D-P3-023）。
 pub(crate) const TOOL_TRACE_BROKEN: &str = "工具轨迹不完整";
+/// 检查点写入失败：可恢复性无法证明，Run 立即落 `FAILED`，不降级继续（D-P6-010）。
+pub(crate) const CHECKPOINT: &str = "检查点写入失败";

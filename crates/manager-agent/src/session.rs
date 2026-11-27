@@ -99,8 +99,10 @@ pub async fn running_run_count() -> Result<i64, SessionError> {
 
 /// 按 Run 查询工具审计记录（只读）：审计记录在 `service-core`，契约快照在 `agent-tool`，
 /// 两者的映射收敛在本层，Handler 只做参数解包。
+///
+/// 查询口径由 `service-core` 的 `tool_audit_of_run` 决定：`PENDING` 行不出现（D-P6-008）。
 pub async fn list_tool_calls(po: ToolAuditListParams) -> Result<Vec<ToolCallVO>, SessionError> {
-    let records = session()?.tool_calls_of_run(&po.run_id).await?;
+    let records = session()?.tool_audit_of_run(&po.run_id).await?;
     Ok(records.iter().map(ToolCallVO::from).collect())
 }
 

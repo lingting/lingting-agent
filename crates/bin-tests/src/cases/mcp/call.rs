@@ -445,9 +445,11 @@ fn cancel(context: &TestContext) -> CaseFuture<'_> {
                 "取消应立即生效（不是等超时）：{:?}",
                 started.elapsed()
             );
+            // 执行前写入的开始标记（P6A-006）随取消收尾为 CANCELLED：这里断言「没有终态结果」。
+            let records = audit(context, &run_id).await?;
             ensure!(
-                audit(context, &run_id).await?.is_empty(),
-                "取消的批次不落库：审计应为空"
+                records.len() == 1 && records[0].status == ToolCallStatus::Cancelled && records[0].result.is_none(),
+                "取消的批次不留终态：开始标记应收尾为 CANCELLED 且没有结果，实际 {records:?}"
             );
             let run = context
                 .client()
@@ -469,7 +471,7 @@ fn cancel(context: &TestContext) -> CaseFuture<'_> {
                     "取消：RunCancelled，工具补 CANCELLED 事件，耗时 {:?}",
                     started.elapsed()
                 ),
-                "取消的批次不落库".to_owned(),
+                "取消的批次只留 CANCELLED 开始标记（无终态结果）".to_owned(),
             ])
         })
         .await?;
@@ -585,10 +587,17 @@ fn confirm(context: &TestContext) -> CaseFuture<'_> {
                 "挂起的 Run 不应占并发位：running_now = {}",
                 snapshot.limit.running_now
             );
-            let pending = audit(context, &run_id).await?;
+            // 查询口径不返回 PENDING（D-P6-008）：开始标记只能从库内行核对。
+            let pending = crate::util::store::tool_calls(context, &run_id).await?;
             ensure!(
-                pending.len() == 1 && pending[0].status == ToolCallStatus::Pending,
-                "挂起时应有一条 PENDING 审计：{pending:?}"
+                pending.len() == 1
+                    && pending[0].status == agent_tool::ToolCallStatus::Pending
+                    && pending[0].started_at_ms.is_some(),
+                "挂起时库里应有一条带开始标记的 PENDING 审计：{pending:?}"
+            );
+            ensure!(
+                audit(context, &run_id).await?.is_empty(),
+                "PENDING 行不应出现在审计查询结果里（D-P6-008）"
             );
 
             post_confirm(context, &occupied.client_id, &tool_call_id, ClientDecision::Approve).await?;

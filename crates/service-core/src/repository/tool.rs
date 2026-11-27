@@ -20,19 +20,22 @@ SELECT tool_call_id, tool_name, file_access, status, arguments, result, duration
 FROM tool_calls";
 
 impl Repository {
-    /// 插入一条审计记录（`PENDING` 或直接是终态）；已存在时保持不变。
+    /// 执行前写入一条 `PENDING` 审计（开始标记）；已存在同键行时不覆盖。
+    ///
+    /// 返回是否为本次插入：执行前的写入点把「已存在」当数据不一致处理（P6A-006），
+    /// 挂起路径则允许它已存在（同一批调用的预登记行）。
     pub async fn insert_tool_call(
         &self,
         id: &str,
         run_id: &str,
         session_id: &str,
         record: &ToolCallRecord,
-    ) -> Result<(), DbError> {
-        sqlx::query(
+    ) -> Result<bool, DbError> {
+        let affected = sqlx::query(
             "INSERT INTO tool_calls \
              (id, run_id, session_id, tool_call_id, tool_name, file_access, status, arguments, result, duration_ms, \
-              tool_round, created_at_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              tool_round, created_at_ms, started_at_ms) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (run_id, tool_call_id) DO NOTHING",
         )
         .bind(id)
@@ -47,46 +50,34 @@ impl Repository {
         .bind(millis(record.duration_ms))
         .bind(record.tool_round)
         .bind(record.created_at_ms)
+        .bind(record.started_at_ms)
         .execute(self.pool())
-        .await?;
-        Ok(())
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
     }
 
     /// 收尾一条审计记录：状态、结果、耗时与参数按最新值覆盖。
     ///
-    /// 用 upsert 而不是纯 `UPDATE`：挂起记录插入失败时，收尾仍能留下完整的一条（宁可多一条，
-    /// 也不要「执行过但没有审计」）。
-    pub async fn finish_tool_call(
-        &self,
-        id: &str,
-        run_id: &str,
-        session_id: &str,
-        record: &ToolCallRecord,
-    ) -> Result<(), DbError> {
-        sqlx::query(
-            "INSERT INTO tool_calls \
-             (id, run_id, session_id, tool_call_id, tool_name, file_access, status, arguments, result, duration_ms, \
-              tool_round, created_at_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (run_id, tool_call_id) DO UPDATE SET \
-                 status = excluded.status, arguments = excluded.arguments, result = excluded.result, \
-                 duration_ms = excluded.duration_ms, file_access = excluded.file_access",
+    /// 只命中 `PENDING` 行（P6A-006）：收尾是「这次调用的结束」，因此唯一合法的前置状态是
+    /// 执行前写入的开始标记；影响 0 行说明行不在或不一致，由调用方按数据不一致处理。
+    pub async fn finish_tool_call(&self, run_id: &str, record: &ToolCallRecord) -> Result<bool, DbError> {
+        let affected = sqlx::query(
+            "UPDATE tool_calls SET status = ?, arguments = ?, result = ?, duration_ms = ?, file_access = ? \
+             WHERE run_id = ? AND tool_call_id = ? AND status = ?",
         )
-        .bind(id)
-        .bind(run_id)
-        .bind(session_id)
-        .bind(&record.tool_call_id)
-        .bind(&record.tool_name)
-        .bind(record.file_access.to_string())
         .bind(record.status.to_string())
         .bind(&record.arguments)
         .bind(&record.result)
         .bind(millis(record.duration_ms))
-        .bind(record.tool_round)
-        .bind(record.created_at_ms)
+        .bind(record.file_access.to_string())
+        .bind(run_id)
+        .bind(&record.tool_call_id)
+        .bind(ToolCallStatus::Pending.to_string())
         .execute(self.pool())
-        .await?;
-        Ok(())
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
     }
 
     /// 在已开启的事务里改状态与结果（确认驳回等只要换状态的场景）。
@@ -100,15 +91,18 @@ impl Repository {
         status: ToolCallStatus,
         result: Option<&str>,
     ) -> Result<bool, DbError> {
-        let affected =
-            sqlx::query("UPDATE tool_calls SET status = ?, result = ? WHERE run_id = ? AND tool_call_id = ?")
-                .bind(status.to_string())
-                .bind(result)
-                .bind(run_id)
-                .bind(tool_call_id)
-                .execute(transaction.connection())
-                .await?
-                .rows_affected();
+        let affected = sqlx::query(
+            "UPDATE tool_calls SET status = ?, result = ? \
+                 WHERE run_id = ? AND tool_call_id = ? AND status = ?",
+        )
+        .bind(status.to_string())
+        .bind(result)
+        .bind(run_id)
+        .bind(tool_call_id)
+        .bind(ToolCallStatus::Pending.to_string())
+        .execute(transaction.connection())
+        .await?
+        .rows_affected();
         Ok(affected > 0)
     }
 

@@ -5,9 +5,10 @@
 //! 1. 取全局并发许可（排队超时即落 `FAILED`，不发起上游请求）；
 //! 2. 推进 `QUEUED → RUNNING`：排队期间 Run 停在 `QUEUED`，`RUNNING` 才代表正在执行；
 //! 3. 组装 Context：模型预算 + 系统提示词 + 历史 + 本次输入，超预算落 `FAILED`；
-//! 4. 发 `run_started`（携带助手消息 ID 与估算输入 token）；
+//! 4. 发 `run_started`（携带助手消息 ID 与估算输入 token），随后写起点检查点（`MODEL_DONE`）；
 //! 5. 恢复本 Run 已落库的工具轨迹，先把上一个挂起的工具组收尾（批准执行 / 驳回回灌）；
-//! 6. 逐轮：请求 Provider（带工具清单）→ 增量即事件 → 有工具调用则执行并按轮落库；
+//! 6. 逐轮：请求 Provider（带工具清单）→ 增量即事件 → 有工具调用则执行并按轮落库，
+//!    提交后才写检查点（见 [`checkpoint`]）；工具调用执行前先写「开始标记」；
 //! 7. 没有工具调用的那一轮 → 助手消息 + `COMPLETED` 同事务提交，提交后才发 `run_completed`。
 //!
 //! 结构性问题才落 `FAILED`（[`fail`] 的调用点即清单）：Provider 错误、Context 超预算、
@@ -17,12 +18,13 @@
 //! 取消一律 `select!` 命中后 drop 模型流或工具批次：连接随之关闭，不留下继续烧 token
 //! 或继续执行工具的后台任务。
 
+mod checkpoint;
 mod request;
 mod tool;
 mod trace;
 
 use agent_context_core::{ContextItem, ContextPolicy};
-use agent_core::session::{Message, MessageRole, Run, RunEventKind, RunStatus};
+use agent_core::session::{CheckpointPhase, Message, MessageRole, Run, RunEventKind, RunStatus};
 use agent_route::{LlmError, LlmMessage, LlmToolCall};
 use lib_core::{id, time};
 use service_core::session::{RunInput, RunOutcome, RunStop};
@@ -87,6 +89,11 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     started.input_tokens = Some(prepared.input_tokens);
     if !feed.send(started).await {
         return RunOutcome::SessionGone;
+    }
+
+    // 四.5、起点检查点：到用户消息为止的进度都已经落库，这是恢复时的第一个可用边界。
+    if let Err(public) = checkpoint::append(runtime, &run, CheckpointPhase::ModelDone, 0, Vec::new()).await {
+        return fail(runtime, &run, &mut feed, public).await;
     }
 
     // 五、调用模型：未配置 Provider 时按脱敏文案落 FAILED，不发上游请求。

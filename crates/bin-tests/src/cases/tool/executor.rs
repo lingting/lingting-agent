@@ -401,12 +401,15 @@ fn cancel(context: &TestContext) -> CaseFuture<'_> {
                     .collect::<Vec<_>>()
             );
 
-            // 无孤儿任务：工具连接被关闭、审计不落库、Run 落 CANCELLED。
+            // 无孤儿任务：工具连接被关闭、取消的批次不留终态、Run 落 CANCELLED。
+            // 执行前写入的开始标记（P6A-006）会随取消收尾为 `CANCELLED`，因此这里断言的是
+            // 「没有终态、没有结果」，而不是「审计为空」——口径变更见 6A 的任务结案说明。
             let closed = wait_for(|| hang.closed()).await;
             ensure!(closed, "取消后应关闭工具的 HTTP 连接");
+            let records = audit(context, &run_id).await?;
             ensure!(
-                audit(context, &run_id).await?.is_empty(),
-                "取消的批次不落库：审计应为空"
+                records.len() == 1 && records[0].status == ToolCallStatus::Cancelled && records[0].result.is_none(),
+                "取消的批次不留终态：开始标记应收尾为 CANCELLED 且没有结果，实际 {records:?}"
             );
             let run = context
                 .client()
@@ -421,12 +424,15 @@ fn cancel(context: &TestContext) -> CaseFuture<'_> {
             // 1 秒内不应再有新事件或新审计记录。
             let quiet = tokio::time::timeout(Duration::from_secs(1), occupied.stream.recv()).await;
             ensure!(!matches!(quiet, Ok(Ok(Some(_)))), "取消后不应再收到该 Run 的事件");
-            ensure!(audit(context, &run_id).await?.is_empty(), "取消后不应新增审计记录");
+            ensure!(
+                audit(context, &run_id).await?.len() == records.len(),
+                "取消后不应新增审计记录"
+            );
 
             // 快照里的「读取瞬间在跑的 Run」应归零（无后台任务残留）。
             drop(occupied);
             Ok(vec![
-                "取消收尾：run_cancelled，工具 CANCELLED，连接已关闭，审计 0 条".to_string(),
+                "取消收尾：run_cancelled，工具 CANCELLED，连接已关闭，审计只有收尾为 CANCELLED 的开始标记".to_string(),
             ])
         })
         .await

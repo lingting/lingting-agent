@@ -1,16 +1,22 @@
-//! `resume.checkpoint`（P6A-003 / P6A-004 的存储半边）：检查点落库的形态与口径。
+//! `resume.checkpoint`：检查点的落库形态（存储半边）与运行时写入点（P6A-003 ~ P6A-006）。
 //!
-//! 检查点目前没有 HTTP 接口（`api/run/history` 随 P6A-013 落地），因此本段在临时数据库上经
-//! `SessionService` 直接驱动存储层：证据只来自服务层返回值与库内行，不读日志、不读事件文件。
-//! 运行时的三个写入点与接口侧断言由 P6A-016 补齐同一用例。
+//! 检查点还没有 HTTP 接口（`api/run/history` 随 P6A-013 落地），因此证据只有两类：
+//! 存储半边在临时数据库上经 `SessionService` 直接驱动；运行时半边起一次私有服务端，
+//! 断言取自接口响应（`run/get` / `message/list` / `tool/audit/list`）与库内行。
+//! **不读日志、不读事件文件**。
 //!
-//! 四段：
+//! 存储半边四段：
 //!
 //! - 序号与载荷：序号从 1 连续、最近一条正确、指针同步、载荷是白名单字段且不超字节上界；
 //! - 终态保留策略：未结束的 Run 一条不删，终态后只保留最近 `CHECKPOINT_KEEP_LAST` 条；
 //! - 不可解释的两类：缺字段 / 版本为 0 判 `Corrupt`，版本高于当前判 `Unsupported`；
 //! - 指针同事务：注入插入失败后 `lastCheckpointSeq` 保持原值，且不留半行。
-
+//!
+//! 运行时半边三段（P6A-005 / P6A-006）在 [`checkpoint`] 子模块：
+//!
+//! - 边界清单：两轮工具 + 正常完成只有 5 条（起点 + 每轮模型边界 + 每轮工具边界），序号连续；
+//! - 写失败：注入式失败后 Run 落 `FAILED`、文案固定、无助手消息、库里没有检查点；
+//! - 开始标记：挂起的调用在库里是 `PENDING` 且 `started_at_ms` 有值，但查询接口不返回它。
 use std::sync::Arc;
 
 use agent_core::session::{
@@ -28,6 +34,8 @@ use crate::case::{Case, CaseFuture, CaseKind};
 use crate::util::context::TestContext;
 use crate::util::support::temp_directory;
 
+mod checkpoint;
+
 /// 单条载荷的字节上界（验收 `C-4`）：载荷只放最小事实，正常形态远小于这个值。
 const PAYLOAD_LIMIT: usize = 2048;
 
@@ -35,20 +43,22 @@ const PAYLOAD_LIMIT: usize = 2048;
 pub(crate) fn cases() -> Vec<Case> {
     vec![Case {
         name: "resume.checkpoint",
-        kind: CaseKind::Shared,
+        // 运行时半边要自己起服务端（`server::serve_once`），因此不用入口的共享服务端。
+        kind: CaseKind::SelfServed,
         prep: &[],
-        run: storage,
+        run: all,
     }]
 }
 
-/// 四段断言；每段一个独立临时库，破坏性注入互不影响。
-fn storage(_context: &TestContext) -> CaseFuture<'_> {
+/// 存储半边四段 + 运行时半边：前者每段一个独立临时库，后者起一次私有服务端，注入互不影响。
+fn all(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move {
         let mut notes = Vec::new();
         notes.extend(sequence_and_payload().await?);
         notes.extend(prune_policy().await?);
         notes.extend(decode_rules().await?);
         notes.extend(pointer_transaction().await?);
+        notes.extend(checkpoint::require(context).await?);
         Ok(notes)
     })
 }

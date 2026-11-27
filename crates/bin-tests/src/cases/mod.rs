@@ -10,6 +10,7 @@ mod mcp;
 mod occupancy;
 mod persist;
 mod probe;
+mod resume;
 mod rotation;
 mod run;
 mod runtime;
@@ -38,6 +39,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(persist::cases());
     cases.extend(probe::cases());
     cases.extend(rotation::cases());
+    cases.extend(resume::cases());
     cases.extend(run::cases());
     cases.extend(shutdown::cases());
     cases.extend(stress::cases());

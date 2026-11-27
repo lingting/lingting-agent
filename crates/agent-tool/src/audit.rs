@@ -92,8 +92,9 @@ impl ToolCallRecord {
             duration_ms: 0,
             tool_round: call.tool_round,
             created_at_ms: now_millis(),
-            // 开始标记由前移的写入点负责（P6A-006）；这里只建记录，不猜时间。
-            started_at_ms: None,
+            // 开始标记在**执行前**写入（P6A-006）：崩溃时「有开始无结束」才可见，恢复时据此
+            // 判定「这次调用可能已经执行」（D-P6-007）。
+            started_at_ms: Some(now_millis()),
         }
     }
 
@@ -137,6 +138,11 @@ pub struct ToolCallVO {
     pub tool_round: u32,
     /// 记录产生时间（Unix 毫秒）。
     pub created_at_ms: i64,
+    /// 执行开始时间（Unix 毫秒）：执行前写入开始标记时置值，收尾不覆盖（P6A-006）。
+    ///
+    /// 查询结果里不会出现 `PENDING` 行（D-P6-008），因此这个字段只是「这次调用何时开始」的
+    /// 补充事实；空值是旧库行（那时还没有开始标记）。
+    pub started_at_ms: Option<i64>,
 }
 
 impl From<&ToolCallRecord> for ToolCallVO {
@@ -152,6 +158,7 @@ impl From<&ToolCallRecord> for ToolCallVO {
             duration_ms: i64::try_from(record.duration_ms).unwrap_or(i64::MAX),
             tool_round: record.tool_round,
             created_at_ms: record.created_at_ms,
+            started_at_ms: record.started_at_ms,
         }
     }
 }

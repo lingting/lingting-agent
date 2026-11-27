@@ -73,6 +73,17 @@ impl Repository {
         transaction.commit().await
     }
 
+    /// 某个会话已提交消息的 `seq` 上界（没有消息时为 0）。
+    ///
+    /// 检查点用它记录「已提交到哪一条」：`messages` 的 `seq` 由写入语句分配并保序，
+    /// 因此这个上界就是「恢复时从哪之后继续」的唯一定位信息（D-P6-001）。
+    pub async fn max_message_seq(&self, session_id: &str) -> Result<i64, DbError> {
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(self.pool())
+            .await
+            .map_err(DbError::Query)
+    }
     /// 某个会话的全部消息，按 `seq` 升序。
     pub async fn messages(&self, session_id: &str) -> Result<Vec<Message>, DbError> {
         let sql = format!("{SELECT_MESSAGE} WHERE session_id = ? ORDER BY seq");
