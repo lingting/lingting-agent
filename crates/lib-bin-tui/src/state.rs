@@ -1,9 +1,10 @@
-//! 界面状态：会话、消息、输入、连接与流式阶段的唯一持有者。
+//! 界面状态：会话、消息、输入、连接、流式阶段与技能面板的唯一持有者。
 //!
 //! 状态迁移只有两个入口：[`App::apply`] 吸收工作线程的更新，[`App::handle_key`] 处理按键，
 //! 两者都返回需要发给工作线程的请求；渲染只读状态，不改状态。
 
 use crate::event::{Command, Update};
+use crate::skill::{PanelAction, SkillPanel};
 use lib_bin_cli::sdk::{ClientDecision, Message, MessageRole, SessionSummary, ToolCallStatus};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -120,6 +121,8 @@ pub struct App {
     pub back: u16,
     /// 渲染 tick 计数，驱动进度指示。
     pub tick: u64,
+    /// 技能面板：`Some` 表示面板打开，此时按键归面板（D-P5-019）。
+    pub skills: Option<SkillPanel>,
     /// 是否退出。
     quit: bool,
 }
@@ -146,6 +149,7 @@ impl App {
             pending: None,
             notice: None,
             back: 0,
+            skills: None,
             tick: 0,
             quit: false,
         }
@@ -337,7 +341,23 @@ impl App {
                 });
                 Vec::new()
             }
+            Update::Skills(items) => {
+                if let Some(panel) = self.skills.as_mut() {
+                    panel.apply_list(items);
+                }
+                Vec::new()
+            }
+            Update::SkillDetail(detail) => {
+                if let Some(panel) = self.skills.as_mut() {
+                    panel.apply_detail(detail);
+                }
+                Vec::new()
+            }
             Update::Notice { text } => {
+                // 详情请求失败时不能一直停在「读取中」：提示行说明原因，面板保持可操作。
+                if let Some(panel) = self.skills.as_mut() {
+                    panel.clear_pending();
+                }
                 // 等响应阶段出的错（建会话、发消息、建下行流失败）要把阶段放回去，否则永远等下去；
                 // 中断请求失败时回复本身还在进行，退回到流式阶段等事件流收尾。
                 self.phase = match self.phase {
@@ -367,6 +387,14 @@ impl App {
                 _ => {}
             }
         }
+        // F2 是技能面板的开关：开与关都不改变焦点，聊天输入原样保留（D-P5-019）。
+        if key.code == KeyCode::F(2) {
+            return self.toggle_skills();
+        }
+        // 面板打开时按键归面板：导航、启停、详情与关闭都在面板里收口。
+        if self.skills.is_some() {
+            return self.handle_skills_key(key);
+        }
         // 待确认项存在时 `y` / `n` 是应答键，不再落到输入框与会话列表（会话列表里 `n` 是新建）。
         if !key.modifiers.contains(KeyModifiers::CONTROL)
             && self.pending.is_some()
@@ -386,6 +414,31 @@ impl App {
     pub fn handle_paste(&mut self, text: &str) {
         if self.focus == Focus::Input {
             self.input.insert_str(text);
+        }
+    }
+
+    /// 技能面板的开关：`F2` 与 `/skills` 共用；打开时重新拉一次清单（文件系统是唯一事实源）。
+    fn toggle_skills(&mut self) -> Vec<Command> {
+        if self.skills.is_some() {
+            self.skills = None;
+            return Vec::new();
+        }
+        self.skills = Some(SkillPanel::default());
+        vec![Command::SkillList]
+    }
+
+    /// 面板按键：状态迁移都在 [`SkillPanel`] 里，这里只把请求与关闭动作接出去。
+    fn handle_skills_key(&mut self, key: KeyEvent) -> Vec<Command> {
+        let Some(panel) = self.skills.as_mut() else {
+            return Vec::new();
+        };
+        match panel.handle_key(key) {
+            PanelAction::Stay => Vec::new(),
+            PanelAction::Send(command) => vec![command],
+            PanelAction::Close => {
+                self.skills = None;
+                Vec::new()
+            }
         }
     }
 
@@ -456,6 +509,11 @@ impl App {
 
     /// 发送输入框的内容。
     fn submit(&mut self) -> Vec<Command> {
+        // `/skills` 是打开技能面板的命令：它不进对话，也不占用一次 Run（与 F2 同源）。
+        if self.input.lines().join("\n").trim() == "/skills" {
+            self.input.clear();
+            return self.toggle_skills();
+        }
         let content = self.input.lines().join("\n").trim().to_string();
         if content.is_empty() {
             return Vec::new();

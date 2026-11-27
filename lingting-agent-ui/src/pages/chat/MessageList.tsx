@@ -1,6 +1,11 @@
 import { Bubble, type BubbleItemType } from "@ant-design/x";
 
-import { type ChatItem, type ChatMessage, type ChatMessageStatus, type ToolCard } from "./chatMessage";
+import {
+  type ChatItem,
+  type ChatMessage,
+  type ChatMessageStatus,
+  type ToolCard,
+} from "./chatMessage";
 import { type ToolConfirmHandler, ToolCardView } from "./ToolCard";
 
 /** 消息状态到 Bubble 状态的映射：`updating` 显示流式光标，`abort` 显示中断标记。 */
@@ -36,7 +41,13 @@ function toolItem(card: ToolCard, onConfirm: ToolConfirmHandler): BubbleItemType
 }
 
 /** 对话流：消息气泡与工具卡片按到达顺序排在同一列里。 */
-export function MessageList({ items, onConfirm }: { items: ChatItem[]; onConfirm: ToolConfirmHandler }) {
+export function MessageList({
+  items,
+  onConfirm,
+}: {
+  items: ChatItem[];
+  onConfirm: ToolConfirmHandler;
+}) {
   const list: BubbleItemType[] = items.map((item) =>
     item.kind === "tool" ? toolItem(item, onConfirm) : messageItem(item),
   );

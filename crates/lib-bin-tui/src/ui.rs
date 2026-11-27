@@ -2,7 +2,9 @@
 //!
 //! 布局自上而下：状态栏 / 提示行（有提示时才占位）/ 主体（左会话、右消息）/ 输入框 / 快捷键。
 //! 消息区自己折行，`Paragraph` 不再开 `wrap`，滚动位置直接由行数算出。
+//! 技能面板打开时主体区改由 [`crate::skill_ui`] 覆盖，会话与消息暂不渲染（D-P5-019）。
 
+use crate::skill_ui;
 use crate::state::{App, Connection, Focus, Phase};
 use crate::text;
 use lib_bin_cli::sdk::MessageRole;
@@ -34,13 +36,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(notice) = &app.notice {
         draw_notice(frame, notice_area, notice);
     }
-    let [sessions_area, messages_area] = Layout::horizontal([
-        Constraint::Percentage(SESSIONS_PERCENT),
-        Constraint::Percentage(100 - SESSIONS_PERCENT),
-    ])
-    .areas(body_area);
-    draw_sessions(frame, sessions_area, app);
-    draw_messages(frame, messages_area, app);
+    // 技能面板是覆盖层：打开时它铺满主体区，会话与消息暂不渲染（D-P5-019）。
+    if let Some(panel) = &app.skills {
+        skill_ui::draw(frame, body_area, panel);
+    } else {
+        let [sessions_area, messages_area] = Layout::horizontal([
+            Constraint::Percentage(SESSIONS_PERCENT),
+            Constraint::Percentage(100 - SESSIONS_PERCENT),
+        ])
+        .areas(body_area);
+        draw_sessions(frame, sessions_area, app);
+        draw_messages(frame, messages_area, app);
+    }
     draw_input(frame, input_area, app);
     draw_hint(frame, hint_area, app);
 }
@@ -178,8 +185,11 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 
 /// 底部快捷键提示：随焦点切换。
 fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
-    // 有待确认项时把应答键放在最前面：此刻 `y` / `n` 优先于其它按键（D-P3-026）。
-    let hint = if app.pending.is_some() {
+    // 有待确认项时把应答键放在最前面：此刻 `y` / `n` 优先于其它按键（D-P3-026）；
+    // 技能面板打开时按键全归面板（Ctrl 组合键除外），因此先给清单区快捷键（D-P5-019）。
+    let hint = if app.skills.is_some() {
+        "↑↓ 选择 · Enter 启停 · d 详情 · r 重载 · Esc 关闭 · Ctrl+D 退出"
+    } else if app.pending.is_some() {
         "y 允许 · n 拒绝 · Esc 中断 · Ctrl+D 退出"
     } else {
         match app.focus {
@@ -235,7 +245,7 @@ fn tool_style(text: &str) -> Style {
 }
 
 /// 边框样式：焦点所在区域高亮。
-fn border_style(focused: bool) -> Style {
+pub(crate) fn border_style(focused: bool) -> Style {
     if focused {
         Style::new().fg(Color::Cyan)
     } else {
@@ -244,6 +254,6 @@ fn border_style(focused: bool) -> Style {
 }
 
 /// 次要文字样式。
-fn faded() -> Style {
+pub(crate) fn faded() -> Style {
     Style::new().fg(Color::DarkGray)
 }

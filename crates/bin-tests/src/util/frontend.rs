@@ -45,6 +45,26 @@ pub(crate) async fn test() -> Result<()> {
         .context("前端单元用例失败")
 }
 
+/// 只跑技能抽屉的用例文件：`skill.web` 用它只跑抽屉清单、详情与启停。
+pub(crate) async fn skill_tests() -> Result<()> {
+    let dir = installed_dir()?;
+    run_pnpm(
+        &dir,
+        &[
+            "exec",
+            "vp",
+            "test",
+            "run",
+            "--maxWorkers",
+            "2",
+            "tests/skill-drawer.test.tsx",
+        ],
+        &[],
+    )
+    .await
+    .context("前端技能抽屉用例失败")
+}
+
 /// 只跑匹配的用例文件（`vp test run <文件>`）：`tool.web` 用它只跑工具卡片与确认状态机。
 pub(crate) async fn tool_tests() -> Result<()> {
     let dir = installed_dir()?;

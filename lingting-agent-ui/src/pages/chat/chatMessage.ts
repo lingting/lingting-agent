@@ -55,7 +55,13 @@ export function nextLocalKey(prefix: string): string {
 
 /** 由服务端消息生成界面消息。 */
 export function fromServerMessage(message: Message): ChatMessage {
-  return { kind: "message", key: message.id, role: message.role, content: message.content, status: "done" };
+  return {
+    kind: "message",
+    key: message.id,
+    role: message.role,
+    content: message.content,
+    status: "done",
+  };
 }
 
 /** 是否为消息项：渲染与状态迁移据此分流。 */
@@ -89,7 +95,10 @@ export function toolStatusOf(status: ToolCallStatus | null | undefined): ToolSta
 }
 
 /** 失败或取消的说明文本：优先用服务端下发的模型可读文本。 */
-export function toolNoteOf(status: ToolCallStatus | null | undefined, error: string | null | undefined): string {
+export function toolNoteOf(
+  status: ToolCallStatus | null | undefined,
+  error: string | null | undefined,
+): string {
   if (status === "CANCELLED") return "已取消";
   if (status === "DENIED") return error || "工具未授权";
   return error || "工具执行失败";

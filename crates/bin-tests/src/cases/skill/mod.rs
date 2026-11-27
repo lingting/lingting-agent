@@ -7,6 +7,8 @@
 mod api;
 mod config;
 mod metrics;
+mod tui;
+mod web;
 
 use std::future::Future;
 use std::path::Path;
@@ -26,6 +28,8 @@ pub(crate) fn cases() -> Vec<Case> {
     cases.extend(config::cases());
     cases.extend(api::cases());
     cases.extend(metrics::cases());
+    cases.extend(tui::cases());
+    cases.extend(web::cases());
     cases
 }
 

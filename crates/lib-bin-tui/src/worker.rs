@@ -17,7 +17,7 @@ use lib_bin_cli::client::{Client, ClientError, EventStream};
 use lib_bin_cli::sdk::{
     ApiClient, ClientCreatePO, ClientDecision, ClientDeletePO, ClientEvent, ClientEventKind, ClientPostKind,
     ClientPostPO, ClientStreamParams, MessageListParams, MessageSendPO, OccupancyCreatePO, OccupancyDeletePO,
-    RunCancelPO, RunEvent, RunEventKind, SessionCreatePO, ToolCallStatus,
+    RunCancelPO, RunEvent, RunEventKind, SessionCreatePO, SkillAction, SkillGetParams, SkillUpdatePO, ToolCallStatus,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -491,6 +491,27 @@ fn dispatch(link: &Arc<Link>, command: Command, updates: &Sender<Update>, tasks:
                 confirm(&link, tool_call_id, decision, &updates).await;
             });
         }
+        Command::SkillList => {
+            let link = Arc::clone(link);
+            let updates = updates.clone();
+            tasks.spawn(async move {
+                skill_list(&link, &updates).await;
+            });
+        }
+        Command::SkillUpdate { name, action } => {
+            let link = Arc::clone(link);
+            let updates = updates.clone();
+            tasks.spawn(async move {
+                skill_update(&link, name, action, &updates).await;
+            });
+        }
+        Command::SkillDetail { name } => {
+            let link = Arc::clone(link);
+            let updates = updates.clone();
+            tasks.spawn(async move {
+                skill_detail(&link, name, &updates).await;
+            });
+        }
         Command::Probe => {
             let link = Arc::clone(link);
             let updates = updates.clone();
@@ -588,6 +609,47 @@ async fn probe(link: &Arc<Link>, updates: &Sender<Update>) {
                 message: error.to_string(),
             },
         );
+    }
+}
+
+/// 技能清单：面板每次打开都重新拉一次，禁用与 `INVALID` 项都在清单里。
+async fn skill_list(link: &Arc<Link>, updates: &Sender<Update>) {
+    match link.client.skill_list().await.map_err(ClientError::from_call) {
+        Ok(skills) => send(updates, Update::Skills(skills)),
+        Err(error) => send(
+            updates,
+            Update::Notice {
+                text: error.to_string(),
+            },
+        ),
+    }
+}
+
+/// 启停或重载：服务端返回动作完成后的整张清单，界面直接替换，不再二次请求。
+async fn skill_update(link: &Arc<Link>, name: Option<String>, action: SkillAction, updates: &Sender<Update>) {
+    let po = SkillUpdatePO { name, action };
+    match link.client.skill_update(po).await.map_err(ClientError::from_call) {
+        Ok(skills) => send(updates, Update::Skills(skills)),
+        Err(error) => send(
+            updates,
+            Update::Notice {
+                text: error.to_string(),
+            },
+        ),
+    }
+}
+
+/// 技能详情：正文与引用清单；禁用与 `INVALID` 项的正文为空串，原因仍在 `error` 上。
+async fn skill_detail(link: &Arc<Link>, name: String, updates: &Sender<Update>) {
+    let params = SkillGetParams { name };
+    match link.client.skill_get(params).await.map_err(ClientError::from_call) {
+        Ok(detail) => send(updates, Update::SkillDetail(detail)),
+        Err(error) => send(
+            updates,
+            Update::Notice {
+                text: error.to_string(),
+            },
+        ),
     }
 }
 

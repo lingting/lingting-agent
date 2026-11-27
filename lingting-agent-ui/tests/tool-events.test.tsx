@@ -5,7 +5,13 @@
  * 未完成标记），不做界面快照。
  */
 
-import type { ClientDecision, MessageSendVO, Run, RunEvent, SessionSummary } from "@lingting/agent-api";
+import type {
+  ClientDecision,
+  MessageSendVO,
+  Run,
+  RunEvent,
+  SessionSummary,
+} from "@lingting/agent-api";
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -21,7 +27,9 @@ let push: LinkListener | null = null;
 const occupy = vi.fn(async (_sessionId: string) => undefined);
 
 /** 确认上行调用。 */
-const confirm = vi.fn(async (_toolCallId: string, _decision: ClientDecision): Promise<void> => undefined);
+const confirm = vi.fn(
+  async (_toolCallId: string, _decision: ClientDecision): Promise<void> => undefined,
+);
 
 vi.mock("@/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api")>();

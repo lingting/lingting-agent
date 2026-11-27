@@ -4,7 +4,7 @@
 //! 两条通道都无界：界面 `try_recv` 永不阻塞事件循环，工作线程的异步任务也不会因为界面
 //! 短暂繁忙而被卡住。
 
-use lib_bin_cli::sdk::{ClientDecision, Message, SessionSummary, ToolCallStatus};
+use lib_bin_cli::sdk::{ClientDecision, Message, SessionSummary, SkillAction, SkillDetailVO, SkillVO, ToolCallStatus};
 
 /// 工作线程推给界面的事件。
 #[derive(Debug)]
@@ -55,6 +55,10 @@ pub enum Update {
     Interrupted { reason: String },
     /// 事件流结束但没有终态事件：取消后服务端就是这样收尾的。
     StreamEnded,
+    /// 技能清单快照：面板打开与每次动作 / 重载之后都用整张清单替换。
+    Skills(Vec<SkillVO>),
+    /// 一条技能的详情（正文与引用清单）。
+    SkillDetail(SkillDetailVO),
     /// 一行提示，通常是某次调用的错误。
     Notice { text: String },
 }
@@ -82,4 +86,10 @@ pub enum Command {
     },
     /// 空闲期的连通性巡检：只在失败时报 `Offline`，成功不产生更新。
     Probe,
+    /// 拉取技能清单：面板每次打开都重新拉一次（文件系统仍是唯一事实源）。
+    SkillList,
+    /// 启停或重载技能：成功时返回动作完成后的整张清单。
+    SkillUpdate { name: Option<String>, action: SkillAction },
+    /// 取一条技能的详情（正文与引用清单）。
+    SkillDetail { name: String },
 }

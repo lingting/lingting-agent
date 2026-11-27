@@ -1,6 +1,6 @@
 # P5 任务清单
 
-**状态：进行中（Batch A、Batch B、Batch C、Batch D 已完成，2026-11-26）。** 20 个任务 / 6 个批次，13 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：进行中（Batch A、Batch B、Batch C、Batch D、Batch E 已完成，2026-11-27）。** 20 个任务 / 6 个批次，15 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -276,25 +276,25 @@
 
 > 依赖：Batch D（需要 SDK 与接口）。TUI 与 WebUI 可并行。
 >
-> **状态：未开始。**
+> **状态：已完成（2026-11-27）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿（另含 `lib-bin-tui` 在 `--features testing` 下的 clippy），`make ui-check` / `make ui-lint` 退出码 0。未新增依赖边：TUI 只经 `lib-bin-cli` 的生成 SDK 调 `api/skill/*`（`sdk.rs` 无需补转发），WebUI 只新增 `src/api/skill.ts` 的 TanStack Query hooks。入口：TUI 是 `F2` 与输入框的 `/skills`（同一条打开路径），WebUI 是聊天页头部的「技能」徽标按钮 + 右侧抽屉（`size = 480`）。**取证（已授权执行）**：P5-019 的两个用例 `skill.tui`（`cases/skill/tui.rs`）与 `skill.web`（`cases/skill/web.rs` + `tests/skill-drawer.test.tsx`）已提前落地，`make test ARGS="skill.tui"`、`make test ARGS="skill.web"` 均通过；回归 `make test ARGS="tui"`（14 个）与 `make test ARGS="web"`（8 个，含 Playwright `web.e2e`）通过。`make ui-lint` 按当前格式化配置顺带重排了 `lingting-agent-ui` 下若干既有文件（未回滚，见根 `AGENTS.md`「格式化」条款）。
 
-- [ ] **P5-014 TUI：Skill 面板与启停**
+- [x] **P5-014 TUI：Skill 面板与启停**
 
   **目标**：在 TUI 里能看到有哪些 Skill、哪个坏了、哪个缺工具，并能启停与重载。
   **前置依赖**：P5-013。
-  **涉及文件 / Crate**：`crates/lib-bin-tui/src/{state.rs,ui.rs,worker.rs,event.rs}`、`crates/lib-bin-cli/src/sdk.rs`（若无对应方法则补转发）。
+  **涉及文件 / Crate**：`crates/lib-bin-tui/src/{event.rs,state.rs,ui.rs,worker.rs,testing.rs}`、新增 `crates/lib-bin-tui/src/{skill.rs,skill_ui.rs}`（面板状态与渲染分开）、`crates/bin-tests/src/cases/skill/tui.rs`。`crates/lib-bin-cli/src/sdk.rs` 无需改动：生成的 `ApiClient` 已由 `Client` 实现。
   **实施步骤**：
   1. 键位与入口：`/skills` 命令（或 `F2`）打开覆盖层，`Esc` 关闭；打开时拉一次 `api/skill/list`（失败只显示一行可读错误，不阻塞聊天）。
   2. 列表列：名字、状态（`READY` / `INVALID` / `禁用`）、缺失工具数、目录；`INVALID` 行显示错误文案（可截断，`Enter` 展开）。
   3. 操作：`Enter` 切换启用（`ENABLE` / `DISABLE`），`r` 触发 `RELOAD`，操作后用返回的清单就地刷新，不再二次请求。
   4. 详情：`d` 打开 `api/skill/get` 的正文（只读滚动，复用既有消息渲染），`Esc` 返回列表。
   **验收标准**：
-  - 面板打开后 3 秒内出清单（本地服务），`INVALID` 项带原因可见；断连时显示一行错误并保持可关闭。
-  - `Enter` 切换后清单与 `api/skill/list` 一致；`r` 后新增的 Skill 出现在清单里。
-  - 面板不影响既有聊天、会话切换与确认交互（既有 TUI 用例不回归）。
-  **测试要求**：由 P5-019 的 `skill.tui` 用例覆盖（`testing` 特性下的既有 TUI 用例风格）。
+  - [x] 面板打开后 3 秒内出清单（本地服务），`INVALID` 项带原因可见；断连时显示一行错误并保持可关闭。（用例 `skill.tui`：`PANEL_TIMEOUT = 3s` 内等到清单；断连分支单独起一个指向空端口的界面，断言提示行有错误且 `Esc` 仍能关面板）
+  - [x] `Enter` 切换后清单与 `api/skill/list` 一致；`r` 后新增的 Skill 出现在清单里。（用例 `skill.tui`：每次动作后都用接口清单逐项对齐，并断言 `RELOAD` 后磁盘新写的 `gamma` 出现且 `missingTools = [pdf_render]`）
+  - [x] 面板不影响既有聊天、会话切换与确认交互（既有 TUI 用例不回归）。（`make test ARGS="tui"`：14 个用例全绿；面板关闭后输入框照常可用由 `skill.tui` 断言）
+  **测试要求**：由 P5-019 的 `skill.tui` 用例覆盖（`testing` 特性下的既有 TUI 用例风格）。用例已随本批次提前落地，`make test ARGS="skill.tui"` 通过。
 
-- [ ] **P5-015 WebUI：Skill 抽屉与详情**
+- [x] **P5-015 WebUI：Skill 抽屉与详情**
 
   **目标**：WebUI 里能查看 Skill 清单、正文与启停状态，不打断对话。
   **前置依赖**：P5-013。
@@ -305,10 +305,10 @@
   3. 操作：每行一个启用开关（`POST api/skill/update`），抽屉右上角「重载」按钮（`RELOAD`），成功后用返回值刷新缓存（不额外请求）。
   4. 错误：`INVALID` 项在详情区显示 `error`；接口 400 的错误文案原样展示，不做二次翻译。
   **验收标准**：
-  - 抽屉打开后清单与接口一致；`INVALID` 项详情区显示可定位错误；大正文可滚动且不卡顿（虚拟化或分块渲染至少一项落地）。
-  - 开关与重载后列表立刻反映接口返回值；失败时提示且状态不变。
-  - `make ui-check`、`make ui-lint` 退出码 0；既有聊天页面不受影响。
-  **测试要求**：由 P5-019 的 `skill.web` 用例覆盖（既有 web 用例风格）。
+  - [x] 抽屉打开后清单与接口一致；`INVALID` 项详情区显示可定位错误；大正文可滚动且不卡顿（虚拟化或分块渲染至少一项落地）。（用例 `skill.web`：清单逐项断言；`INVALID` 详情区原样显示 `error`；正文按空行分块、每页 8 块，`max-h-[50vh]` 内滚动）
+  - [x] 开关与重载后列表立刻反映接口返回值；失败时提示且状态不变。（用例 `skill.web`：动作用 `api/skill/update` 的返回值写回缓存，并断言 `skillList` 只被调用一次；失败分支断言服务端文案原样出现、开关保持缓存里的原值）
+  - [x] `make ui-check`、`make ui-lint` 退出码 0；既有聊天页面不受影响。（两项退出码 0；`make test ARGS="web"` 8 个用例全绿，含 `web.ui` 的 45 个前端用例与 Playwright `web.e2e`）
+  **测试要求**：由 P5-019 的 `skill.web` 用例覆盖（既有 web 用例风格）。用例已随本批次提前落地，`make test ARGS="skill.web"` 通过。
 
 ---
 
@@ -361,7 +361,7 @@
   3. `skill.tools_missing`：声明工具不可用时，索引标注 + `skill_load` 结果含缺失清单与那句约束；模型在此之后的回复里不出现「已执行该工具」的表述。
   4. `skill.tui` / `skill.web`：打开面板 / 抽屉、切换启用、重载、读取详情四条路径。
   **验收标准**：示例 Skill 三份都在 `assets/skills/` 下且能原样被解析器接受；端到端用例的两个关键断言（步骤顺序、降级表述）可核对。
-  **测试要求**：本次落地四个用例；执行需授权。
+  **测试要求**：本次落地四个用例；执行需授权（`tui.rs` / `web.rs` 两个已随 Batch E 提前落地并执行通过，`e2e.rs` / `tools_missing.rs` 随本任务）。
 
 - [ ] **P5-020 全量回归与阶段验收报告**
 

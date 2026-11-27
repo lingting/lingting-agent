@@ -11,6 +11,8 @@
 //! 通道 `try_recv` 非阻塞地取，渲染 tick 就是那次轮询超时（只在有动画可放时重绘）。
 
 mod event;
+mod skill;
+mod skill_ui;
 mod state;
 mod terminal;
 mod text;

@@ -1,14 +1,21 @@
-import { Alert, Empty, Flex } from "antd";
+import { ReadOutlined } from "@ant-design/icons";
+import { Alert, Badge, Button, Empty, Flex, Typography } from "antd";
 import { useState } from "react";
+
+import { useSkillList } from "@/api/skill";
 
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
+import { SkillDrawer } from "./SkillDrawer";
 import { useChat } from "./useChat";
 
 /** 对话页：发送消息 → 流式展示回复（含工具卡片与确认按钮）→ 可停止生成；失败以提示条呈现。 */
 export function ChatMain() {
   const { cancel, clearError, confirm, error, items, send, streaming } = useChat();
   const [input, setInput] = useState("");
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  // 头部徽标读的是同一份清单缓存：抽屉打开与否都只请求一次。
+  const skills = useSkillList();
 
   const handleSubmit = (content: string) => {
     setInput("");
@@ -17,6 +24,18 @@ export function ChatMain() {
 
   return (
     <Flex className="h-full" vertical>
+      <Flex
+        align="center"
+        justify="space-between"
+        style={{ borderBottom: "1px solid rgba(5, 5, 5, 0.06)", padding: "8px 16px" }}
+      >
+        <Typography.Text strong>对话</Typography.Text>
+        <Badge count={(skills.data ?? []).length} size="small">
+          <Button icon={<ReadOutlined />} onClick={() => setSkillsOpen(true)}>
+            技能
+          </Button>
+        </Badge>
+      </Flex>
       {error && <Alert banner closable message={error} type="error" onClose={clearError} />}
       <div className="min-h-0 flex-1 overflow-hidden">
         {items.length > 0 ? (
@@ -34,6 +53,7 @@ export function ChatMain() {
         streaming={streaming}
         value={input}
       />
+      <SkillDrawer onClose={() => setSkillsOpen(false)} open={skillsOpen} />
     </Flex>
   );
 }

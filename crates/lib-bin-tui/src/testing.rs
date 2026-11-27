@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 pub use crate::event::{Command, Update};
+pub use crate::skill::SkillPanel;
 pub use crate::state::{App, Connection, Focus, Phase};
 pub use crate::worker::LinkSnapshot;
 pub use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

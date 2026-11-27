@@ -80,29 +80,37 @@ export function useChat() {
   const messages = useMemo(() => items.filter(isChatMessage), [items]);
 
   /** 改动某条消息项（按 key）。 */
-  const updateMessage = useCallback((key: string, change: (message: ChatMessage) => ChatMessage) => {
-    setItems((previous) =>
-      previous.map((item) => (item.kind === "message" && item.key === key ? change(item) : item)),
-    );
-  }, []);
+  const updateMessage = useCallback(
+    (key: string, change: (message: ChatMessage) => ChatMessage) => {
+      setItems((previous) =>
+        previous.map((item) => (item.kind === "message" && item.key === key ? change(item) : item)),
+      );
+    },
+    [],
+  );
 
   /** 改动某张工具卡片（按 `toolCallId`）；卡片不存在时什么都不做。 */
   const updateTool = useCallback((toolCallId: string, change: (card: ToolCard) => ToolCard) => {
     setItems((previous) =>
-      previous.map((item) => (item.kind === "tool" && item.key === toolCallId ? change(item) : item)),
+      previous.map((item) =>
+        item.kind === "tool" && item.key === toolCallId ? change(item) : item,
+      ),
     );
   }, []);
 
   /** 工具卡片：存在就改写，不存在就新建（开始事件先到，确认与结果事件后到）。 */
-  const upsertTool = useCallback((toolCallId: string, name: string, change: (card: ToolCard) => ToolCard) => {
-    setItems((previous) => {
-      const exists = previous.some((item) => item.kind === "tool" && item.key === toolCallId);
-      if (!exists) return [...previous, change(newToolCard(toolCallId, name))];
-      return previous.map((item) =>
-        item.kind === "tool" && item.key === toolCallId ? change(item) : item,
-      );
-    });
-  }, []);
+  const upsertTool = useCallback(
+    (toolCallId: string, name: string, change: (card: ToolCard) => ToolCard) => {
+      setItems((previous) => {
+        const exists = previous.some((item) => item.kind === "tool" && item.key === toolCallId);
+        if (!exists) return [...previous, change(newToolCard(toolCallId, name))];
+        return previous.map((item) =>
+          item.kind === "tool" && item.key === toolCallId ? change(item) : item,
+        );
+      });
+    },
+    [],
+  );
 
   /** 收尾一条消息：可追加说明并更新状态。 */
   const finishMessage = useCallback(
@@ -153,7 +161,11 @@ export function useChat() {
       const name = event.toolName ?? "";
       switch (event.event) {
         case "tool_call_started":
-          upsertTool(toolCallId, name, (card) => ({ ...card, name: card.name || name, status: "running" }));
+          upsertTool(toolCallId, name, (card) => ({
+            ...card,
+            name: card.name || name,
+            status: "running",
+          }));
           return true;
         case "tool_call_confirm_required":
           upsertTool(toolCallId, name, (card) => ({
@@ -303,7 +315,13 @@ export function useChat() {
         setItems((previous) => [
           ...previous,
           fromServerMessage(sent.message),
-          { kind: "message", key: assistantKey, role: "ASSISTANT", content: "", status: "streaming" },
+          {
+            kind: "message",
+            key: assistantKey,
+            role: "ASSISTANT",
+            content: "",
+            status: "streaming",
+          },
         ]);
 
         // 缓冲里已攒下本轮开头的几条事件：按到达顺序放出。
@@ -332,12 +350,16 @@ export function useChat() {
       }
       if (confirmingRef.current.has(toolCallId)) return;
       confirmingRef.current.add(toolCallId);
-      updateTool(toolCallId, (card) => (card.status === "confirm" ? { ...card, status: "submitted" } : card));
+      updateTool(toolCallId, (card) =>
+        card.status === "confirm" ? { ...card, status: "submitted" } : card,
+      );
       try {
         await link.confirm(toolCallId, decision);
       } catch (failure) {
         setError(errorMessageOf(failure));
-        updateTool(toolCallId, (card) => (card.status === "submitted" ? { ...card, status: "confirm" } : card));
+        updateTool(toolCallId, (card) =>
+          card.status === "submitted" ? { ...card, status: "confirm" } : card,
+        );
       } finally {
         confirmingRef.current.delete(toolCallId);
       }

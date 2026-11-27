@@ -29,7 +29,13 @@ const STATUS_COLOR: Record<ToolStatus, string | undefined> = {
 export type ToolConfirmHandler = (toolCallId: string, decision: ClientDecision) => void;
 
 /** 工具调用卡片：一次调用一张，确认态追加参数摘要与两个按钮。 */
-export function ToolCardView({ card, onConfirm }: { card: ToolCard; onConfirm: ToolConfirmHandler }) {
+export function ToolCardView({
+  card,
+  onConfirm,
+}: {
+  card: ToolCard;
+  onConfirm: ToolConfirmHandler;
+}) {
   const confirmable = card.status === "confirm";
   return (
     <Card className="my-1 max-w-[560px]" size="small" styles={{ body: { padding: "8px 12px" } }}>
@@ -57,7 +63,11 @@ export function ToolCardView({ card, onConfirm }: { card: ToolCard; onConfirm: T
             >
               允许
             </Button>
-            <Button disabled={!confirmable} size="small" onClick={() => onConfirm(card.key, "REJECT")}>
+            <Button
+              disabled={!confirmable}
+              size="small"
+              onClick={() => onConfirm(card.key, "REJECT")}
+            >
               拒绝
             </Button>
           </Flex>
