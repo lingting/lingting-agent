@@ -103,8 +103,9 @@ fn schema(context: &TestContext) -> CaseFuture<'_> {
         .await?;
 
         let names = tool_names(&first);
+        // `skill_load` 自 P5-010 起随 Skill 装配注册（只读工具，默认可见，D-P5-011）。
         ensure!(
-            names == ["calculator", "current_time", "file_read", "file_search"],
+            names == ["calculator", "current_time", "file_read", "file_search", "skill_load"],
             "模型可见清单应按名字排序且摘掉 deny 的工具，实际 {names:?}"
         );
         ensure!(first == second, "同一份配置两次请求的工具清单必须同序同内容");

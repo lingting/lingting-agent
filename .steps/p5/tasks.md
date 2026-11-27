@@ -1,6 +1,6 @@
 # P5 任务清单
 
-**状态：进行中（Batch A、Batch B、Batch C 已完成，2026-11-26）。** 20 个任务 / 6 个批次，10 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：进行中（Batch A、Batch B、Batch C、Batch D 已完成，2026-11-26）。** 20 个任务 / 6 个批次，13 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -219,9 +219,9 @@
 
 > 依赖：Batch C。本批次结束时，Skill 的状态、正文与启停都可以从接口拿到，指标可断言，文档与 SDK 生成同步。
 >
-> **状态：未开始。**
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿（另含 `agent-skill` / `manager-agent` / `lib-web` 三处在 `--features metrics` 下的 clippy），`make gen` / `make gen-check` / `make ui-check` 退出码 0。未新增依赖边：`agent-skill` 只增加空的 `metrics` 特性，并经 `manager-agent` → `lib-bin-web` → `bin-agent` 透传。接口总数 29 → 32，`docs/api/skill.md` 落地。**取证（已授权执行）**：提前落地 `skill.metrics` 与 `skill.api` 两个用例（P5-018 的两个文件），`make test ARGS="skill.metrics"` 与 `make test ARGS="skill.api"` 均通过，实测 `discovered=3 invalid=1 enabled=2 loads=1 load_failures=1 sections_served=1 index_chars=77 reloads=2`；回归 `skill.config`、`tool.schema`（模型可见清单含 `skill_load`）、`mcp.metrics`（快照新增 `skills` 段后照旧通过）均通过。唯一未取证项是「未开 `metrics` 特性时快照全 `0`」：`make test` 只产出带特性的构建。
 
-- [ ] **P5-011 `agent-skill` 指标与 `metrics` 快照段**
+- [x] **P5-011 `agent-skill` 指标与 `metrics` 快照段**
 
   **目标**：把「发现了几个、坏了几个、加载了几次、索引多长」变成 `metrics` 特性下的进程内原子量，经 `api/probe/metrics` 输出。
   **前置依赖**：P5-005、P5-009。
@@ -232,12 +232,12 @@
   3. 聚合：`MetricsSnapshot` 增加 `skills: agent_skill::metrics::SkillMetrics`，转写方式与 `mcp` 段一致（现状取 manager，累计量取原子量）。
   4. 特性打通：`manager-agent` / `bin-agent` 的 `metrics` 特性传递到 `agent-skill`（照 `agent-mcp` 的现有写法）。
   **验收标准**：
-  - 开 `metrics` 构建下：放入 3 个 Skill（1 个坏）后 `discovered = 3`、`invalid = 1`、`enabled = 2`；一次成功加载与一次失败加载后 `loads` / `load_failures` 各加 1。（用例 `skill.metrics`）
-  - `index_chars` 等于同一时刻索引渲染的字符数（用例内独立复算）。
+  - [x] 开 `metrics` 构建下：放入 3 个 Skill（1 个坏）后 `discovered = 3`、`invalid = 1`、`enabled = 2`；一次成功加载与一次失败加载后 `loads` / `load_failures` 各加 1。（用例 `skill.metrics` 实测 `discovered=3 invalid=1 enabled=2 loads=1 load_failures=1 sections_served=1 reloads=2`）
+  - [x] `index_chars` 等于同一时刻索引渲染的字符数（用例内独立复算；实测 `index_chars = 77`）。
   - 未开 `metrics` 时快照全 `0`，且 `cargo tree` 不新增依赖。
-  **测试要求**：由 P5-018 的 `skill.metrics` 覆盖；未开特性时按「未采集：原因」显式报告。
+  **测试要求**：由 P5-018 的 `skill.metrics` 覆盖；未开特性时按「未采集：原因」显式报告。用例已提前落地并执行通过（`make test ARGS="skill.metrics"`）。
 
-- [ ] **P5-012 三条管理接口与契约类型**
+- [x] **P5-012 三条管理接口与契约类型**
 
   **目标**：Skill 清单、详情、启停 / 重载各有唯一入口，契约类型只有一份（`agent-skill` 定义、装配层转发、接口层只做解包与错误映射）。
   **前置依赖**：P5-005、P5-010、P5-011。
@@ -249,13 +249,13 @@
   4. `api_error` 映射与 MCP 同形：`SkillManagerError` → 400 + `Display`，其余 → 500；`lib-web/src/skill/mod.rs` 是唯一映射点。
   5. 未装配 / `skills.toml` 的 `enabled = false` 时 `list` 返回空清单，`get` / `update` 对任何 `name` 返回 400 `技能不存在`（不是 404）。
   **验收标准**：
-  - 三条接口的 path、方法、字段与 `docs/api/skill.md` 逐项一致；`lib-web/src/skill/api.rs` 恰有 3 个 `#[web_api_*]`；接口总数 29 → 32。
-  - `list` 含禁用与 `INVALID` 项，`INVALID` 带 `error`；`get` 对未知名字返回 400 `技能不存在`；`RELOAD` 带 `name` 返回 400 `RELOAD 不接受 name`；`ENABLE`/`DISABLE` 缺 `name` 返回 400 `技能更新缺少 name`。
-  - `update` 的返回值与紧随其后的 `list` 逐字段相等（无需二次查询）。
-  - `cargo clippy -p lib-web --all-targets -- -D warnings` 通过。
-  **测试要求**：由 P5-018 的 `skill.api` 覆盖。
+  - [x] 三条接口的 path、方法、字段与 `docs/api/skill.md` 逐项一致；`lib-web/src/skill/api.rs` 恰有 3 个 `#[web_api_*]`；接口总数 29 → 32。
+  - [x] `list` 含禁用与 `INVALID` 项，`INVALID` 带 `error`；`get` 对未知名字返回 400 `技能不存在`；`RELOAD` 带 `name` 返回 400 `RELOAD 不接受 name`；`ENABLE`/`DISABLE` 缺 `name` 返回 400 `技能更新缺少 name`。
+  - [x] `update` 的返回值与紧随其后的 `list` 逐字段相等（无需二次查询）。
+  - [x] `cargo clippy -p lib-web --all-targets -- -D warnings` 通过。
+  **测试要求**：由 P5-018 的 `skill.api` 覆盖。用例已提前落地并执行通过（`make test ARGS="skill.api"`）。
 
-- [ ] **P5-013 接口文档与生成门禁**
+- [x] **P5-013 接口文档与生成门禁**
 
   **目标**：新增领域文档与总数登记，两份 SDK 都能生成出这三条接口与全部 DTO。
   **前置依赖**：P5-012。
@@ -265,9 +265,9 @@
   2. `docs/api/readme.md`：领域表新增一行（skill，共 3 条），总数 `29` → `32`，并写清 `enabled = false` 时的空清单口径。
   3. `make gen` 重新生成 TS / Rust 两份 SDK，核对三条 path 与全部 DTO 出现在产物里。
   **验收标准**：
-  - `make gen`、`make gen-check` 退出码 0；生成目录里 `grep` 到三条 path 与 `SkillVO` / `SkillDetailVO` / `SkillUpdatePO`。
-  - `docs/api/skill.md` 的字段名、类型、枚举取值与代码逐项一致；`docs/api/readme.md` 的总数与 `lib-web` 的 handler 数一致。
-  - `make ui-check` 退出码 0（TS 侧类型可用）。
+  - [x] `make gen`、`make gen-check` 退出码 0；生成目录里 `grep` 到三条 path 与 `SkillVO` / `SkillDetailVO` / `SkillUpdatePO`。
+  - [x] `docs/api/skill.md` 的字段名、类型、枚举取值与代码逐项一致；`docs/api/readme.md` 的总数与 `lib-web` 的 handler 数一致。
+  - [x] `make ui-check` 退出码 0（TS 侧类型可用）。
   **测试要求**：无（生成与静态检查）。
 
 ---
@@ -341,7 +341,7 @@
 - [ ] **P5-018 用例：格式拒绝、重载、接口、安全与指标**
 
   **目标**：把「坏 Skill 不可能被悄悄用上」「重载即生效」「接口语义」「越权不可达」「指标可复算」钉住。
-  **涉及文件**：新增 `crates/bin-tests/src/cases/skill/{invalid.rs,reload.rs,api.rs,security.rs,metrics.rs}`。
+  **涉及文件**：新增 `crates/bin-tests/src/cases/skill/{invalid.rs,reload.rs,api.rs,security.rs,metrics.rs}`（`api.rs` 与 `metrics.rs` 已随 Batch D 的取证提前落地）。
   **实施步骤**：
   1. `skill.invalid`：`INVALID` 的 Skill 不进索引、`skill_load` 不可用、不在请求体里；`api/skill/list` 带原因可见。
   2. `skill.reload`：新增 / 删除 / 改内容后用 `RELOAD` 生效，无需重启；两次 `RELOAD` 幂等；`disabled` 名单在重载后保留。
@@ -349,7 +349,7 @@
   4. `skill.security`：引用清单无 `..`；技能目录下的可执行文件不产生任何执行路径（无工具注册、无子进程）；索引 / 接口 / 事件里不出现绝对路径。
   5. `skill.metrics`：`metrics` 特性下的八项数值（`discovered` / `invalid` / `enabled` / `loads` / `load_failures` / `sections_served` / `index_chars` / `reloads`）。
   **验收标准**：每条判据都能在 `docs/reports/p5-020-acceptance.md` 里指名到用例与断言；未开 `metrics` 特性的构建按「未采集：原因」报告。
-  **测试要求**：本次落地五个用例；执行需授权。
+  **测试要求**：本次落地五个用例；执行需授权（`api.rs` / `metrics.rs` 两个已落地并执行通过，其余三个随本任务）。
 
 - [ ] **P5-019 示例 Skill 与端到端用例**
 

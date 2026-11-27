@@ -17,6 +17,7 @@ use crate::availability::ToolAvailability;
 use crate::error::SkillError;
 use crate::index::{self, SkillIndex};
 use crate::load::{self, SkillContent};
+use crate::metrics;
 use crate::section::SkillSection;
 use crate::skill::SkillMetadata;
 
@@ -193,6 +194,11 @@ impl SkillRegistry {
         self.read_snapshot().clone()
     }
 
+    /// 快照条目数（含 `INVALID`）：`metrics` 的 `discovered` 用它，不必克隆正文。
+    pub fn entry_count(&self) -> usize {
+        self.read_snapshot().len()
+    }
+
     /// 整体替换快照（`RELOAD` / 启动期发现）：新增、删除、改名、格式修正都在这一次内生效。
     ///
     /// `disabled` 名单只保留仍然存在的名字（D-P5-008）：被删掉的 Skill 不会在名单里留残渣。
@@ -200,6 +206,7 @@ impl SkillRegistry {
         let names: BTreeSet<String> = snapshot.entries().iter().map(|entry| entry.name.clone()).collect();
         self.write_disabled().retain(|name| names.contains(name));
         *self.write_snapshot() = snapshot;
+        metrics::record_reload();
     }
 
     /// 启用 / 禁用一条 Skill；名字不存在时返回 [`SkillError::UnknownSkill`]。
@@ -263,19 +270,34 @@ impl SkillRegistry {
     pub fn index(&self, availability: &dyn ToolAvailability) -> SkillIndex {
         let snapshot = self.read_snapshot();
         let disabled = self.read_disabled();
-        index::render(
+        let index = index::render(
             snapshot.entries(),
             |name| !disabled.contains(name),
             &self.limits,
             availability,
-        )
+        );
+        // `index_chars` 取最近一次渲染的字符数（`store` 语义，P5-011）。
+        metrics::record_index_chars(index.chars);
+        index
     }
 
     /// 按名加载一条 Skill 的正文、章节表与引用清单（P5-005）。
     ///
     /// 三种失败各有独立文案：未知名字、已禁用、`INVALID`（带着解析期的可定位错误）。工具缺失
     /// **不阻断**加载：缺失清单由调用方用 [`crate::availability`] 的文案拼进返回文本（D-P5-009）。
+    ///
+    /// 成败各记一次 `metrics`（P5-011）：`skill_load` 之外的加载路径（管理面详情）同样计入。
     pub fn load(&self, name: &str) -> Result<SkillContent, SkillError> {
+        let result = self.resolve(name);
+        match &result {
+            Ok(content) => metrics::record_load(content.sections.len()),
+            Err(_) => metrics::record_load_failure(),
+        }
+        result
+    }
+
+    /// 加载的实际判定：`load` 只负责在外面记一次成败。
+    fn resolve(&self, name: &str) -> Result<SkillContent, SkillError> {
         // 先判启用状态、再取快照：两把锁不同时持有，写路径（`reload` / `set_enabled`）也就不可能
         // 与读路径形成反向等待。
         let enabled = self.is_enabled(name);

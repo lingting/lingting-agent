@@ -40,5 +40,9 @@ specta = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
+[features]
+# 进程内指标（P5-011）：启用时用原子量累加，未启用时为空实现、不留静态计数器。
+metrics = []
+
 [lints]
 workspace = true

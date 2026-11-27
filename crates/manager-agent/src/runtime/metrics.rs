@@ -201,6 +201,8 @@ pub struct MetricsSnapshot {
     pub audit: AuditMetrics,
     /// MCP 的连接、工具与调用（P4-013）：状态现状取自 manager，累计量取自 `agent-mcp`。
     pub mcp: agent_mcp::metrics::McpMetrics,
+    /// Skill 的发现、加载与索引（P5-011）：状态现状取自 manager，累计量取自 `agent-skill`。
+    pub skills: agent_skill::metrics::SkillMetrics,
 }
 
 // 断连清理链。
@@ -360,6 +362,7 @@ pub fn snapshot() -> MetricsSnapshot {
                 panics: audit.panics,
             },
             mcp: mcp_snapshot(),
+            skills: skills_snapshot(),
         }
     }
     #[cfg(not(feature = "metrics"))]
@@ -375,6 +378,15 @@ fn mcp_snapshot() -> agent_mcp::metrics::McpMetrics {
         installed.mcp().state_counts()
     });
     agent_mcp::metrics::snapshot(counts)
+}
+
+/// Skill 段的转写：累计量来自 `agent-skill` 的原子量，状态计数取注册表的现状（不做累加）。
+#[cfg(feature = "metrics")]
+fn skills_snapshot() -> agent_skill::metrics::SkillMetrics {
+    let counts = crate::holder::holder().map_or_else(agent_skill::metrics::SkillStateCounts::default, |installed| {
+        installed.skills().state_counts()
+    });
+    agent_skill::metrics::snapshot(counts)
 }
 
 /// 处理链的在场守卫：进入 +1、离开 -1，并累计耗时。

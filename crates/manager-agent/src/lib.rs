@@ -23,8 +23,13 @@ pub use holder::{AgentHolder, holder, install, runtime, shutdown};
 pub use session::{
     cancel_run, create_session, get_run, list_messages, list_sessions, list_tool_calls, running_run_count, send_message,
 };
-/// Skill 的装配侧适配：发现、`skill_load` 注册、工具可用性判定与 Skill 门面（P5-006 / P5-010）。
-pub use skill::{RegistryAvailability, SkillManager, build_skills};
+/// Skill 的装配侧适配：发现、`skill_load` 注册、工具可用性判定与管理门面（P5-006 / P5-010 / P5-012）。
+pub use skill::{RegistryAvailability, SkillManager, build_skills, skill_get, skill_list, skill_update};
+
+/// Skill 管理面的契约类型：Handler 直接转发，不维护第二套 DTO（P5-012）。
+pub use agent_skill::{
+    SkillAction, SkillDetailVO, SkillGetParams, SkillManagerError, SkillStatusKind, SkillUpdatePO, SkillVO,
+};
 
 /// MCP 管理面的契约类型：Handler 直接转发，不维护第二套 DTO（P4-014）。
 pub use agent_mcp::{

@@ -14,8 +14,11 @@
 | [occupancy.md](occupancy.md) | occupancy（会话占用） | 建立 / 释放 / 查询会话占用与事件文件口径，共 3 条 |
 | [tool.md](tool.md) | tool（工具审计） | 按 Run 查询工具调用审计记录（只读），共 1 条 |
 | [mcp.md](mcp.md) | mcp（MCP 管理） | MCP server 的连接状态与工具清单查询、启停 / 重连 / 探测，共 3 条 |
+| [skill.md](skill.md) | skill（Skill 管理） | Skill 清单 / 详情 / 启停与重载，共 3 条 |
 
-当前接口总数 **29 条**（不含仅 `debug` + `metrics` 特性构建注册的 `api/probe/metrics`）：probe 12、session 6、runtime 4、occupancy 3、tool 1、mcp 3。
+当前接口总数 **32 条**（不含仅 `debug` + `metrics` 特性构建注册的 `api/probe/metrics`）：probe 12、session 6、runtime 4、occupancy 3、tool 1、mcp 3、skill 3。
+
+`skills.toml` 的 `enabled = false` 时 Skill 功能整体关闭：`api/skill/list` 返回空清单，`api/skill/get` 与 `ENABLE` / `DISABLE` 对任何 `name` 返回 400 `技能不存在`，`RELOAD` 是空操作（返回空清单），见 [skill.md](skill.md)。
 
 文件命名：领域名小写、单数，与 path 的资源段一致（`api/session/...` → `session.md`；`api/probe/...` → `probe.md`）。新增领域时新建对应文档并登记到上表。
 

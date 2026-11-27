@@ -6,6 +6,7 @@ pub mod probe;
 mod router;
 pub mod runtime;
 pub mod session;
+pub mod skill;
 pub mod tool;
 
 pub use error::ApiError;

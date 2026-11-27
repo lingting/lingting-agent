@@ -8,11 +8,19 @@
 //! 工具快照里没有它），权限为 `deny` 的工具也算不可用——它不会出现在模型的工具清单里。
 //! 判定发生在渲染索引与加载正文时（不是发现时），因此 MCP 在运行期连上之后，缺失标记会自动消失，
 //! 不需要重载 Skill。
+//!
+//! 管理面（P5-012）：`skill_list` / `skill_get` / `skill_update` 三个门面自由函数只做转发，
+//! 清单、详情与动作口径在 `agent-skill` 的 `manager` 模块；只有 `RELOAD` 的重扫发生在这里
+//! （扫描需要应用根目录，而它归装配层持有，D-P5-008）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agent_skill::{SkillIndexSource, SkillLimits, SkillLoad, SkillRegistry, ToolAvailability};
+use agent_skill::metrics::SkillStateCounts;
+use agent_skill::{
+    SkillAction, SkillDetailVO, SkillGetParams, SkillIndexSource, SkillLimits, SkillLoad, SkillManagerError,
+    SkillRegistry, SkillUpdatePO, SkillVO, ToolAvailability,
+};
 use agent_tool::{ToolPermission, ToolRegistry};
 use anyhow::{Context, Result};
 use types_core::config::SkillsConfig;
@@ -27,6 +35,10 @@ pub struct SkillManager {
     availability: Arc<dyn ToolAvailability>,
     /// 索引进系统提示的入口；`enabled = false` 时为空。
     source: Option<Arc<SkillIndexSource>>,
+    /// 应用根目录：`RELOAD` 重扫时作为相对路径的基准。
+    home: PathBuf,
+    /// 发现根目录（`skills.toml` 的 `root`）：相对应用根目录解析，绝对路径按原样。
+    root: PathBuf,
 }
 
 impl SkillManager {
@@ -49,6 +61,98 @@ impl SkillManager {
     pub fn source(&self) -> Option<&Arc<SkillIndexSource>> {
         self.source.as_ref()
     }
+
+    /// 清单：全部条目（含 `INVALID` 与已禁用项），按 `name` 升序。
+    pub fn list(&self) -> Vec<SkillVO> {
+        agent_skill::manager::list(&self.registry, self.availability.as_ref())
+    }
+
+    /// 详情：清单字段 + 正文 + 引用清单；未知名字是 [`SkillManagerError::NotFound`]。
+    pub fn detail(&self, name: &str) -> std::result::Result<SkillDetailVO, SkillManagerError> {
+        agent_skill::manager::detail(&self.registry, self.availability.as_ref(), name)
+    }
+
+    /// 执行一个管理动作，返回动作完成后的整张清单（D-P5-015）。
+    ///
+    /// 参数级校验先于查找（`agent-skill` 的 `action_name`）；`ENABLE` / `DISABLE` 落到注册表的启用状态，
+    /// `RELOAD` 重扫目录并整体替换快照——`disabled` 名单由注册表保留（D-P5-008）。
+    pub fn update(&self, po: &SkillUpdatePO) -> std::result::Result<Vec<SkillVO>, SkillManagerError> {
+        let name = agent_skill::manager::action_name(po.action, po.name.as_deref())?;
+        match (po.action, name) {
+            (SkillAction::Reload, _) => {
+                self.reload();
+                Ok(self.list())
+            }
+            (SkillAction::Enable, Some(name)) => self.apply(name, true),
+            (SkillAction::Disable, Some(name)) => self.apply(name, false),
+            // `action_name` 已保证 `ENABLE` / `DISABLE` 一定带着名字。
+            (SkillAction::Enable | SkillAction::Disable, None) => Err(SkillManagerError::MissingName),
+        }
+    }
+
+    /// 重扫发现目录并整体替换快照（`RELOAD`）；`skills.toml` 的 `enabled = false` 时是空操作。
+    ///
+    /// 日志只记计数与状态，不记正文与 frontmatter 全文（D-P5-018）。
+    pub fn reload(&self) {
+        if !self.enabled {
+            return;
+        }
+        let snapshot = agent_skill::discover(&self.home, &self.root, self.registry.limits());
+        let ready = snapshot.entries().iter().filter(|entry| entry.is_ready()).count();
+        let invalid = snapshot.len() - ready;
+        self.registry.reload(snapshot);
+        tracing::info!(discovered = ready + invalid, ready, invalid, "Skill 重载完成");
+    }
+
+    /// 取快照时刻的 Skill 现状（`metrics` 的 `skills` 段用，不做累加）。
+    pub fn state_counts(&self) -> SkillStateCounts {
+        SkillStateCounts {
+            discovered: count(self.registry.entry_count()),
+            invalid: count(self.registry.invalid_count()),
+            enabled: count(self.registry.enabled_count()),
+        }
+    }
+
+    /// 切换一条 Skill 的启用状态：名字不存在（含功能未启用）一律 [`SkillManagerError::NotFound`]。
+    fn apply(&self, name: &str, enabled: bool) -> std::result::Result<Vec<SkillVO>, SkillManagerError> {
+        self.registry
+            .set_enabled(name, enabled)
+            .map_err(|_| SkillManagerError::NotFound)?;
+        Ok(self.list())
+    }
+}
+
+/// 全部 Skill 的清单（`api/skill/list`）：未装配时为空清单，不报错。
+pub fn skill_list() -> Vec<SkillVO> {
+    crate::holder::holder().map_or_else(Vec::new, |installed| installed.skills().list())
+}
+
+/// 一条 Skill 的详情（`api/skill/get`）：未知名字（含未装配）是 [`SkillManagerError::NotFound`]。
+pub fn skill_get(params: &SkillGetParams) -> Result<SkillDetailVO> {
+    let Some(installed) = crate::holder::holder() else {
+        return Err(anyhow::Error::new(SkillManagerError::NotFound));
+    };
+    installed.skills().detail(&params.name).map_err(anyhow::Error::new)
+}
+
+/// 执行一个管理动作并返回整张清单（`api/skill/update`）。
+///
+/// 未装配时：`RELOAD` 是空操作（返回空清单），`ENABLE` / `DISABLE` 按「技能不存在」拒绝；两种情况都
+/// 先过一遍参数级校验，文案与装配后完全一致。
+pub fn skill_update(po: &SkillUpdatePO) -> Result<Vec<SkillVO>> {
+    let Some(installed) = crate::holder::holder() else {
+        agent_skill::manager::action_name(po.action, po.name.as_deref()).map_err(anyhow::Error::new)?;
+        return match po.action {
+            SkillAction::Reload => Ok(Vec::new()),
+            SkillAction::Enable | SkillAction::Disable => Err(anyhow::Error::new(SkillManagerError::NotFound)),
+        };
+    };
+    installed.skills().update(po).map_err(anyhow::Error::new)
+}
+
+/// `usize` → `u64`：饱和，不 panic。
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// 装配 Skill：发现一次快照、落启动期禁用名单、注册 `skill_load`，并逐条记装配日志。
@@ -69,6 +173,8 @@ pub fn build_skills(config: &SkillsConfig, home: &Path, tools: &Arc<ToolRegistry
             registry,
             availability,
             source: None,
+            home: home.to_path_buf(),
+            root: config.root.clone(),
         }));
     }
 
@@ -106,6 +212,8 @@ pub fn build_skills(config: &SkillsConfig, home: &Path, tools: &Arc<ToolRegistry
         registry,
         availability,
         source: Some(source),
+        home: home.to_path_buf(),
+        root: config.root.clone(),
     }))
 }
 

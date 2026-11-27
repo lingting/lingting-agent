@@ -28,7 +28,9 @@
 //! - [`load`]：按名取正文 / 章节 / 引用清单（P5-005）；
 //! - [`availability`]：工具可用性判定与降级文案的唯一产点（P5-006 / D-P5-009）；
 //! - [`source`]：索引进系统提示的唯一入口（`agent-context` 只认识它，P5-007）；
-//! - [`tool`]：`skill_load` 适配器，按篇幅返回全文 / 章节目录 / 单节（P5-008 / D-P5-011）。
+//! - [`tool`]：`skill_load` 适配器，按篇幅返回全文 / 章节目录 / 单节（P5-008 / D-P5-011）；
+//! - [`manager`]：管理面的清单 / 详情 / 动作口径（P5-012）；
+//! - [`vo`]：管理面的契约快照；[`metrics`]：`metrics` 特性下的累计量（P5-011）。
 
 mod availability;
 mod discover;
@@ -36,12 +38,15 @@ mod error;
 mod frontmatter;
 mod index;
 mod load;
+pub mod manager;
+pub mod metrics;
 mod reference;
 mod registry;
 mod section;
 mod skill;
 mod source;
 mod tool;
+mod vo;
 
 pub use availability::{
     INDEX_MISSING_PREFIX, INDEX_MISSING_SUFFIX, MISSING_CONSTRAINT, MISSING_HEADING, ToolAvailability, index_suffix,
@@ -51,9 +56,11 @@ pub use discover::discover;
 pub use error::SkillError;
 pub use index::{INDEX_HEADING, INDEX_INTRO, SkillIndex};
 pub use load::SkillContent;
+pub use manager::SkillManagerError;
 pub use reference::{MAX_REFERENCES, scan_references};
 pub use registry::{SkillEntry, SkillLimits, SkillRegistry, SkillSnapshot, SkillStatus, SkillView};
 pub use section::SkillSection;
 pub use skill::{SkillFile, SkillMetadata, parse, validate_name};
 pub use source::SkillIndexSource;
 pub use tool::{SkillLoad, SkillLoadArgs};
+pub use vo::{SkillAction, SkillDetailVO, SkillGetParams, SkillStatusKind, SkillUpdatePO, SkillVO};
