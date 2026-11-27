@@ -48,7 +48,7 @@ pub mod provider;
 pub mod skills;
 pub mod tools;
 
-pub use agent::{AgentConfig, Concurrency};
+pub use agent::{AgentConfig, Concurrency, MAX_RUN_MAX_RETRIES, MAX_RUN_RETRY_BACKOFF_MS};
 pub use mcp::{
     McpConcurrencyKind, McpConfig, McpFileAccessKind, McpPermissionKind, McpServerConfig, McpTransportConfig,
 };

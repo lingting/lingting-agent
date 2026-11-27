@@ -155,12 +155,15 @@ pub struct LimitMetrics {
     pub running_max: i64,
     /// 读取瞬间正在执行的 Run 数。
     pub running_now: i64,
+    /// Run 级重试次数（`[agent] run_max_retries`，D-P6-012）：每个 Run 不超过配置上限。
+    pub retries: u64,
 }
 /// 检查点与恢复的统计（P6A-014）：写入与清理来自 `service-core`，判定与拒绝来自装配层的恢复段。
 ///
 /// 「可复算」的口径（验收 `O-2`）：`checkpoints_written` 对应 `api/run/history` 的 `steps` 条数、
 /// `resume_succeeded` 对应 `api/run/get` 的 `resumeCount` 增长、`resume_unrecoverable` 对应
-/// 判定为「不可恢复」的次数——三者都不经过日志。
+/// 判定为「不可恢复」的次数——三者都不经过日志。`checkpoint_payload_bytes` 是 P6A-018 的
+/// 写放大口径：平均载荷 = 本值 / `checkpoints_written`。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResumeMetrics {
@@ -176,6 +179,8 @@ pub struct ResumeMetrics {
     pub resume_rejected: u64,
     /// 判定为不可恢复的次数：五类损坏与不认识的格式版本。
     pub resume_unrecoverable: u64,
+    /// 成功写入的检查点载荷总字节数（P6A-018）：平均载荷 = 本值 / `checkpoints_written`。
+    pub checkpoint_payload_bytes: u64,
 }
 
 /// 日志审计的统计：转写 `lib-core` 的审计快照，把「日志里发生了什么」变成可断言的数据。
@@ -435,6 +440,7 @@ fn resume_snapshot() -> ResumeMetrics {
         resume_rejected: RESUME_REJECTED_NO_CHECKPOINT.load(Ordering::Relaxed)
             + RESUME_REJECTED_ERROR.load(Ordering::Relaxed),
         resume_unrecoverable: RESUME_UNRECOVERABLE.load(Ordering::Relaxed),
+        checkpoint_payload_bytes: checkpoints.checkpoint_payload_bytes,
     }
 }
 

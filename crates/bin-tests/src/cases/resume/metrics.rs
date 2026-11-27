@@ -61,6 +61,7 @@ async fn require(context: &TestContext) -> Result<Vec<String>> {
     let keys = sorted_keys(&serde_json::to_value(metrics.resume)?)?;
     ensure!(
         keys == [
+            "checkpoint_payload_bytes",
             "checkpoints_pruned",
             "checkpoints_written",
             "resume_attempts",
@@ -68,7 +69,8 @@ async fn require(context: &TestContext) -> Result<Vec<String>> {
             "resume_succeeded",
             "resume_unrecoverable",
         ],
-        "resume 段应是六个固定字段：{keys:?}"
+        // `O-1` 的六个契约字段 + `P6A-018` 的载荷总字节（写放大口径），不多不少。
+        "resume 段应是七个固定字段（六个契约字段 + 载荷总字节）：{keys:?}"
     );
 
     let resume = metrics.resume;
@@ -93,17 +95,41 @@ async fn require(context: &TestContext) -> Result<Vec<String>> {
         resume.resume_rejected == 0 && resume.resume_unrecoverable == 0 && resume.checkpoints_pruned == 0,
         "这一轮没有拒绝、损坏与清理：{resume:?}"
     );
+    // 写放大口径（P6A-018）：载荷总字节与平均字节必须能从快照读到，并且不超过单条上界。
+    ensure!(
+        resume.checkpoint_payload_bytes > 0,
+        "本轮写过检查点，载荷总字节应大于 0：{resume:?}"
+    );
+    let written = i64::try_from(resume.checkpoints_written).unwrap_or_default().max(1);
+    let average_payload = i64::try_from(resume.checkpoint_payload_bytes).unwrap_or_default() / written;
+    ensure!(
+        average_payload <= i64::try_from(super::PAYLOAD_LIMIT).unwrap_or_default(),
+        "平均载荷应在单条上界 {} 字节以内，实际 {}",
+        super::PAYLOAD_LIMIT,
+        average_payload
+    );
+    // 落库次数（P6A-018）：检查点写入与事件落盘都走快照，不读日志。
+    let writes = metrics.journal.appends.saturating_add(resume.checkpoints_written);
 
     context.observe_metrics(Ok(metrics));
     server.stop().await?;
     Ok(vec![
         format!(
-            "resume 段六字段：写入 {} == 步骤数 {}，推进 {} == resumeCount 之和 {}",
-            resume.checkpoints_written, steps, resume.resume_succeeded, resumes
+            "resume 段七字段：写入 {} == 步骤数 {}，推进 {} == resumeCount 之和 {}，载荷共 {} 字节（平均 {} 字节/条）",
+            resume.checkpoints_written,
+            steps,
+            resume.resume_succeeded,
+            resumes,
+            resume.checkpoint_payload_bytes,
+            average_payload
         ),
         format!(
-            "判定 {} 次，拒绝 {}，不可恢复 {}，清理 {}（本轮均为 0）",
-            resume.resume_attempts, resume.resume_rejected, resume.resume_unrecoverable, resume.checkpoints_pruned
+            "判定 {} 次，拒绝 {}，不可恢复 {}，清理 {}（本轮均为 0）；落库次数（事件帧 + 检查点写入）= {}",
+            resume.resume_attempts,
+            resume.resume_rejected,
+            resume.resume_unrecoverable,
+            resume.checkpoints_pruned,
+            writes
         ),
     ])
 }

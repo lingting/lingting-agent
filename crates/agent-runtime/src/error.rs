@@ -3,6 +3,8 @@
 //! 文案固定、不含内部细节：原始错误只进日志（D-P2-017）。这些字符串都要能被
 //! `bin-tests` 的 `run.failed_*` 用例逐字断言，因此集中在一处，不在调用点各写一份。
 
+use agent_route::LlmError;
+
 /// 排队超时：等待全局并发许可超过 `agent.run_queue_timeout_ms`（P2-025）。
 pub(crate) const QUEUE_TIMEOUT: &str = "执行排队超时";
 /// 读取会话数据失败：细节只进日志，对外只说明「读不到」。
@@ -17,6 +19,11 @@ pub(crate) const TOOL_TRACE_STORAGE: &str = "工具轨迹落库失败";
 pub(crate) const TOOL_TRACE_BROKEN: &str = "工具轨迹不完整";
 /// 检查点写入失败：可恢复性无法证明，Run 立即落 `FAILED`，不降级继续（D-P6-010）。
 pub(crate) const CHECKPOINT: &str = "检查点写入失败";
+/// Run 级重试用尽：可重试分类的失败耗尽 `[agent] run_max_retries` 之后的固定原因（D-P6-012）。
+///
+/// 只有真正重试过（至少一次）才会出现这条文案；`run_max_retries = 0` 时沿用原始脱敏文案，
+/// 因此既有失败口径逐字段不变。
+pub(crate) const RETRY_EXHAUSTED: &str = "模型调用重试次数已用尽";
 /// 检查点格式版本高于当前代码支持：判「不可恢复」，不猜测也不降级成从头执行（D-P6-003）。
 pub(crate) const CHECKPOINT_UNSUPPORTED: &str = "检查点格式版本不受支持，Run 不可恢复";
 /// 检查点内容无法解释（版本为 0、缺字段或与列不一致）：判「不可恢复」（D-P6-003）。
@@ -58,4 +65,32 @@ pub(crate) fn interrupted_reason_of(stored: Option<&str>) -> &'static str {
         .iter()
         .find(|(key, _)| stored.starts_with(key))
         .map_or(INTERRUPTED_UNKNOWN, |(_, short)| *short)
+}
+
+/// 失败分类（D-P6-012 第 3 条）：**分类表只在这里出现一次**，调用点不再各自判断。
+///
+/// 分类与固定文案的对应关系（文案来源逐条点名，不在调用点拼字符串）：
+///
+/// | 分类 | 分支 | 固定文案 |
+/// |---|---|---|
+/// | 可重试 | 上游瞬时错误 `LlmError::Upstream`（5xx、错误信封） | 重试用尽后落 [`RETRY_EXHAUSTED`]，未用尽前不外泄 |
+/// | 可重试 | 传输类 `LlmError::Network` / `Truncated` / `IdleTimeout` | 同上 |
+/// | 不可重试 | 认证 `LlmError::Authentication` | `LlmError::public_message()`（`agent-route` 是 Provider 层文案的唯一产点） |
+/// | 不可重试 | 配置与请求缺陷 `UnknownModel` / `Unconfigured` / `InvalidRequest` | 同上 |
+/// | 不可重试 | 协议不符 `LlmError::InvalidResponse` | 同上 |
+/// | 不可重试 | 上下文超预算 | Context 组装返回的脱敏文案（`agent-context` 单一产点） |
+/// | 不可重试 | 轮次用尽 / 轨迹损坏 | [`TOOL_ROUNDS_EXCEEDED`] / [`TOOL_TRACE_BROKEN`] |
+/// | 不可重试 | 检查点不可用或写失败 | [`CHECKPOINT`] / [`CHECKPOINT_UNSUPPORTED`] / [`CHECKPOINT_CORRUPT`] / `RESUME_*` |
+/// | 不可重试 | 取消 | 取消方写入的原因，缺省 [`CANCEL_FALLBACK`] |
+///
+/// 工具层的 `Tool::retryable` 与本函数无关：工具重试仍在 `ToolExecutor` 里按
+/// `[tools] max_retries` 就地完成，Run 级重试不重复它的判断。
+pub(crate) fn retryable(error: &LlmError) -> bool {
+    matches!(
+        error,
+        LlmError::Upstream { .. }
+            | LlmError::Network { .. }
+            | LlmError::Truncated { .. }
+            | LlmError::IdleTimeout { .. }
+    )
 }

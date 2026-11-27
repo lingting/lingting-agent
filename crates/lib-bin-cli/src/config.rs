@@ -29,6 +29,10 @@
 //! [agent]
 //! max_concurrent_runs = "3C"
 //! max_tool_rounds = 8
+//! # 同一次 LLM 请求的重试次数；0 表示不重试
+//! run_max_retries = 0
+//! # 每次重试前的退避（毫秒）
+//! run_retry_backoff_ms = 500
 //!
 //! [tools]
 //! timeout_ms = 15000
@@ -78,7 +82,8 @@ use std::str::FromStr;
 use tracing_subscriber::filter::LevelFilter;
 use types_core::config::tools::BUILTIN_TOOL_NAMES;
 use types_core::config::{
-    AgentConfig, Concurrency, McpConfig, McpServerConfig, McpTransportConfig, ProviderConfig, SkillsConfig, ToolConfig,
+    AgentConfig, Concurrency, MAX_RUN_MAX_RETRIES, MAX_RUN_RETRY_BACKOFF_MS, McpConfig, McpServerConfig,
+    McpTransportConfig, ProviderConfig, SkillsConfig, ToolConfig,
 };
 use url::Url;
 
@@ -724,14 +729,33 @@ fn validate_provider(provider: &ProviderConfig) -> Result<()> {
     Ok(())
 }
 
-/// Agent 参数校验：全部是正数，写 0 会让并发、超时或预算不可用。
+/// Agent 参数校验：除两个重试项外都是正数，写 0 会让并发、超时或预算不可用。
+///
+/// `run_max_retries = 0` 是「不重试」的缺省行为（D-P6-012），`run_retry_backoff_ms = 0` 是
+/// 「立即重试」，两者都合法；但它们各自有上限，超过即启动期硬错误。
 fn validate_agent(agent: &AgentConfig) -> Result<()> {
     validate_max_concurrent_runs(agent.max_concurrent_runs)?;
     require_positive("[agent] run_queue_timeout_ms", agent.run_queue_timeout_ms)?;
     require_positive("[agent] llm_idle_timeout_ms", agent.llm_idle_timeout_ms)?;
     require_positive("[agent] context_max_messages", agent.context_max_messages as u64)?;
     require_positive("[agent] context_safety_tokens", agent.context_safety_tokens as u64)?;
-    require_positive("[agent] max_tool_rounds", agent.max_tool_rounds as u64)
+    require_positive("[agent] max_tool_rounds", agent.max_tool_rounds as u64)?;
+    validate_run_retries(agent.run_max_retries, agent.run_retry_backoff_ms)
+}
+
+/// 重试配置校验：次数与退避各自有上限，越界即硬错误（负数在反序列化阶段就被拒绝）。
+fn validate_run_retries(retries: usize, backoff_ms: u64) -> Result<()> {
+    if retries > MAX_RUN_MAX_RETRIES {
+        return Err(anyhow!(
+            "[agent] run_max_retries 超过上限 {MAX_RUN_MAX_RETRIES}（{retries}）"
+        ));
+    }
+    if backoff_ms > MAX_RUN_RETRY_BACKOFF_MS {
+        return Err(anyhow!(
+            "[agent] run_retry_backoff_ms 超过上限 {MAX_RUN_RETRY_BACKOFF_MS}（{backoff_ms}）"
+        ));
+    }
+    Ok(())
 }
 
 /// 工具配置校验：数值上限都要大于 0，白名单要么是绝对目录，要么是 host（P3-005）。

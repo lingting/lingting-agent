@@ -14,7 +14,7 @@
 use std::future::Future;
 use std::result::Result as StdResult;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{ApiClient, RunEventKind, RunGetParams, RunHistoryParams, RunStatus};
 
@@ -122,7 +122,20 @@ async fn require(context: &TestContext) -> Result<Vec<String>> {
     notes.extend(expect_kept(context, legacy).await?);
 
     pool.close().await;
-    context.observe_metrics(server.metrics().await);
+    // 快照口径（`O-2`）：不可恢复次数等于本用例构造的损坏场景数（①~⑥ 六类）；
+    // 「没有检查点」记拒绝而不是不可恢复（⑦ 不判死）。
+    let snapshot = server.metrics().await.map_err(|reason| anyhow!("未采集：{reason}"))?;
+    ensure!(
+        snapshot.resume.resume_unrecoverable == 6,
+        "resumeUnrecoverable 应等于损坏场景数 6，实际 {}",
+        snapshot.resume.resume_unrecoverable
+    );
+    ensure!(
+        snapshot.resume.resume_rejected == 1,
+        "没有检查点的 Run 只记一次拒绝，实际 {}",
+        snapshot.resume.resume_rejected
+    );
+    context.observe_metrics(Ok(snapshot));
     server.stop().await?;
     Ok(notes)
 }

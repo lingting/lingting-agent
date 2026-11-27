@@ -112,6 +112,7 @@ fn limit_snapshot() -> manager_agent::runtime::metrics::LimitMetrics {
         queued_max: limit.queued_max,
         running_max: limit.running_max,
         running_now: limit.running_now,
+        retries: limit.retries,
     }
 }
 

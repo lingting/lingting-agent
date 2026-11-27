@@ -14,10 +14,10 @@ use std::time::Duration;
 use agent_core::session::{
     CHECKPOINT_KEEP_LAST, CheckpointPhase, RunCancelPO as DomainRunCancelPO, RunStatus as DomainRunStatus,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use lib_bin_cli::client::ClientError;
 use lib_bin_cli::sdk::{
-    ApiClient, MessageRole, RunCancelPO as SdkRunCancelPO, RunEventKind, RunStatus as SdkRunStatus,
+    ApiClient, MessageRole, RunCancelPO as SdkRunCancelPO, RunEventKind, RunHistoryParams, RunStatus as SdkRunStatus,
 };
 use lib_core::time;
 use service_core::repository::Repository;
@@ -229,6 +229,11 @@ async fn cancel_shutdown_and_interrupt(context: &TestContext) -> Result<Vec<Stri
         paused.resume_count, recovered.resume_count
     ));
 
+    // 检查点清理的快照口径（验收 `P-5` / P6A-018）：取消是终态，裁剪掉的条数必须等于
+    // `checkpointsPruned` 的增量——两条数字都来自接口与快照，不读日志。
+    let steps_before_cancel = steps_of(context, &sent.run.id).await?;
+    let snapshot_before = server.metrics().await.map_err(|reason| anyhow!("未采集：{reason}"))?;
+
     // 取消中断态：与普通取消逐字段同形（固定原因、有结束时间、中断原因清空）。
     let cancelled = context
         .client()
@@ -252,6 +257,22 @@ async fn cancel_shutdown_and_interrupt(context: &TestContext) -> Result<Vec<Stri
             && terminal.interrupted_reason.is_none()
             && terminal.finished_at_ms == cancelled.finished_at_ms,
         "库内行应与取消返回值同形：{terminal:?} != {cancelled:?}"
+    );
+
+    let steps_after_cancel = steps_of(context, &sent.run.id).await?;
+    let snapshot_after = server.metrics().await.map_err(|reason| anyhow!("未采集：{reason}"))?;
+    let pruned = steps_before_cancel.saturating_sub(steps_after_cancel);
+    let pruned_metric = snapshot_after
+        .resume
+        .checkpoints_pruned
+        .saturating_sub(snapshot_before.resume.checkpoints_pruned);
+    ensure!(
+        u64::try_from(pruned).unwrap_or_default() == pruned_metric,
+        "checkpointsPruned 的增量应等于取消删掉的条数 {pruned}（{steps_before_cancel} → {steps_after_cancel}），实际 {pruned_metric}"
+    );
+    ensure!(
+        steps_after_cancel <= CHECKPOINT_KEEP_LAST,
+        "取消是终态，检查点应裁到 {CHECKPOINT_KEEP_LAST} 条以内，实际 {steps_after_cancel}"
     );
 
     // 竞态的顺序形态：取消与恢复都以条件更新为前提，未命中的一方返回既有口径且不改行。
@@ -296,6 +317,9 @@ async fn cancel_shutdown_and_interrupt(context: &TestContext) -> Result<Vec<Stri
     notes.push(format!(
         "PAUSED 取消：CANCELLED +「{CANCEL_REASON}」+ 有结束时间；二次取消返回「不可取消」，随后发消息只执行新 Run（run_completed）"
     ));
+    notes.push(format!(
+        "检查点清理与快照复算：取消后步骤 {steps_before_cancel} → {steps_after_cancel}，checkpointsPruned 增量 = {pruned_metric}（逐值相等）"
+    ));
     Ok(notes)
 }
 
@@ -315,6 +339,18 @@ async fn crash(context: &TestContext, server: Server, port: u16) -> Result<Serve
         .with_context(|| format!("重启服务端失败：{}", context.home().display()))
 }
 
+/// `api/run/history` 的步骤条数：检查点条数的接口口径（取消前 / 取消后各读一次）。
+async fn steps_of(context: &TestContext, run_id: &str) -> Result<usize> {
+    context
+        .client()
+        .run_history(RunHistoryParams {
+            run_id: run_id.to_owned(),
+        })
+        .await
+        .map(|history| history.steps.len())
+        .map_err(ClientError::from_call)
+        .map_err(Into::into)
+}
 /// 会话里是否已有助手消息。
 async fn has_assistant(context: &TestContext, session_id: &str) -> Result<bool> {
     Ok(flow::messages(context, session_id)

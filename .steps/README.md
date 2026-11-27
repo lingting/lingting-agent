@@ -1,5 +1,5 @@
 # Personal Agent 开发路线图
-本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已完成，P2 已完成（Batch A ~ H；15 类验收全部通过，报告见 [`reports/p2-032-acceptance.md`](../docs/reports/p2-032-acceptance.md)），P2.1 已完成（Batch A ~ E；报告见 [`reports/p2.1-014-acceptance.md`](../docs/reports/p2.1-014-acceptance.md)），P2.2 已完成（16 个任务 / 5 个批次，报告见 [`reports/p2.2-016-acceptance.md`](../docs/reports/p2.2-016-acceptance.md)），P3 已完成（32 个任务 / 8 个批次，Batch A ~ H 全部结案，报告见 [`reports/p3-032-acceptance.md`](../docs/reports/p3-032-acceptance.md)；唯一「部分取证」项是 C-3 的批量确认点用例），P4 已完成（20 个任务 / 5 个批次，Batch A ~ E 全部结案，报告见 [`reports/p4-020-acceptance.md`](../docs/reports/p4-020-acceptance.md)），P5 已完成（20 个任务 / 6 个批次，Batch A ~ F 全部结案，判据 10 组 53 条，报告见 [`reports/p5-020-acceptance.md`](../docs/reports/p5-020-acceptance.md)），P6 只做阶段级规划。**
+本目录是本项目的分阶段开发路线图。**P1 已完成，P1.1 已完成，P2 已完成（Batch A ~ H；15 类验收全部通过，报告见 [`reports/p2-032-acceptance.md`](../docs/reports/p2-032-acceptance.md)），P2.1 已完成（Batch A ~ E；报告见 [`reports/p2.1-014-acceptance.md`](../docs/reports/p2.1-014-acceptance.md)），P2.2 已完成（16 个任务 / 5 个批次，报告见 [`reports/p2.2-016-acceptance.md`](../docs/reports/p2.2-016-acceptance.md)），P3 已完成（32 个任务 / 8 个批次，Batch A ~ H 全部结案，报告见 [`reports/p3-032-acceptance.md`](../docs/reports/p3-032-acceptance.md)；唯一「部分取证」项是 C-3 的批量确认点用例），P4 已完成（20 个任务 / 5 个批次，Batch A ~ E 全部结案，报告见 [`reports/p4-020-acceptance.md`](../docs/reports/p4-020-acceptance.md)），P5 已完成（20 个任务 / 6 个批次，Batch A ~ F 全部结案，判据 10 组 53 条，报告见 [`reports/p5-020-acceptance.md`](../docs/reports/p5-020-acceptance.md)），P6 只做阶段级规划（子阶段 6A 已完成：20 个任务 / 5 个批次，判据 10 组 58 条，报告见 [`reports/p6a-020-acceptance.md`](../docs/reports/p6a-020-acceptance.md)）。**
 
 本次路线图不包含任何代码实现。Cargo Workspace 与 Crate 结构以 `docs/workspace.md` 为准，本文档不重复记录；前端工程结构以 `docs/develop.md` 的「前端工程」一节为准。
 
@@ -58,7 +58,7 @@
 | **P3** | Tool System | Tool Trait / Registry / Executor、Tool Calling Loop、权限与审计、并行调用、5 个内置工具 | [p3/README.md](p3/README.md)（32 个任务 / 8 个批次，已完成；报告见 [p3-032-acceptance.md](../docs/reports/p3-032-acceptance.md)） |
 | **P4** | MCP Integration | 基于 rmcp 的 MCP Client Manager、Server Registry、工具发现与适配 | [p4/README.md](p4/README.md)（已完成；任务 `tasks.md`、判据 `acceptance.md`、决策 `decisions.md`、报告 [`reports/p4-020-acceptance.md`](../docs/reports/p4-020-acceptance.md)） |
 | **P5** | Skills | Skill 发现与加载、SKILL.md、渐进披露、Skill 与 Tool 协作 | [p5/README.md](p5/README.md)（20 个任务 / 6 个批次，已完成） |
-| **P6** | Production Readiness | Checkpoint/Resume、Memory、压缩与 RAG、Multi-Agent、Workflow、Otel、评测、安全沙箱、跨平台发布 | [p6/README.md](p6/README.md) |
+| **P6** | Production Readiness | Checkpoint/Resume、Memory、压缩与 RAG、Multi-Agent、Workflow、Otel、评测、安全沙箱、跨平台发布 | [p6/README.md](p6/README.md)（子阶段 6A 已完成：20 个任务 / 5 个批次，判据 10 组 58 条，报告见 [`reports/p6a-020-acceptance.md`](../docs/reports/p6a-020-acceptance.md)；6B ~ 6E 待展开） |
 
 ### 阶段依赖
 

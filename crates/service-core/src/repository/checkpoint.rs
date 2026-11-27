@@ -85,6 +85,8 @@ impl Repository {
     /// 并发 Run 的检查点就会被误判成写失败。冲突仍由 `UNIQUE (run_id, seq_no)` 报错，不重试。
     pub async fn append_checkpoint(&self, run_id: &str, checkpoint: &RunCheckpoint) -> Result<i64, CheckpointError> {
         let payload = encode_payload(checkpoint)?;
+        // 字节数在 `bind` 之前取：载荷随后被移交给 SQL，指标要的是落库的那份载荷大小（P6A-018）。
+        let payload_bytes = payload.len();
         let mut transaction = self.begin().await?;
         // 主键与序号同构（`<run_id>:<seq_no>`）：两者由同一个子查询给出，排障时直接可读。
         let seq_no: i64 = sqlx::query_scalar(
@@ -114,7 +116,7 @@ impl Repository {
             .execute(transaction.connection())
             .await?;
         transaction.commit().await?;
-        crate::observability::record_checkpoint_written();
+        crate::observability::record_checkpoint_written(payload_bytes);
         Ok(seq_no)
     }
 

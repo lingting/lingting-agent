@@ -5,7 +5,7 @@
 //! 聚合完整后一条一条交过来，这里只按模型顺序收集，不做参数猜测。
 
 use agent_core::session::{Run, RunEventKind};
-use agent_route::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolCall, LlmToolDefinition};
+use agent_route::{LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolCall, LlmToolDefinition};
 use service_core::session::RunCancel;
 
 use crate::feed::Feed;
@@ -34,7 +34,13 @@ pub(crate) enum Outcome {
     /// 取消：流已 drop，连接随之关闭。
     Cancelled,
     /// Provider 出错（脱敏文案）。
-    Failed(String),
+    /// Provider 出错：保留原始错误供分类，`partial` 表示本轮已经对客户端发出过增量。
+    Failed {
+        /// 原始错误：分类见 `error::retryable`，对外文案由 `public_message()` 产出。
+        error: LlmError,
+        /// 本轮是否已经发出过 `message_delta`：发过就不重试——重发会让客户端看到两段拼接的文本。
+        partial: bool,
+    },
     /// 事件通道已关闭（运行时会话已停止）。
     SessionGone,
 }
@@ -60,7 +66,10 @@ pub(crate) async fn stream(
 ) -> Outcome {
     let mut stream = match llm.stream(request).await {
         Ok(stream) => stream,
-        Err(error) => return Outcome::Failed(error.public_message()),
+        // 建流就失败：一个字都没发给客户端，重试覆盖的是这种情况。
+        Err(error) => {
+            return Outcome::Failed { error, partial: false };
+        }
     };
     let mut content = String::new();
     let mut calls: Vec<LlmToolCall> = Vec::new();
@@ -95,7 +104,11 @@ pub(crate) async fn stream(
                 Some(Ok(LlmStreamEvent::Done)) | None => break,
                 Some(Err(error)) => {
                     drop(stream);
-                    return Outcome::Failed(error.public_message());
+                    // 已经推过增量就不再重试：重发会让客户端把同一段文本看两遍。
+                    return Outcome::Failed {
+                        error,
+                        partial: !content.is_empty(),
+                    };
                 }
             }
         }

@@ -164,8 +164,8 @@ fn snapshot_table(metrics: &MetricsSnapshot) -> String {
         metrics.limit.wait_max_millis
     ));
     text.push_str(&format!(
-        "| Run 执行 | 同时执行峰值 {}，读取瞬间 {} 个在跑 |\n",
-        metrics.limit.running_max, metrics.limit.running_now
+        "| Run 执行 | 同时执行峰值 {}，读取瞬间 {} 个在跑，Run 级重试 {} 次 |\n",
+        metrics.limit.running_max, metrics.limit.running_now, metrics.limit.retries
     ));
     // MCP 段（P4-013）：状态现状 + 本次运行的累计量。
     text.push_str(&format!(
@@ -183,10 +183,11 @@ fn snapshot_table(metrics: &MetricsSnapshot) -> String {
         metrics.mcp.call_timeouts,
         metrics.mcp.shutdown_kills
     ));
-    // 检查点与恢复段（P6A-014）：写入 / 清理 / 判定 / 推进 / 拒绝 / 不可恢复。
+    // 检查点与恢复段（P6A-014 / P6A-018）：写入（含载荷总字节）/ 清理 / 判定 / 推进 / 拒绝 / 不可恢复。
     text.push_str(&format!(
-        "| 检查点与恢复 | 写入 {} 条，清理 {} 条｜恢复判定 {} 次，推进成功 {} 次｜拒绝 {} 次｜不可恢复 {} 次 |\n",
+        "| 检查点与恢复 | 写入 {} 条（载荷共 {} 字节），清理 {} 条｜恢复判定 {} 次，推进成功 {} 次｜拒绝 {} 次｜不可恢复 {} 次 |\n",
         metrics.resume.checkpoints_written,
+        metrics.resume.checkpoint_payload_bytes,
         metrics.resume.checkpoints_pruned,
         metrics.resume.resume_attempts,
         metrics.resume.resume_succeeded,

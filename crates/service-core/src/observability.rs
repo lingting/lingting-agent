@@ -19,6 +19,8 @@ pub struct CheckpointSnapshot {
     pub checkpoints_pruned: u64,
     /// `PAUSED -> RUNNING` 真正推进成功的次数（条件更新命中一次记一次）。
     pub resume_succeeded: u64,
+    /// 成功写入的检查点载荷总字节数（P6A-018）：平均载荷 = 本值 / `checkpoints_written`。
+    pub checkpoint_payload_bytes: u64,
 }
 
 /// 成功写入的检查点条数。
@@ -30,11 +32,18 @@ static PRUNED: AtomicU64 = AtomicU64::new(0);
 /// 恢复推进成功的次数。
 #[cfg(feature = "metrics")]
 static RESUME_SUCCEEDED: AtomicU64 = AtomicU64::new(0);
+/// 成功写入的检查点载荷总字节数。
+#[cfg(feature = "metrics")]
+static PAYLOAD_BYTES: AtomicU64 = AtomicU64::new(0);
 
-/// 记一条检查点写入成功。
-pub fn record_checkpoint_written() {
+/// 记一条检查点写入成功：`payload_bytes` 是该条载荷的字节数（P6A-018 的平均载荷来源）。
+#[cfg_attr(not(feature = "metrics"), allow(unused_variables))]
+pub fn record_checkpoint_written(payload_bytes: usize) {
     #[cfg(feature = "metrics")]
-    WRITTEN.fetch_add(1, Ordering::Relaxed);
+    {
+        WRITTEN.fetch_add(1, Ordering::Relaxed);
+        PAYLOAD_BYTES.fetch_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
 }
 
 /// 记一次终态清理：`removed` 是实际删除的行数（一条都没删也记 0）。
@@ -58,6 +67,7 @@ pub fn snapshot() -> CheckpointSnapshot {
             checkpoints_written: WRITTEN.load(Ordering::Relaxed),
             checkpoints_pruned: PRUNED.load(Ordering::Relaxed),
             resume_succeeded: RESUME_SUCCEEDED.load(Ordering::Relaxed),
+            checkpoint_payload_bytes: PAYLOAD_BYTES.load(Ordering::Relaxed),
         }
     }
     #[cfg(not(feature = "metrics"))]

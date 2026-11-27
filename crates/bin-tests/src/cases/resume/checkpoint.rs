@@ -99,6 +99,22 @@ async fn boundaries(context: &TestContext) -> Result<Vec<String>> {
         );
     }
 
+    // 写放大口径（P6A-018）：单 Run 条数已知（上面断言 5 条），这里给出载荷字节的上界与平均值。
+    // 载荷在库里就是 `serde_json::to_string(&payload)` 的结果，因此这里算出的字节数与落库值逐字节相等。
+    let mut payload_bytes = 0_usize;
+    for item in &steps {
+        let encoded = serde_json::to_string(&item.payload).context("序列化检查点载荷失败")?;
+        ensure!(
+            encoded.len() <= super::PAYLOAD_LIMIT,
+            "单条载荷应不超过 {} 字节（seq {}），实际 {}",
+            super::PAYLOAD_LIMIT,
+            item.seq_no,
+            encoded.len()
+        );
+        payload_bytes += encoded.len();
+    }
+    let average_payload = payload_bytes.checked_div(steps.len()).unwrap_or(0);
+
     // 接口侧的事实：指针跟到最后一条，未恢复过的 Run 没有恢复次数与中断原因。
     let run = run_of(context, &sent.run.id).await?;
     ensure!(
@@ -121,6 +137,13 @@ async fn boundaries(context: &TestContext) -> Result<Vec<String>> {
         format!(
             "run/get 的 lastCheckpointSeq = {:?}，resumeCount = {}，interruptedReason 为空",
             run.last_checkpoint_seq, run.resume_count
+        ),
+        format!(
+            "单 Run 的检查点 {} 条，载荷共 {} 字节（平均 {} 字节/条，单条上界 {} 字节）",
+            steps.len(),
+            payload_bytes,
+            average_payload,
+            super::PAYLOAD_LIMIT
         ),
     ])
 }

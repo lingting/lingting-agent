@@ -1,6 +1,6 @@
 # 6A 任务清单
 
-**状态：规划中（未开工）。** 20 个任务 / 5 个批次。子阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已完成（20 个任务 / 5 个批次全部结案）。** 子阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)，阶段报告见 [`docs/reports/p6a-020-acceptance.md`](../../../docs/reports/p6a-020-acceptance.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -500,7 +500,20 @@
 
 > 依赖：Batch D。本批次把「失败之后怎么办」定死，并把门禁、生成物与阶段结论收口。
 
-- [ ] **P6A-017 失败分类与重试策略**
+> **Batch E 结案（已执行）**：P6A-017 ~ P6A-020 全部落地并验收，阶段报告见 [`docs/reports/p6a-020-acceptance.md`](../../../docs/reports/p6a-020-acceptance.md)。
+>
+> 验收证据：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`make gen`（路由 / 接口各 33 条）、`make gen-check`、`make ui-check`、`make check` 全部 0 退出；`make test ARGS="--all"` **150 个用例全通过**（P5 基线 138 + 6A 新增 12）。
+>
+> 需要回填的口径差异：
+>
+> 1. `O-1` 的六个字段名沿用既有各段的 **snake_case**，且 P6A-018 追加了第七个键 `checkpoint_payload_bytes`（写放大口径）；`limit` 段另新增 `retries`。
+> 2. `A-1` 的 `framework_` 检索命中 1（`use framework_proc_auto::auto_enum;`），它是 `AGENTS.md` 第 20 条要求的 API 标记宏，不是协议类型；`A-5` 的 `cargo tree` 按 `--depth 1` 判定（`lib-db` / `sqlx` 只经 `service-core` 传递出现）。
+> 3. `S-3` 的第一条（对终态 Run 调 `api/run/resume`）与 D-P6-009 冲突，以决策为准；有效口径是第二条（恢复触发 + `api/run/cancel`）。
+> 4. `I-3` 的「上下文重新组装」标记既没有字段也没有文案——D-P6-003 只要求「重新组装」，实现选择不记录上下文指纹（`KI-P6A-004`）。
+> 5. `P-5` 的「`checkpointsPruned` 与删除条数相等」拆成两处：存储半段（同进程并行）断言「至少增长」，隔离服务端的 `resume.terminal` 断言「逐值相等」。
+> 6. P6A-017 的 `[agent]` 两个新配置项**不在生成物里**：`AgentConfig` 是内部配置类型（不加 `auto_*` 宏），只在 `config.toml` 与 `lib-bin-cli` 的校验里出现。
+
+- [x] **P6A-017 失败分类与重试策略**
 
   **目标**：失败有分类、重试有上限且可观测、不可重试的终态有固定原因；长任务的「分段」就是轮次边界，不引入新的调度层。
 
@@ -516,14 +529,14 @@
   5. 不引入「Run 级自动重新入队」：需要重新执行时由用户显式再发消息（D-P6-012）。
 
   **验收标准**：
-  - [ ] 分类表的每个分支都有对应固定文案，且文案集中在 `error.rs`。
-  - [ ] `run_max_retries = 0` 时行为与改动前逐字段一致（既有 `run.*` 用例不变）。
-  - [ ] 重试次数在 `metrics` 快照里可复算，且不超过配置上限。
-  - [ ] 不可重试路径的 `resume_count` 不增加。
+  - [x] 分类表的每个分支都有对应固定文案，且文案集中在 `error.rs`。（结案：`error::retryable` 上方就是分类表（可重试 / 不可重试逐条点名文案来源）；本任务新增的唯一文案是 `error::RETRY_EXHAUSTED`「模型调用重试次数已用尽」，其余分支复用各自既有产点——`agent-route` 的 `public_message()`、`agent-context` 的预算文案、`error.rs` 的 `TOOL_ROUNDS_EXCEEDED` / `TOOL_TRACE_BROKEN` / `CHECKPOINT*` / `RESUME_*` / `CANCEL_FALLBACK`。`resume.retry` 断言可重试分类落 `RETRY_EXHAUSTED`、不可重试分类落原始文案。）
+  - [x] `run_max_retries = 0` 时行为与改动前逐字段一致（既有 `run.*` 用例不变）。（结案：`make test ARGS="run"` 10/10、`ARGS="runtime"` 18/18 全绿，三条 `run.failed_*` 的文案断言未放宽；实现上「一次都没重试过」时才用原始文案，见 `loop_.rs` 的 `attempt == 0` 分支。）
+  - [x] 重试次数在 `metrics` 快照里可复算，且不超过配置上限。（结案：`agent-runtime::metrics` 新增 `retries` 原子量（`metrics` 特性下），经 `manager-agent` 的 `LimitMetrics::retries` 转写到 `api/probe/metrics`；`resume.retry` 断言 `limit.retries == 2 == 配置次数`，Mock 侧 `scenarios.upstream = 3` 说明「1 次失败 + 2 次重试」。）
+  - [x] 不可重试路径的 `resume_count` 不增加。（结案：`resume.retry` 断言该 Run 的 `resumeCount == 0`；`resume.retry` 第二段再断言认证失败前后 `limit.retries` 不变。）
 
-  **测试要求**：由 `resume.retry`（新增，随 P6A-016 一起登记）与既有 `run.*` 回归覆盖，执行需授权。
+  **测试要求**：由 `resume.retry`（本轮新增，登记在 `crates/bin-tests/src/cases/resume/retry.rs`）与既有 `run.*` 回归覆盖，执行需授权。（结案：已授权执行 `make test ARGS="resume.retry"`、`ARGS="run"`、`ARGS="runtime"` 全绿；`llm.config` 另补两个配置项的缺省 / 合法 / 越界断言。）
 
-- [ ] **P6A-018 写放大与恢复开销核对**
+- [x] **P6A-018 写放大与恢复开销核对**
 
   **目标**：确认检查点没有把落库路径变成瓶颈，并用数字（而不是感觉）给出结论。
 
@@ -538,13 +551,13 @@
   4. 结论写进验收报告，不写进本文档。
 
   **验收标准**：
-  - [ ] 三个指标都能从快照读到，且用例断言的是上界而不是「看起来还行」。
-  - [ ] 检查点写入没有引入 `spawn_blocking` 之外的新阻塞模式（静态核对调用点）。
-  - [ ] 单 Run 的检查点条数与「起点 + 每轮模型边界 + 每轮工具边界」之和相等。
+  - [x] 三个指标都能从快照读到，且用例断言的是上界而不是「看起来还行」。（结案：单 Run 条数 = `api/run/history` 的 `steps` 条数；payload 平均字节 = 新增的 `resume.checkpoint_payload_bytes` / `checkpoints_written`；落库次数 = `journal.appends + resume.checkpoints_written`。`resume.checkpoint` 断言「单条 ≤ 2048 字节」「两轮工具 Run 的 5 条共 272 字节、平均 54 字节」，`resume.metrics` 断言「平均载荷 ≤ 单条上界」并给出落库次数 16。）
+  - [x] 检查点写入没有引入 `spawn_blocking` 之外的新阻塞模式（静态核对调用点）。（结案：`service-core/src/repository/checkpoint.rs` 的 `append_checkpoint` 只有 `begin` → 两条语句 → `commit`，与既有 `with_xxx` 同一路径；`grep spawn_blocking|block_on|std::thread` 在 `checkpoint.rs` / `loop_/checkpoint.rs` / `observability.rs` 命中 0。）
+  - [x] 单 Run 的检查点条数与「起点 + 每轮模型边界 + 每轮工具边界」之和相等。（结案：`resume.checkpoint` 断言两轮工具 + 正常完成 = 5 条、序号 1..5、phase 依次 `MODEL_DONE / MODEL_DONE / TOOLS_DONE / MODEL_DONE / TOOLS_DONE`。）
 
-  **测试要求**：并入 `resume.checkpoint`；执行需授权。
+  **测试要求**：并入 `resume.checkpoint`；执行需授权。（结案：已授权执行，`resume.checkpoint` 的写放大段与 `resume.metrics` 的平均载荷断言均通过。）
 
-- [ ] **P6A-019 门禁、生成物与文档待同步清单**
+- [x] **P6A-019 门禁、生成物与文档待同步清单**
 
   **目标**：新增枚举值、新增一个只读接口与两个配置项不造成契约漂移；把需要同步的文档写成清单交给人处理（本轮不改文档）。
 
@@ -563,13 +576,13 @@
   4. 不修改 `README.md`、不改上面四份文档。
 
   **验收标准**：
-  - [ ] `make gen-check` / `make ui-check` / `make check` 退出码均为 0。
-  - [ ] 生成物差异清单与 §实施步骤 2 逐项相等，没有多余改动。
-  - [ ] 待同步清单以任务结案说明的形式给出，`git status` 里没有文档改动。
+  - [x] `make gen-check` / `make ui-check` / `make check` 退出码均为 0。（结案：三者均 0 退出；`make gen` 另输出「路由 33 条，接口 33 条」。）
+  - [x] 生成物差异清单与 §实施步骤 2 逐项相等，没有多余改动。（结案：相对 P5 基线只有 `api/run/history` 一个新接口（路由 / 接口 32 → 33），`RunStatus` 的 `PAUSED`、`RunHistory` / `RunStep` 两个 DTO、`Run` 的三个新字段都是 Batch A / D 已落地产物；`api/run/resume` / `RunResumePO` / `resume_on_occupy` 命中 0。**两处需要回填**：（1）本任务的 `[agent]` 两个新配置项**不在生成物里**——`AgentConfig` 是内部配置类型（不加 `auto_*` 宏），只在 `config.toml` 与 `lib-bin-cli` 的校验里出现；（2）Batch B 登记的「`make ui-check` 既有失败」（UI 夹具缺 `Run` 的三个新字段）已由 Batch D 的客户端改动一并修掉，本轮复核仍是 0 退出、UI 文件零改动。）
+  - [x] 待同步清单以任务结案说明的形式给出，`git status` 里没有文档改动。（结案：清单在 [报告](../../../docs/reports/p6a-020-acceptance.md) §七；本轮 `git status` 的 `docs/` 只有新增的报告文件，`README.md` / `docs/develop.md` / `docs/workspace.md` / `docs/api/*` 零改动。）
 
   **测试要求**：无（门禁命令不执行测试；`make check` 只跑 fmt + clippy）。
 
-- [ ] **P6A-020 阶段验收与报告**
+- [x] **P6A-020 阶段验收与报告**
 
   **目标**：判据逐条取证，未采集与结转风险显式记录，阶段结论可被下一子阶段（6B）直接引用。
 
@@ -585,8 +598,8 @@
   5. 报告不写日志路径作为数据来源；用例失败时只给出日志路径供人工排查。
 
   **验收标准**：
-  - [ ] 十组判据逐条有结论（成立 / 未授权 / 未采集），没有空缺。
-  - [ ] 报告里所有数字都能追到用例结果或 `metrics` 快照。
-  - [ ] 结转风险条目至少覆盖：`PAUSED` 契约影响面、副作用不可回滚的两类未知、迁移不可回滚。
+  - [x] 十组判据逐条有结论（成立 / 未授权 / 未采集），没有空缺。（结案：报告 §二 ~ §五 逐条列出 58 条；除 `O-3` 记为「未采集」外全部成立，没有「未授权」；另有 6 处判据原文与实现的偏差在 §6.2 逐条说明。）
+  - [x] 报告里所有数字都能追到用例结果或 `metrics` 快照。（结案：报告引用的数字全部来自 `make test` 的用例报告条目与 `api/probe/metrics` 快照；用例目录以运行目录编号标注，未把日志当数据来源。）
+  - [x] 结转风险条目至少覆盖：`PAUSED` 契约影响面、副作用不可回滚的两类未知、迁移不可回滚。（结案：`KI-P6A-001` / `KI-P6A-002` / `KI-P6A-003`，另加 `KI-P6A-004` ~ `KI-P6A-008`（上下文一致性、重试边界、事件时间线、用例设施偶发、检查点表增长）。）
 
-  **测试要求**：无新增用例；报告取证依赖已授权执行的用例结果。
+  **测试要求**：无新增用例；报告取证依赖已授权执行的用例结果。（结案：本轮取证依赖的用例全部在授权下执行：`resume` 12/12、`llm.config` 1/1、`skill` 15/15、`tool` 28/28、`persist` 5/5、`run` 10/10、`runtime` 18/18，全量 150/150。）

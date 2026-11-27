@@ -27,6 +27,7 @@ use agent_core::session::{
 use anyhow::{Context, Result, ensure};
 use lib_core::time;
 use lib_db::{DATABASE_FILE, Database, DbConfig};
+use service_core::observability;
 use service_core::repository::Repository;
 use service_core::session::{CheckpointError, SessionService};
 use sqlx::SqlitePool;
@@ -44,6 +45,7 @@ mod history;
 mod idempotent;
 mod metrics;
 mod notify;
+mod retry;
 mod terminal;
 mod trigger;
 mod tui;
@@ -99,6 +101,13 @@ pub(crate) fn cases() -> Vec<Case> {
             kind: CaseKind::SelfServed,
             prep: &[],
             run: broken::case,
+        },
+        // Run 级重试要独立的 Mock 观测记录与快照：服务端由用例自己启停（P6A-017）。
+        Case {
+            name: "resume.retry",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: retry::case,
         },
         // 只读接口：隔离服务端足够，不需要自己启停。
         Case {
@@ -320,6 +329,8 @@ async fn sequence_and_payload() -> Result<Vec<String>> {
 async fn prune_policy() -> Result<Vec<String>> {
     let (_database, service) = fixture("resume-checkpoint-prune").await?;
     let run_id = new_run(&service, "检查点清理").await?;
+    // 写放大口径（P6A-018 / 验收 `P-5`）：检查点写入与清理都在 `service-core` 的同一处计数。
+    let before = observability::snapshot();
     let total = u32::try_from(CHECKPOINT_KEEP_LAST).unwrap_or_default() + 5;
     for round in 0..total {
         service
@@ -363,10 +374,27 @@ async fn prune_policy() -> Result<Vec<String>> {
         service.prune_checkpoints(&run_id).await? == 0,
         "重复清理不应再删除任何行"
     );
+    // 快照口径（`P-5`）：写入与删除都在 `service-core` 的同一处计数。这里是进程内共享计数器，
+    // 同进程并行跑的其它存储半段也会累加，因此只断言「至少包含本次的量」；「增量与删除条数逐值
+    // 相等」放在隔离服务端的 `resume.terminal` 里断言（那里没有并行用例干扰）。
+    let after = observability::snapshot();
+    let written_delta = after.checkpoints_written.saturating_sub(before.checkpoints_written);
+    let pruned_delta = after.checkpoints_pruned.saturating_sub(before.checkpoints_pruned);
+    ensure!(
+        written_delta >= u64::from(total),
+        "checkpointsWritten 应至少增长 {total}，实际 {written_delta}"
+    );
+    ensure!(
+        pruned_delta >= u64::try_from(removed).unwrap_or_default(),
+        "checkpointsPruned 应至少增长 {removed}，实际 {pruned_delta}"
+    );
 
     Ok(vec![
         format!("写入 {written} 条后未终态时清理 0 条，落 FAILED 后删除 {removed} 条、保留 {CHECKPOINT_KEEP_LAST} 条"),
         "再次清理返回 0（保留策略是幂等的）".to_owned(),
+        format!(
+            "快照口径：checkpointsWritten 至少 +{written_delta}、checkpointsPruned 至少 +{pruned_delta}（逐值相等见 resume.terminal）"
+        ),
     ])
 }
 

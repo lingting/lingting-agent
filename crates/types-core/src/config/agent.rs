@@ -7,7 +7,8 @@
 //! [`Concurrency`]（P2.1-015）；`run_queue_timeout_ms` 是排队超时（超时落 `FAILED`「执行排队超时」）；
 //! `llm_idle_timeout_ms` 是模型流的空闲超时（P2-016）；`context_max_messages` / `context_safety_tokens`
 //! 是 Context 预算的两个可调项（D-P2-012 / D-P2-013）；`max_tool_rounds` 是一次 Run 内最多
-//! 几轮 Provider 请求（工具轮次的终止条件，D-P3-009）。
+//! 几轮 Provider 请求（工具轮次的终止条件，D-P3-009）；`run_max_retries` / `run_retry_backoff_ms`
+//! 是同一次 LLM 请求的重试次数与退避（缺省 `0` 即不重试，D-P6-012）。
 
 use std::fmt;
 
@@ -26,6 +27,14 @@ pub const DEFAULT_CONTEXT_MAX_MESSAGES: usize = 40;
 pub const DEFAULT_CONTEXT_SAFETY_TOKENS: usize = 256;
 /// 一次 Run 内工具轮次上限的缺省值（D-P3-009）。
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
+/// Run 级重试次数的缺省值：`0` 表示不重试，与 P2 以来的失败口径逐字段一致（D-P6-012）。
+pub const DEFAULT_RUN_MAX_RETRIES: usize = 0;
+/// 每次重试前的退避的缺省值（毫秒）。
+pub const DEFAULT_RUN_RETRY_BACKOFF_MS: u64 = 500;
+/// Run 级重试次数的上限：配置超过它是启动期硬错误（重试不是无限预算）。
+pub const MAX_RUN_MAX_RETRIES: usize = 10;
+/// 重试退避的上限（毫秒）：配置超过它是启动期硬错误（重试不该拖成长任务饥饿）。
+pub const MAX_RUN_RETRY_BACKOFF_MS: u64 = 60_000;
 
 /// 配置字段名：解析与校验的错误文案统一点名该字段。
 const FIELD: &str = "[agent] max_concurrent_runs";
@@ -149,6 +158,12 @@ pub struct AgentConfig {
     pub context_safety_tokens: usize,
     /// 一次 Run 内最多几轮 Provider 请求（第一轮也算一轮）：用尽且仍要求调用工具即落 `FAILED`。
     pub max_tool_rounds: usize,
+    /// 同一次 LLM 请求的重试次数：`0`（缺省）表示不重试，正整数时按次数重试（D-P6-012）。
+    ///
+    /// 只重试可重试分类（上游瞬时错误与传输类），不重新入队、不重跑已提交轮次。
+    pub run_max_retries: usize,
+    /// 每次重试前的固定退避（毫秒）：`0` 表示立即重试。
+    pub run_retry_backoff_ms: u64,
 }
 
 impl Default for AgentConfig {
@@ -160,6 +175,8 @@ impl Default for AgentConfig {
             context_max_messages: DEFAULT_CONTEXT_MAX_MESSAGES,
             context_safety_tokens: DEFAULT_CONTEXT_SAFETY_TOKENS,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            run_max_retries: DEFAULT_RUN_MAX_RETRIES,
+            run_retry_backoff_ms: DEFAULT_RUN_RETRY_BACKOFF_MS,
         }
     }
 }

@@ -37,6 +37,9 @@ static RUNNING_NOW: AtomicI64 = AtomicI64::new(0);
 /// 执行水位：观察到的同时在执行最大值。
 #[cfg(feature = "metrics")]
 static RUNNING_MAX: AtomicI64 = AtomicI64::new(0);
+/// Run 级重试次数（D-P6-012）：每次真正重发同一轮请求记一次。
+#[cfg(feature = "metrics")]
+static RETRIES: AtomicU64 = AtomicU64::new(0);
 
 /// Run 排队与执行的只读快照。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,6 +60,8 @@ pub struct MetricsSnapshot {
     pub running_max: i64,
     /// 读取瞬间正在执行的 Run 数。
     pub running_now: i64,
+    /// Run 级重试的次数（`[agent] run_max_retries`）：每个 Run 的重试次数不超过配置上限（D-P6-012）。
+    pub retries: u64,
 }
 
 /// 只读快照：调用方取一次即可，不重置。未启用采集时全部为 0。
@@ -72,6 +77,7 @@ pub fn snapshot() -> MetricsSnapshot {
             queued_max: QUEUED_MAX.load(Ordering::Relaxed),
             running_max: RUNNING_MAX.load(Ordering::Relaxed),
             running_now: RUNNING_NOW.load(Ordering::Relaxed),
+            retries: RETRIES.load(Ordering::Relaxed),
         }
     }
     #[cfg(not(feature = "metrics"))]
@@ -117,6 +123,15 @@ pub(crate) fn record_timeout() {
 pub(crate) fn record_cancelled() {
     #[cfg(feature = "metrics")]
     CANCELLED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记一次 Run 级重试：每次真正重发同一轮 LLM 请求记一次（D-P6-012）。
+///
+/// 计数不区分失败分类：不可重试的分类根本不会走到这里，因此「重试次数不超过配置上限」
+/// 可以直接用「本进程重试总数 ≤ 各 Run 上限之和」复算。
+pub(crate) fn record_run_retry() {
+    #[cfg(feature = "metrics")]
+    RETRIES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// 开始占用一个并发位（拿到许可）：执行水位 +1。

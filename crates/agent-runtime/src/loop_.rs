@@ -26,16 +26,19 @@ mod request;
 mod tool;
 mod trace;
 
+use std::time::Duration;
+
 use agent_context_core::{ContextItem, ContextPolicy};
 use agent_core::session::{CheckpointPhase, LlmToolCallVO, Message, MessageRole, Run, RunEventKind, RunStatus};
 use agent_route::{LlmError, LlmMessage, LlmToolCall};
 use lib_core::{id, time};
-use service_core::session::{RunInput, RunOutcome, RunStop};
+use service_core::session::{RunCancel, RunInput, RunOutcome, RunStop};
 use tracing::{info, warn};
 
 use crate::error;
 use crate::feed::Feed;
 use crate::limit::{self, Acquired};
+use crate::metrics;
 use crate::port::AgentRuntime;
 
 use tool::{Resumed, Step};
@@ -152,6 +155,8 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
 
     // 七、多轮：轮次从「已发生的工具轮次」继续数，轮次用尽即 FAILED。
     let max_rounds = u32::try_from(runtime.agent.max_tool_rounds).unwrap_or(u32::MAX).max(1);
+    // Run 级重试上限（D-P6-012）：`0` 表示一次都不重试，与改动前的失败口径完全一致。
+    let max_retries = u32::try_from(runtime.agent.run_max_retries).unwrap_or(u32::MAX);
     let mut round = trace.rounds();
     let mut usage: Option<(i64, i64)> = None;
     loop {
@@ -160,9 +165,36 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
             return fail(runtime, &run, &mut feed, error::TOOL_ROUNDS_EXCEEDED).await;
         }
         let request = request::build(&run, &prepared, &trace, &tools);
-        match request::stream(llm.as_ref(), request, &mut feed, &cancel).await {
+        // Run 级重试（D-P6-012）：只覆盖「同一次 LLM 请求」，不重新入队、不重跑已提交轮次。
+        let mut attempt: u32 = 0;
+        let outcome = loop {
+            let outcome = request::stream(llm.as_ref(), request.clone(), &mut feed, &cancel).await;
+            match outcome {
+                // 可重试分类 + 本轮还没有任何增量发给客户端，才允许重发同一份请求。
+                request::Outcome::Failed { error, partial }
+                    if !partial && error::retryable(&error) && attempt < max_retries =>
+                {
+                    attempt += 1;
+                    metrics::record_run_retry();
+                    warn!(run_id = %run.id, attempt, %error, "模型调用失败，按配置重试同一轮请求");
+                    if !backoff(runtime, &cancel).await {
+                        return cancelled(runtime, &run, &mut feed, cancel.stop()).await;
+                    }
+                }
+                other => break other,
+            }
+        };
+        match outcome {
             request::Outcome::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
-            request::Outcome::Failed(public) => return fail(runtime, &run, &mut feed, public).await,
+            request::Outcome::Failed { error, .. } => {
+                // 真的重试过就用固定文案；一次都没重试（不可重试分类 / 已推过增量 / 未配置重试）
+                // 仍用原始脱敏文案，既有失败口径逐字段不变。
+                let public = match attempt {
+                    0 => error.public_message(),
+                    _ => error::RETRY_EXHAUSTED.to_owned(),
+                };
+                return fail(runtime, &run, &mut feed, public).await;
+            }
             request::Outcome::SessionGone => return RunOutcome::SessionGone,
             request::Outcome::Final {
                 content,
@@ -335,6 +367,21 @@ async fn complete(
     // Run 已是终态：会话此刻停止也不影响记录，发送失败不算错误。
     let _ = feed.send(completed).await;
     RunOutcome::Completed
+}
+
+/// 重试前的固定退避（D-P6-012）：等待 `[agent] run_retry_backoff_ms`，期间收到停止信号即返回 `false`。
+///
+/// 退避为 `0` 表示立即重试：仍然先看一眼停止信号，避免取消被拖到下一轮请求。
+async fn backoff(runtime: &AgentRuntime, cancel: &RunCancel) -> bool {
+    let wait = runtime.agent.run_retry_backoff_ms;
+    if wait == 0 {
+        return !cancel.is_cancelled();
+    }
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => false,
+        () = tokio::time::sleep(Duration::from_millis(wait)) => true,
+    }
 }
 
 /// 失败收尾：`FAILED` 条件更新成功才发 `run_failed`。

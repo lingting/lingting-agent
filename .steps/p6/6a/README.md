@@ -1,6 +1,6 @@
 # 6A：可靠性（Checkpoint / Resume / Run Persistence / Task Recovery）
 
-**状态：规划中（未开工；三个岔口已定案）。** 20 个任务 / 5 个批次（[tasks.md](tasks.md)），判据 10 组 58 条（[acceptance.md](acceptance.md)），决策 13 项 `D-P6-001` ~ `D-P6-013`（[decisions.md](decisions.md)）。已定案：`D-P6-004` 新增非终态 `PAUSED`、`D-P6-007` 一律不重放并回灌中断原因、`D-P6-009` 由「占用 + 发消息」触发恢复。
+**状态：已完成（Batch A ~ E 全部结案）。** 20 个任务 / 5 个批次（[tasks.md](tasks.md)），判据 10 组 58 条（[acceptance.md](acceptance.md)），决策 13 项 `D-P6-001` ~ `D-P6-013`（[decisions.md](decisions.md)）。已定案：`D-P6-004` 新增非终态 `PAUSED`、`D-P6-007` 一律不重放并回灌中断原因、`D-P6-009` 由「占用 + 发消息」触发恢复。**阶段报告见 [`docs/reports/p6a-020-acceptance.md`](../../../docs/reports/p6a-020-acceptance.md)**：判据除 `O-3`（未采集：无 `metrics` 特性的构建不注册该探针）外全部成立；结转风险 `KI-P6A-001` ~ `KI-P6A-008`。
 
 > 依据：阶段级规划 [`.steps/p6/README.md`](../README.md) 第二节「可靠性」与第六节验收方向 1、第八节风险 1 / 2 / 8；P5 结案结论与结转风险 [`docs/reports/p5-020-acceptance.md`](../../../docs/reports/p5-020-acceptance.md)（`KI-P5-001` ~ `KI-P5-004`）；结构权威 [`docs/workspace.md`](../../../docs/workspace.md)；开发规范 [`docs/develop.md`](../../../docs/develop.md)；仓库根 `AGENTS.md`。
 >

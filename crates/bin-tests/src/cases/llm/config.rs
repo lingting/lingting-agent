@@ -8,7 +8,10 @@ use crate::case::CaseFuture;
 use crate::util::context::TestContext;
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::config::parse_llm;
-use types_core::config::agent::{Concurrency, DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS};
+use types_core::config::agent::{
+    Concurrency, DEFAULT_CONTEXT_MAX_MESSAGES, DEFAULT_MAX_CONCURRENT_RUNS, DEFAULT_RUN_MAX_RETRIES,
+    DEFAULT_RUN_RETRY_BACKOFF_MS, MAX_RUN_MAX_RETRIES, MAX_RUN_RETRY_BACKOFF_MS,
+};
 use types_core::config::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 
 /// 一份完整合法的配置：Provider 两个模型（一个全字段、一个只写 id 走缺省值）+ 全量 Agent 参数。
@@ -257,9 +260,43 @@ id = "model-a"
                 "错误文案应指出问题（期望包含「{expected}」）：{message}"
             );
         }
+
+        // 6) Run 级重试的配置（D-P6-012）：缺省「不重试」，`0` 退避是「立即重试」，越界即硬错误。
+        ensure!(
+            minimal.agent.run_max_retries == DEFAULT_RUN_MAX_RETRIES
+                && minimal.agent.run_retry_backoff_ms == DEFAULT_RUN_RETRY_BACKOFF_MS,
+            "重试缺省值应与 types-core 一致（不重试 + 缺省退避）：{:?} / {}",
+            minimal.agent.run_max_retries,
+            minimal.agent.run_retry_backoff_ms
+        );
+        let immediate = parse_llm("[agent]\nrun_max_retries = 1\nrun_retry_backoff_ms = 0\n")?;
+        ensure!(
+            immediate.agent.run_max_retries == 1 && immediate.agent.run_retry_backoff_ms == 0,
+            "0 退避应是「立即重试」的合法取值：{}",
+            immediate.agent.run_retry_backoff_ms
+        );
+        let rejected_retry = [
+            (
+                "[agent] run_max_retries 超过上限",
+                format!("[agent]\nrun_max_retries = {}\n", MAX_RUN_MAX_RETRIES + 1),
+            ),
+            (
+                "[agent] run_retry_backoff_ms 超过上限",
+                format!("[agent]\nrun_retry_backoff_ms = {}\n", MAX_RUN_RETRY_BACKOFF_MS + 1),
+            ),
+        ];
+        for (expected, text) in &rejected_retry {
+            let message = expect_failure(text)?;
+            ensure!(
+                message.contains(expected),
+                "错误文案应指出问题（期望包含「{expected}」）：{message}"
+            );
+        }
         notes.push(format!(
-            "非法配置全部拒绝：{} 类",
-            rejected.len() + rejected_concurrency.len()
+            "非法配置全部拒绝：{} 类；重试缺省不重试 + 缺省退避，上限 {} 次 / {}ms",
+            rejected.len() + rejected_concurrency.len() + rejected_retry.len(),
+            MAX_RUN_MAX_RETRIES,
+            MAX_RUN_RETRY_BACKOFF_MS
         ));
         Ok(notes)
     })
