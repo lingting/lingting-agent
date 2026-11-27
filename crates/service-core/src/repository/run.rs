@@ -31,6 +31,19 @@ impl Repository {
             .join(",")
     }
 
+    /// 运行时会话停止时的收尾集合：未结束但**不含** `PAUSED`。
+    ///
+    /// `PAUSED` 不是执行中的 Run（D-P6-004 / D-P6-011），让它随会话停止落终态会永久摧毁可恢复性；
+    /// 它只能由 `api/run/cancel` 显式取消。集合同样从 [`RunStatus::ACTIVE`] 派生，不另写状态清单。
+    fn stoppable_statuses() -> String {
+        RunStatus::ACTIVE
+            .iter()
+            .filter(|status| **status != RunStatus::Paused)
+            .map(|status| format!("'{status}'"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     /// 按 ID 取 Run；不存在时为空。
     pub async fn run(&self, run_id: &str) -> Result<Option<Run>, DbError> {
         let sql = format!("{SELECT_RUN} WHERE id = ?");
@@ -196,11 +209,14 @@ impl Repository {
     ///
     /// 清空待确认列与收尾 `PENDING` 审计在同一事务里（P3-027 第 5 条）：不允许出现
     /// 「挂起列已清、审计还挂着 PENDING」的中间态。
+    ///
+    /// `PAUSED` 也在可取消集合里（D-P6-005）：它唯一携带的可恢复值 `interrupted_reason` 一并清空，
+    /// 取消之后该行与普通取消同形，不再有「中断」这层含义。
     pub async fn cancel_run(&self, run_id: &str, error: Option<&str>, now_ms: i64) -> Result<bool, DbError> {
         let status = RunStatus::Cancelled.to_string();
         let sql = format!(
-            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
-             pending_tool_call_id = NULL, pending_tool_round = NULL \
+            "UPDATE runs SET status = ?, error = ?, interrupted_reason = NULL, updated_at_ms = ?, \
+             finished_at_ms = ?, pending_tool_call_id = NULL, pending_tool_round = NULL \
              WHERE id = ? AND status IN ({})",
             Self::open_statuses()
         );
@@ -221,9 +237,11 @@ impl Repository {
         Ok(affected > 0)
     }
 
-    /// 取消某个会话的全部未结束 Run，返回被取消的数量（释放占用时使用）。
+    /// 取消某个会话里在排队 / 执行中 / 等确认的 Run，返回被取消的数量（运行时会话停止时使用）。
     ///
-    /// 与 [`Repository::cancel_run`] 同一口径：待确认列与 `PENDING` 审计一起收尾。
+    /// **不含 `PAUSED`**（P6A-012）：中断态没有执行者，随会话停止落终态会永久摧毁可恢复性，
+    /// 它只能由 `api/run/cancel` 显式取消。待确认列与 `PENDING` 审计一起收尾，与
+    /// [`Repository::cancel_run`] 同一口径。
     pub async fn cancel_session_runs(
         &self,
         session_id: &str,
@@ -235,7 +253,7 @@ impl Repository {
             "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
              pending_tool_call_id = NULL, pending_tool_round = NULL \
              WHERE session_id = ? AND status IN ({})",
-            Self::open_statuses()
+            Self::stoppable_statuses()
         );
         let mut transaction = self.begin().await?;
         let affected = sqlx::query(&sql)

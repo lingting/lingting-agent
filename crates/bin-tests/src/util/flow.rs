@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use lib_bin_cli::client::{Client, ClientError, EventStream};
 use lib_bin_cli::sdk::{
-    ApiClient, ClientCreatePO, ClientDeletePO, ClientEvent, ClientEventKind, ClientStreamParams, MessageSendPO,
-    MessageSendVO, OccupancyCreatePO, OccupancyDeletePO, OccupancyVO, Run, RunEvent, RunEventKind, RunGetParams,
-    RunStatus, SessionCreatePO, SessionSummary,
+    ApiClient, ClientCreatePO, ClientDeletePO, ClientEvent, ClientEventKind, ClientStreamParams, Message,
+    MessageListParams, MessageSendPO, MessageSendVO, OccupancyCreatePO, OccupancyDeletePO, OccupancyVO, Run, RunEvent,
+    RunEventKind, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
 };
 use tokio::time::sleep;
 
@@ -289,4 +289,85 @@ impl Occupied {
     pub(crate) async fn release(self, context: &TestContext) -> Result<()> {
         release(context, &self.client_id).await
     }
+}
+
+/// 在既有会话上重新建立链路：新注册 + 重新占用 + 订阅下行流。
+///
+/// 与 [`Occupied::start`] 的唯一区别是会话由调用方给：占用与客户端身份都不跨进程
+/// （`persist.occupancy_reset`），因此进程重启后必须重建一次，但对话仍是同一条。
+pub(crate) struct Reopened {
+    /// 重新占用该会话的客户端。
+    pub(crate) client_id: String,
+    /// 该客户端的下行事件流。
+    pub(crate) stream: EventStream,
+}
+
+impl Reopened {
+    /// 注册 → 占用 → 订阅；会话必须已存在（通常来自 [`create_session`]）。
+    pub(crate) async fn open(context: &TestContext, session_id: &str) -> Result<Self> {
+        let client_id = register(context).await?;
+        occupy(context, &client_id, session_id).await?;
+        let stream = context
+            .client()
+            .subscribe_client(ClientStreamParams {
+                client_id: client_id.clone(),
+            })
+            .await?;
+        Ok(Self { client_id, stream })
+    }
+
+    /// 交还占用并反注册（链路已被外部停掉时不要调用）。
+    pub(crate) async fn release(self, context: &TestContext) -> Result<()> {
+        release(context, &self.client_id).await
+    }
+}
+
+/// 建一个会话：标题带用例标记，避免同服务端上的其他用例互相干扰。
+pub(crate) async fn create_session(context: &TestContext, title: &str) -> Result<SessionSummary> {
+    context
+        .client()
+        .session_create(SessionCreatePO {
+            title: Some(format!("{title} {}", context.token())),
+            model: None,
+        })
+        .await
+        .map_err(ClientError::from_call)
+        .map_err(Into::into)
+}
+
+/// 发一条消息但**不读**下行流：需要自己决定何时开始读的用例用（例如先强杀再读）。
+pub(crate) async fn send_message(context: &TestContext, session_id: &str, content: &str) -> Result<MessageSendVO> {
+    context
+        .client()
+        .message_create(MessageSendPO {
+            session_id: session_id.to_string(),
+            content: content.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)
+        .map_err(Into::into)
+}
+
+/// `api/run/get`。
+pub(crate) async fn run_get(context: &TestContext, run_id: &str) -> Result<Run> {
+    context
+        .client()
+        .run_get(RunGetParams {
+            run_id: run_id.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)
+        .map_err(Into::into)
+}
+
+/// `api/message/list`。
+pub(crate) async fn messages(context: &TestContext, session_id: &str) -> Result<Vec<Message>> {
+    context
+        .client()
+        .message_list(MessageListParams {
+            session_id: session_id.to_string(),
+        })
+        .await
+        .map_err(ClientError::from_call)
+        .map_err(Into::into)
 }

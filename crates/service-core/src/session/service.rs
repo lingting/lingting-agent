@@ -128,7 +128,11 @@ impl SessionService {
         Ok(MessageSendVO { message, run })
     }
 
-    /// 取消 Run：只允许取消未结束的 Run。
+    /// 取消 Run：只允许取消未结束的 Run，含可恢复中断态 `PAUSED`（D-P6-005）。
+    ///
+    /// `PAUSED` 的取消与普通取消同形：`CANCELLED` + 固定原因、`interrupted_reason` 清空、
+    /// 检查点按终态策略清理。条件更新以「未结束」为前提，因此它与恢复的 `PAUSED → RUNNING`
+    /// 谁先写谁生效：未命中的一方不产出事件、不改任何行（P6A-012 第 5 条）。
     pub async fn cancel_run(&self, params: RunCancelPO) -> Result<Run, SessionError> {
         let mut run = self.require_run(&params.run_id).await?;
         if !is_open(run.status) {
@@ -148,8 +152,12 @@ impl SessionService {
         }
         run.status = RunStatus::Cancelled;
         run.error = Some(REASON_CANCELLED.to_string());
+        run.interrupted_reason = None;
         run.updated_at_ms = now_millis;
         run.finished_at_ms = Some(now_millis);
+        // 取消是终态：检查点按终态策略清理（只留最近若干条，D-P6-005 的收尾口径）。
+        // 清理失败不改取消结果——终态已提交，检查点只是过程数据，下一次终态清理会再删一次。
+        let _ = self.prune_checkpoints(&params.run_id).await;
         Ok(run)
     }
 
@@ -407,7 +415,11 @@ impl SessionService {
         Ok(())
     }
 
-    /// 取消指定会话的全部未结束 Run，返回被取消的数量（释放占用时由运行时会话调用）。
+    /// 取消指定会话里在排队 / 执行中 / 等确认的 Run，返回被取消的数量（运行时会话停止时调用）。
+    ///
+    /// **不含 `PAUSED`**（P6A-012）：中断态既没有执行者也没有待收尾的挂起，随会话停止落终态会
+    /// 永久摧毁可恢复性；它只能由 [`Self::cancel_run`] 显式取消。集合见
+    /// `Repository::cancel_session_runs`。
     pub async fn cancel_session_runs(&self, session_id: &str, reason: &str) -> Result<usize, SessionError> {
         self.repository
             .cancel_session_runs(session_id, Some(reason), time::now_millis())

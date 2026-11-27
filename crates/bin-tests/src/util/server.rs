@@ -175,6 +175,22 @@ impl Server {
         Ok(())
     }
 
+    /// 等子进程**自己**退出（优雅关闭路径）：不发信号，只等关闭流程把库内收尾与事件 flush 做完。
+    ///
+    /// 关闭探针（`api/probe/shutdown`）返回时关闭才刚开始，此时看到的接口失败不说明数据库已收尾；
+    /// 要断言关闭对库内行的处置，只能等进程真的退出。超时说明关闭没走完，由调用方决定如何报告。
+    pub async fn wait_exit(&mut self, timeout: Duration) -> Result<std::process::ExitStatus> {
+        let waited = match tokio::time::timeout(timeout, self.child.wait()).await {
+            Ok(waited) => waited,
+            Err(_) => bail!(
+                "服务端在 {} 秒内没有自行退出，日志：{}",
+                timeout.as_secs(),
+                self.log_dir.join(LOG_FILE).display()
+            ),
+        };
+        waited.with_context(|| format!("回收服务端子进程失败，日志：{}", self.log_dir.join(LOG_FILE).display()))
+    }
+
     /// 同一应用目录与端口上的重启：先停进程，再按同一个 `AGENT_HOME` 启动。
     ///
     /// 持久化用例据此验证「重启后数据仍在、残留 Run 被自愈、占用不恢复」（P2-014）。

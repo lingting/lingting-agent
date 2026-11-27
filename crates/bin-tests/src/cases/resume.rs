@@ -1,4 +1,5 @@
 //! `resume.checkpoint`：检查点的落库形态（存储半边）与运行时写入点（P6A-003 ~ P6A-006）。
+//! `resume.terminal`：终态唯一收口——取消 / 优雅关闭 / 恢复中再次中断 / 竞态（P6A-012）。
 //!
 //! 检查点还没有 HTTP 接口（`api/run/history` 随 P6A-013 落地），因此证据只有两类：
 //! 存储半边在临时数据库上经 `SessionService` 直接驱动；运行时半边起一次私有服务端，
@@ -35,19 +36,34 @@ use crate::util::context::TestContext;
 use crate::util::support::temp_directory;
 
 mod checkpoint;
+mod terminal;
 
 /// 单条载荷的字节上界（验收 `C-4`）：载荷只放最小事实，正常形态远小于这个值。
 const PAYLOAD_LIMIT: usize = 2048;
 
-/// 检查点用例。
+/// 检查点与终态收口用例。
 pub(crate) fn cases() -> Vec<Case> {
-    vec![Case {
-        name: "resume.checkpoint",
-        // 运行时半边要自己起服务端（`server::serve_once`），因此不用入口的共享服务端。
-        kind: CaseKind::SelfServed,
-        prep: &[],
-        run: all,
-    }]
+    vec![
+        Case {
+            name: "resume.checkpoint",
+            // 运行时半边要自己起服务端（`server::serve_once`），因此不用入口的共享服务端。
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: all,
+        },
+        Case {
+            name: "resume.terminal",
+            // 强杀 / 优雅关闭都按用例自己的节奏发生，服务端必须由用例启停。
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: terminal,
+        },
+    ]
+}
+
+/// 终态唯一收口（P6A-012）：取消 / 优雅关闭 / 恢复中再次中断 / 竞态。
+fn terminal(context: &TestContext) -> CaseFuture<'_> {
+    Box::pin(async move { terminal::require(context).await })
 }
 
 /// 存储半边四段 + 运行时半边：前者每段一个独立临时库，后者起一次私有服务端，注入互不影响。

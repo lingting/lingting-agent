@@ -344,7 +344,7 @@
   - 未装配执行端口时 `PAUSED` **不判死**（只记日志、保持中断态）：把可恢复的中断态落成终态会永久摧毁可恢复性，而端口缺失是装配问题；这与 `QUEUED` 的 fail-fast（D-P2-028 第 3 条）有意不同。
   - 门禁证据：`cargo check --workspace --all-targets`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全部 0 退出；`make gen` 路由 / 接口各 32 条（未新增）。
 
-- [ ] **P6A-012 终态唯一收口：取消 / 关闭 / 恢复中再次中断**
+- [x] **P6A-012 终态唯一收口：取消 / 关闭 / 恢复中再次中断**
 
   **目标**：无论怎么叠加，一个 Run 的结局只有一个；`PAUSED` 不会被悄悄留成永久中间态。
 
@@ -360,13 +360,22 @@
   5. 取消与恢复的竞态：两者都以条件更新为前提，先到者胜，后者返回「未命中」且不产出事件。
 
   **验收标准**：
-  - [ ] `PAUSED` 可取消，结果与普通取消逐字段同形（除 `error` 文案来源）。
-  - [ ] 优雅关闭路径对 `PAUSED` 行零改动。
-  - [ ] 「恢复中再次强杀」后状态仍是单个 `PAUSED` 行，`resume_count` 单调不减。
-  - [ ] 全仓不存在 `UPDATE runs SET status = 'PAUSED'` 以外的 `PAUSED` 写入点，且它带 `WHERE status = 'RUNNING'`。
+  - [x] `PAUSED` 可取消，结果与普通取消逐字段同形（除 `error` 文案来源）。（结案：`resume.terminal` 两半都断言——存储半边取消 `PAUSED` 后 `status = CANCELLED`、`error = 「用户取消执行」`、`finishedAtMs` 有值、`interruptedReason` 为空，且库内行与返回值逐字段相等；接口半边经 `api/run/cancel` 得到同一形态，`resumeCount` 不变。）
+  - [x] 优雅关闭路径对 `PAUSED` 行零改动。（结案：`resume.terminal` 先占用（不发消息，占用本身不触发恢复）再触发 `api/probe/shutdown`，等进程自行退出（exit code 0）后重启读回：`status` / `interruptedReason` / `resumeCount` / `updatedAtMs` / `finishedAtMs` 逐字段与关停前相等。）
+  - [x] 「恢复中再次强杀」后状态仍是单个 `PAUSED` 行，`resume_count` 单调不减。（结案：`resume.terminal` 占用 + 一条消息触发恢复，等旧 Run 的首段增量时 `resumeCount` 已为 1；强杀重启后同一 `runId` 仍是 `PAUSED`、`resumeCount` 保持 1、`finishedAtMs` 为空，且本次消息产生的 `QUEUED` Run 落 `CANCELLED`。）
+  - [x] 全仓不存在 `UPDATE runs SET status = 'PAUSED'` 以外的 `PAUSED` 写入点，且它带 `WHERE status = 'RUNNING'`。（结案：`RunStatus::Paused` 在产品 crate 里只有四处出现——`paused_runs` 的查询条件、`resume_paused_run` 的条件前提、`stoppable_statuses` 的排除项、`with_orphan_healing` 的 `UPDATE runs SET status = ?` 绑定；唯一写入点的 `WHERE status = ?` 绑定的是 `RunStatus::Running`。）
 
-  **测试要求**：由 P6A-016 的 `resume.terminal` 覆盖（取消、关闭、二次中断、竞态），执行需授权。
+  **测试要求**：由 P6A-016 的 `resume.terminal` 覆盖（取消、关闭、二次中断、竞态），执行需授权。（结案：`resume.terminal` 已随本任务落地并授权执行——`cargo run -p bin-tests -- resume.terminal` 通过；同批回归 `resume` / `persist` / `run` / `session` / `runtime` / `probe` / `client` 共 46 条全部通过。）
 
+  **结案说明**：
+  - 取消落在仓储层的单条条件更新上：`WHERE status IN (未结束四态)`，语句里同时把 `interrupted_reason` 置 `NULL`——`PAUSED` 是它唯一的载体（D-P6-004），清空后取消的行与普通取消同形，没有第二处写。
+  - 检查点清理挂在 `SessionService::cancel_run` 成功之后，按终态策略只保留最近 `CHECKPOINT_KEEP_LAST` 条；清理失败**不改取消结果**（终态已提交，检查点只是过程数据，下一次终态清理会再删一次），也不回滚。这是 `prune_checkpoints` 的第一个生产调用点。
+  - 停止路径的口径按需求方决定改为「所有停止原因（占用释放 / 断连 / 服务关闭）都不收尾 `PAUSED`」：任务原文只写了 `server_shutdown`，若另两条仍取消 `PAUSED`，一次断连或关掉客户端就会把可恢复的中断态永久判死，与 P6A-015 的「关掉再打开仍看到中断态」矛盾。实现上新加 `Repository::stoppable_statuses()`（从 `RunStatus::ACTIVE` 派生、去掉 `Paused`，不另写状态清单），`cancel_session_runs` 改用它。
+  - 第 3、4 条不需要新代码：自愈只写 `status` / `interrupted_reason` / `updated_at_ms` 且 `WHERE status = 'RUNNING'`，因此二次强杀仍是同一个 `PAUSED` 行、`resume_count` 不重置；终态行既不是 `RUNNING` 也不是 `PAUSED`，自愈与恢复都命中 0 行。
+  - 竞态由数据库判定：取消是 `WHERE status IN (未结束四态)`、恢复是 `WHERE status = 'PAUSED'`，先写者生效；未命中一方不改行、不产事件（`manager-agent::cancel_run` 只在取消成功时才登记取消信号）。
+  - 门禁证据：`cargo check --workspace --all-targets`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全部 0 退出。
+  - 用例证据（`resume.terminal`，数字取自用例返回的结果条目）：检查点 25 条 → 取消后 20 条；二次取消返回「不可取消」且 `status` / `error` / `finishedAtMs` / `updatedAtMs` 逐字段不变；优雅关闭后进程自行退出（exit code 0）而中断态逐字段不变；恢复中再次强杀 `resumeCount` 由 0 涨到 1 后保持不变；取消后发消息只执行新 Run（`run_completed`）。用例的服务端快照 `audit.panics = 0`，敏感串命中 0。
+  - 用例侧新增的共享动作按 `D-P2.1-013` 放在 `crates/bin-tests/src/util`：`flow::Reopened`（在既有会话上重建链路，跨重启复用同一条对话）、`flow::{create_session,send_message,run_get,messages}`、`server::Server::wait_exit`（等优雅关闭自行走完）。断言只引用接口响应与库内行，不读日志与事件文件。
 ---
 
 ## Batch D：Run Persistence 可观测与客户端（P6A-013 ~ P6A-016）
