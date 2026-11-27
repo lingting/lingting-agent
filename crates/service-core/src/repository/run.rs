@@ -96,6 +96,25 @@ impl Repository {
             .rows_affected();
         Ok(affected > 0)
     }
+    /// 把 `PAUSED` 的 Run 推进到 `RUNNING`，并在同一语句里累加恢复次数（D-P6-006 / D-P6-007）。
+    ///
+    /// 条件更新以 `status = 'PAUSED'` 为前提：影响 0 行说明已被别的触发推进、或已被取消，
+    /// 调用方据此直接放弃（不产事件、不改行）。`PAUSED` 是唯一会写 `interrupted_reason` 的状态
+    /// （D-P6-004），因此推进时一并清空，恢复后的行与正常执行的行同形。
+    pub async fn resume_paused_run(&self, run_id: &str, now_ms: i64) -> Result<bool, DbError> {
+        let affected = sqlx::query(
+            "UPDATE runs SET status = ?, resume_count = resume_count + 1, interrupted_reason = NULL, \
+             updated_at_ms = ? WHERE id = ? AND status = ?",
+        )
+        .bind(RunStatus::Running.to_string())
+        .bind(now_ms)
+        .bind(run_id)
+        .bind(RunStatus::Paused.to_string())
+        .execute(self.pool())
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
+    }
 
     /// 完成 Run：写入助手消息、刷新会话，并把 Run 落成 `COMPLETED`（同一个事务）。
     ///
@@ -225,6 +244,7 @@ impl Repository {
     /// 统计执行中的 Run 数量（只数 `RUNNING`），供探活接口报告运行状态（P2-025 第 3 条）。
     ///
     /// 排队中的 `QUEUED` 不计入：它没有占用模型连接，把它算进「运行中」会让并发上限的观测失真。
+    /// 可恢复中断态 `PAUSED` 同样不计入（D-P6-011）：进程里根本没有正在执行的 Run。
     pub async fn running_run_count(&self) -> Result<i64, DbError> {
         sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status = ?")
             .bind(RunStatus::Running.to_string())
@@ -354,31 +374,33 @@ impl Repository {
         Ok(true)
     }
 
-    /// 启动自愈：上一次进程残留的执行中 Run 落 `FAILED`；排队中与等确认的 Run 落 `CANCELLED`（D-P2-030）。
+    /// 启动自愈：上一次进程残留的执行中 Run 落 `PAUSED`（可恢复中间态，D-P6-004）；
+    /// 排队中与等确认的 Run 落 `CANCELLED`（D-P2-030）。
     ///
+    /// `PAUSED` 只写中断原因，**不写** `finished_at_ms`：它不是终态，也没有「结局」。
+    /// `RUNNING` 期间已写入的开始标记（`tool_calls` 的 `PENDING` 行）保持原样——
+    /// 恢复入口靠它区分「从未开始」与「可能已执行」（D-P6-007）。
     /// 等确认（`WAITING`）也要清理：确认的发起方（客户端连接）随进程一起消失，留着挂起态只会永久占位。
-    /// 三者都在同一个事务里完成，避免半自愈状态；返回被处理的 Run 数量。
+    /// 三个分支都在同一个事务里完成，避免半自愈状态；返回被处理的 Run 数量。
     pub async fn with_orphan_healing(
         &self,
-        running_error: &str,
+        interrupted_reason: &str,
         queued_error: &str,
         now_ms: i64,
     ) -> Result<usize, DbError> {
-        let failed = RunStatus::Failed.to_string();
+        let paused = RunStatus::Paused.to_string();
         let cancelled = RunStatus::Cancelled.to_string();
         let running = RunStatus::Running.to_string();
         let mut transaction = self.begin().await?;
-        let healed_running = sqlx::query(
-            "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ? WHERE status = ?",
-        )
-        .bind(&failed)
-        .bind(running_error)
-        .bind(now_ms)
-        .bind(now_ms)
-        .bind(&running)
-        .execute(transaction.connection())
-        .await?
-        .rows_affected();
+        let healed_running =
+            sqlx::query("UPDATE runs SET status = ?, interrupted_reason = ?, updated_at_ms = ? WHERE status = ?")
+                .bind(&paused)
+                .bind(interrupted_reason)
+                .bind(now_ms)
+                .bind(&running)
+                .execute(transaction.connection())
+                .await?
+                .rows_affected();
         let healed_queued = sqlx::query(
             "UPDATE runs SET status = ?, error = ?, updated_at_ms = ?, finished_at_ms = ?, \
              pending_tool_call_id = NULL, pending_tool_round = NULL \

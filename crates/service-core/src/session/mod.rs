@@ -13,7 +13,7 @@ mod service;
 /// 让装配层与 Handler 不必直接依赖 `agent-tool`（`cargo tree -i agent-tool` 的消费者只有
 /// `agent-runtime` / `service-core` / `bin-tests`）。
 pub use agent_tool::{ToolAuditListParams, ToolCallVO};
-pub use driver::{RunCancel, RunDriver, RunInput, RunOutcome, RunStop};
+pub use driver::{ResumePlan, RunCancel, RunDriver, RunInput, RunOutcome, RunStop};
 pub use error::SessionError;
 pub use pending::{PendingToolCall, ResumeDecision};
 pub use service::{REASON_CANCELLED, SessionService};

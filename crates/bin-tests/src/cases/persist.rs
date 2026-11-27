@@ -1,7 +1,7 @@
 //! 持久化用例：重启不丢数据、迁移可重复、残留状态被自愈、占用不恢复（P2-014）。
 //!
 //! 用例自管服务端（`CaseKind::SelfServed`）：同一 `AGENT_HOME` 与端口上先启动、停掉、再启动，
-//! 才能断言「首次运行写入的数据在第二次启动后仍在」与「重启把残留 Run 自愈成终态」。
+//! 才能断言「首次运行写入的数据在第二次启动后仍在」与「重启把残留 Run 自愈成可恢复中断态」。
 //! 断言一律通过生成的 SDK，不直接读数据库。
 //!
 //! 唯一的例外是 `persist.migration` 的「`0001` 时代」夹具（R-6）：它必须在服务端启动**之前**
@@ -25,8 +25,8 @@ use crate::util::flow::{self, occupy, register};
 use crate::util::server::{Server, capture};
 /// 等待 Run 抵终态的上限：Mock 生产方按固定间隔吐增量，留足余量。
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
-/// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（与 `manager-agent` 的 `HEAL_RUNNING` 逐字一致）。
-const HEAL_RUNNING: &str = "服务重启，执行中的 Run 已终止";
+/// 启动自愈的中断原因：执行中的 Run 落 `PAUSED`（与 `manager-agent` 的 `INTERRUPTED_RUNNING` 逐字一致）。
+const INTERRUPTED_RUNNING: &str = "服务重启，执行中的 Run 已中断";
 /// `0001` 的建表脚本：与 `lib-db` 的产品迁移同源（`include_str!` 引同一份文件，不复制 SQL）。
 const INIT_0001: &str = include_str!("../../../lib-db/migrations/0001_init.sql");
 /// 数据目录下的库文件名（与 `lib-db` 的 `DATABASE_FILE` 一致；本用例不引入该 Crate）。
@@ -94,7 +94,7 @@ fn occupancy_reset(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move { occupancy_reset_body(context).await })
 }
 
-/// 执行中的 Run 在服务被强杀后自愈成 `FAILED`，且终态不被后续重启覆盖（V-2、D-4）。
+/// 执行中的 Run 在服务被强杀后自愈成 `PAUSED`（可恢复中断态），且该态不被后续重启覆盖（D-P6-004、V-2）。
 fn running_heal(context: &TestContext) -> CaseFuture<'_> {
     Box::pin(async move { running_heal_body(context).await })
 }
@@ -124,32 +124,42 @@ async fn running_heal_body(context: &TestContext) -> Result<CaseOutcome> {
     let server = restarted(context, server, port).await?;
     let healed = run_of(context, &sent.run.id).await?;
     ensure!(
-        healed.status == RunStatus::Failed,
-        "重启后执行中的 Run 应为 Failed，实际 {:?}",
+        healed.status == RunStatus::Paused,
+        "重启后执行中的 Run 应为 Paused（可恢复中断态），实际 {:?}",
         healed.status
     );
     ensure!(
-        healed.error.as_deref() == Some(HEAL_RUNNING),
-        "自愈原因应为 {HEAL_RUNNING}，实际 {:?}",
-        healed.error
+        healed.interrupted_reason.as_deref() == Some(INTERRUPTED_RUNNING),
+        "中断原因应为 {INTERRUPTED_RUNNING}，实际 {:?}",
+        healed.interrupted_reason
     );
-    let finished_at_ms = healed.finished_at_ms.context("自愈后的 Run 应有结束时间")?;
+    ensure!(
+        healed.finished_at_ms.is_none(),
+        "可恢复中断态不应有结束时间，实际 {:?}",
+        healed.finished_at_ms
+    );
+    ensure!(
+        healed.resume_count == 0,
+        "尚未恢复的 Run 的 resumeCount 应为 0，实际 {}",
+        healed.resume_count
+    );
     ensure!(
         !has_assistant_message(context, &session.id).await?,
         "自愈不应补写助手消息"
     );
 
-    // 第二次重启：已落终态的 Run 不被自愈覆盖（D-4）。
+    // 第二次重启：已是中断态的 Run 不被自愈覆盖（`WHERE status = 'RUNNING'` 天然保证）。
     let _server = restarted(context, server, port).await?;
     let again = run_of(context, &sent.run.id).await?;
     ensure!(
-        again.status == RunStatus::Failed && again.error.as_deref() == Some(HEAL_RUNNING),
-        "终态 Run 不应被再次自愈改写：{again:?}"
+        again.status == RunStatus::Paused && again.interrupted_reason.as_deref() == Some(INTERRUPTED_RUNNING),
+        "中断态 Run 不应被再次自愈改写：{again:?}"
     );
     ensure!(
-        again.finished_at_ms == Some(finished_at_ms),
-        "终态 Run 的结束时间不应被改写：{:?} != {finished_at_ms}",
-        again.finished_at_ms
+        again.finished_at_ms.is_none()
+            && again.resume_count == healed.resume_count
+            && again.last_checkpoint_seq == healed.last_checkpoint_seq,
+        "中断态 Run 的恢复列不应被改写：{again:?} != {healed:?}"
     );
 
     // 异常不留 RUNNING，且进程内无 panic（L-5）：由审计计数判定，不读日志文本。
@@ -163,8 +173,8 @@ async fn running_heal_body(context: &TestContext) -> Result<CaseOutcome> {
 
     Ok(vec![
         format!("强杀前 Run 状态 {:?}，无结束时间", before.status),
-        format!("重启后 Run 状态 {:?}，原因 {HEAL_RUNNING}", healed.status),
-        "第二次重启后终态与结束时间保持不变，无助手消息".to_string(),
+        format!("重启后 Run 状态 {:?}，中断原因 {INTERRUPTED_RUNNING}", healed.status),
+        "第二次重启后中断态与恢复列保持不变，无助手消息".to_string(),
         "服务端 audit.panics = 0（panic 由进程内钩子计数，与日志级别无关）".to_string(),
     ])
 }

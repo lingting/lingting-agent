@@ -31,8 +31,12 @@ use crate::holder::AgentHolder;
 use crate::runtime::{JournalConfig, RuntimeState};
 use crate::skill::build_skills;
 
-/// 启动自愈的原因文本：执行中的 Run 落 `FAILED`（无法确认是否已产生结果）。
-const HEAL_RUNNING: &str = "服务重启，执行中的 Run 已终止";
+/// 启动自愈的中断原因：执行中的 Run 落 `PAUSED`（可恢复中间态，D-P6-004）。
+///
+/// 文案是 `runs.interrupted_reason` 的唯一来源，恢复入口据此给出「上次执行被中断：…」
+/// 的简短原因（D-P6-007 的白名单只认这一句）。旧的终态文案「服务重启，执行中的 Run 已终止」
+/// 留给「判定不可恢复」的终态路径使用，当前没有调用点。
+const INTERRUPTED_RUNNING: &str = "服务重启，执行中的 Run 已中断";
 /// 启动自愈的原因文本：排队中的 Run 落 `CANCELLED`（占用不恢复，D-P1.1-007）。
 const HEAL_QUEUED: &str = "服务重启，排队中的 Run 已取消";
 
@@ -91,11 +95,11 @@ pub async fn assemble_with(database_path: impl AsRef<Path>, options: AssemblyOpt
 
     let repository = Arc::new(Repository::new(Arc::clone(&database)));
     let healed = repository
-        .with_orphan_healing(HEAL_RUNNING, HEAL_QUEUED, time::now_millis())
+        .with_orphan_healing(INTERRUPTED_RUNNING, HEAL_QUEUED, time::now_millis())
         .await
         .context("启动自愈失败")?;
     if healed > 0 {
-        tracing::warn!(healed, "启动自愈：残留 Run 已落成终态");
+        tracing::warn!(healed, "启动自愈：残留 Run 已处理（执行中的转为可恢复中断态）");
     }
 
     let provider = ProviderService::new(options.provider);

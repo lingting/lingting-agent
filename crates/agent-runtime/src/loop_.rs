@@ -3,10 +3,13 @@
 //! 时序固定（D-P2-008 / D-P2-029 / D-P3-024）：
 //!
 //! 1. 取全局并发许可（排队超时即落 `FAILED`，不发起上游请求）；
-//! 2. 推进 `QUEUED → RUNNING`：排队期间 Run 停在 `QUEUED`，`RUNNING` 才代表正在执行；
+//! 2. 推进到 `RUNNING`：正常 Run 从 `QUEUED` 推进；中断恢复的 Run 从 `PAUSED` 推进并在同一语句里
+//!    累加恢复次数（D-P6-006），两者都是条件更新，影响 0 行即静默放弃（不产事件）；
 //! 3. 组装 Context：模型预算 + 系统提示词 + 历史 + 本次输入，超预算落 `FAILED`；
-//! 4. 发 `run_started`（携带助手消息 ID 与估算输入 token），随后写起点检查点（`MODEL_DONE`）；
-//! 5. 恢复本 Run 已落库的工具轨迹，先把上一个挂起的工具组收尾（批准执行 / 驳回回灌）；
+//! 4. 发 `run_started`（携带助手消息 ID 与估算输入 token；恢复的 Run 带中断原因）；
+//!    正常路径随后写起点检查点（`MODEL_DONE`）——恢复路径不补写，它没有新的已提交边界；
+//! 5. 恢复本 Run 已落库的工具轨迹：确认唤醒先收尾挂起的工具组（批准执行 / 驳回回灌）；
+//!    中断恢复则把未配对的调用**一律不重跑**，改为固定通知文本回灌（D-P6-007）；
 //! 6. 逐轮：请求 Provider（带工具清单）→ 增量即事件 → 有工具调用则执行并按轮落库，
 //!    提交后才写检查点（见 [`checkpoint`]）；工具调用执行前先写「开始标记」；
 //! 7. 没有工具调用的那一轮 → 助手消息 + `COMPLETED` 同事务提交，提交后才发 `run_completed`。
@@ -18,13 +21,13 @@
 //! 取消一律 `select!` 命中后 drop 模型流或工具批次：连接随之关闭，不留下继续烧 token
 //! 或继续执行工具的后台任务。
 
-mod checkpoint;
+pub(crate) mod checkpoint;
 mod request;
 mod tool;
 mod trace;
 
 use agent_context_core::{ContextItem, ContextPolicy};
-use agent_core::session::{CheckpointPhase, Message, MessageRole, Run, RunEventKind, RunStatus};
+use agent_core::session::{CheckpointPhase, LlmToolCallVO, Message, MessageRole, Run, RunEventKind, RunStatus};
 use agent_route::{LlmError, LlmMessage, LlmToolCall};
 use lib_core::{id, time};
 use service_core::session::{RunInput, RunOutcome, RunStop};
@@ -42,6 +45,7 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     let RunInput {
         run,
         prompt,
+        resume,
         events,
         cancel,
     } = input;
@@ -54,12 +58,17 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
         Acquired::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
     };
 
-    // 二、推进到 RUNNING：拿到许可之后才算「执行中」（P2-025），排队期间仍停在 QUEUED。
-    match runtime.service.start_run(&run.id).await {
+    // 二、推进到 RUNNING：正常 Run 从 `QUEUED` 推进；恢复的 Run 从 `PAUSED` 推进并累加恢复次数。
+    //    两者都是条件更新，影响 0 行说明已被别的路径推进 / 已终态，这里不产出任何事件。
+    let advanced = match resume.is_some() {
+        true => runtime.service.resume_paused_run(&run.id).await,
+        false => runtime.service.start_run(&run.id).await,
+    };
+    match advanced {
         Ok(true) => {}
         Ok(false) => {
-            // 排队期间被取消 / 已被别的路径落成终态 / 仍在等确认：不产出任何事件。
-            info!(run_id = %run.id, "Run 已不在排队中，跳过执行");
+            // 排队期间被取消 / 已被别的路径落成终态 / 仍在等确认 / 已被别人恢复：不产出任何事件。
+            info!(run_id = %run.id, "Run 已不在可推进状态，跳过执行");
             return RunOutcome::Cancelled {
                 reason: error::CANCEL_FALLBACK.to_string(),
             };
@@ -69,6 +78,7 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
             return RunOutcome::SessionGone;
         }
     }
+
     // 三、Context：模型预算、系统提示词、历史（不含本次输入）与本次输入。
     let prepared = match prepare(runtime, &run, &prompt).await {
         Ok(prepared) => prepared,
@@ -87,12 +97,19 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     started.status = Some(RunStatus::Running);
     started.message_id = Some(assistant_message_id.clone());
     started.input_tokens = Some(prepared.input_tokens);
+    // 恢复的 Run 在首个 `run_started` 上带同一句简短原因（复用既有字段，不新增事件类型，D-P6-007）。
+    if resume.is_some() {
+        started.error = Some(error::interrupted_notice(run.interrupted_reason.as_deref()));
+    }
     if !feed.send(started).await {
         return RunOutcome::SessionGone;
     }
 
-    // 四.5、起点检查点：到用户消息为止的进度都已经落库，这是恢复时的第一个可用边界。
-    if let Err(public) = checkpoint::append(runtime, &run, CheckpointPhase::ModelDone, 0, Vec::new()).await {
+    // 四.5、起点检查点：只在正常路径写。恢复的 Run 上次的进度已经有检查点，
+    //      这里没有新的已提交边界，补一条只会让序号与「已提交到哪」脱节。
+    if resume.is_none()
+        && let Err(public) = checkpoint::append(runtime, &run, CheckpointPhase::ModelDone, 0, Vec::new()).await
+    {
         return fail(runtime, &run, &mut feed, public).await;
     }
 
@@ -101,13 +118,32 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
         return fail(runtime, &run, &mut feed, LlmError::Unconfigured.public_message()).await;
     };
 
-    // 六、工具清单与本 Run 已落库的轨迹：挂起唤醒后从「最后一个未配对的调用」续上。
+    // 六、工具清单与本 Run 已落库的轨迹：确认唤醒从「待确认的调用」续上；中断恢复则先收尾
+    //    上一次留下的未配对调用（一律不重跑），再进多轮。
     let tools = tool::definitions(runtime);
     let recovered = match trace::recover(&runtime.service, &run).await {
         Ok(recovered) => recovered,
         Err(public) => return fail(runtime, &run, &mut feed, public).await,
     };
-    let mut trace = match tool::resume(runtime, &run, &mut feed, recovered, &cancel).await {
+    let resumed = match resume {
+        None => tool::resume(runtime, &run, &mut feed, recovered, &cancel).await,
+        Some(point) => {
+            // 判定阶段的恢复点与轨迹必须逐项相同：不一致说明检查点与轨迹在判定之后被改过，
+            // 这种「半恢复」不允许继续执行（D-P6-007）。
+            if point.round != recovered.trace.rounds() || !same_calls(&point.unpaired, &recovered.unpaired) {
+                return fail(runtime, &run, &mut feed, error::RESUME_PHASE_MISMATCH).await;
+            }
+            info!(
+                run_id = %run.id,
+                checkpoint_seq = point.checkpoint_seq,
+                phase = ?point.phase,
+                round = point.round,
+                "从检查点恢复执行"
+            );
+            tool::resume_interrupted(runtime, &run, &mut feed, recovered).await
+        }
+    };
+    let mut trace = match resumed {
         Resumed::Ready(trace) => trace,
         Resumed::Cancelled => return cancelled(runtime, &run, &mut feed, cancel.stop()).await,
         Resumed::Failed(public) => return fail(runtime, &run, &mut feed, public).await,
@@ -234,6 +270,15 @@ fn add_usage(total: Option<(i64, i64)>, next: Option<(i64, i64)>) -> Option<(i64
         (Some(total), None) => Some(total),
         (None, next) => next,
     }
+}
+
+/// 判定阶段的未配对调用与轨迹里的必须逐条相同：同一份数据的两次读取，不一致即「半恢复」。
+fn same_calls(planned: &[LlmToolCallVO], traced: &[LlmToolCall]) -> bool {
+    planned.len() == traced.len()
+        && planned
+            .iter()
+            .zip(traced)
+            .all(|(planned, traced)| planned.id == traced.id)
 }
 
 /// 成功收尾：助手消息与 `COMPLETED` 同事务提交；条件更新影响 0 行即静默退出（D-P2-009）。

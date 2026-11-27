@@ -177,6 +177,8 @@ async fn run_one(
         .drive(RunInput {
             run,
             prompt,
+            // 恢复点由队列在拾取 `PAUSED` Run 时经 `plan_resume` 判定（P6A-011 接入）。
+            resume: None,
             events: producer.clone(),
             cancel,
         })

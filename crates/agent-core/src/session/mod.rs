@@ -12,7 +12,7 @@ mod run;
 
 pub use checkpoint::{
     CHECKPOINT_FORMAT_VERSION, CHECKPOINT_KEEP_LAST, CheckpointDecodeError, CheckpointPayload, CheckpointPhase,
-    RunCheckpoint, ToolCallDigest,
+    ResumePoint, RunCheckpoint, ToolCallDigest,
 };
 pub use dto::{LlmToolCallVO, Message, MessageRole, MessageSendVO, Run, RunStatus, SessionSummary};
 pub use event::{RunEvent, RunEventKind, ToolCallStatus};

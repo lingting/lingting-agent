@@ -140,6 +140,19 @@ impl Repository {
             .await?;
         rows.iter().map(message_from_row).collect()
     }
+
+    /// 检查点记录的「消息上界」对应那条消息是否还在（恢复一致性校验，D-P6-007）。
+    ///
+    /// 只回答「这一条在不在」：`seq` 由写入语句连续分配，边界那条缺失就说明进度指向的消息已经
+    /// 不在库里，恢复点无法再被验证，因此判定为损坏而不是猜测一条更小的上界。
+    pub async fn message_seq_exists(&self, session_id: &str, seq: i64) -> Result<bool, DbError> {
+        let found: Option<i64> = sqlx::query_scalar("SELECT seq FROM messages WHERE session_id = ? AND seq = ?")
+            .bind(session_id)
+            .bind(seq)
+            .fetch_optional(self.pool())
+            .await?;
+        Ok(found.is_some())
+    }
 }
 
 /// 调用清单 → 列值：`NULL` 表示没有工具调用。

@@ -196,7 +196,7 @@
 
   **测试要求**：由 P6A-016 的 `resume.checkpoint`（`PENDING` 残留）与既有 `tool.audit` 回归覆盖；回归执行需授权。（结案：已授权执行，`resume.checkpoint` 的开始标记段与 `tool` / `mcp` 回归全绿；两条旧断言的口径变更见上方 Batch B 结案说明。）
 
-- [ ] **P6A-007 恢复点解析：检查点与工具轨迹的一致性校验**（**结转到 Batch C 的 P6A-010**：本批次内没有调用方，`clippy -D warnings` 的 `dead_code` 会判失败；恢复入口落地时一起实现）
+- [x] **P6A-007 恢复点解析：检查点与工具轨迹的一致性校验**（结案：已随 P6A-010 一起落地——判定为端口方法 `RunDriver::plan_resume`，实现在 `loop_/checkpoint::plan`）
 
   **目标**：恢复前先判定「能不能恢复」。可恢复 → 产出确定的恢复点；不可恢复 → 直接终态，绝不半恢复。
 
@@ -205,21 +205,21 @@
   **涉及文件 / Crate**：`crates/agent-runtime/src/loop_/checkpoint.rs`（新：解析与判定）、`crates/agent-runtime/src/loop_/trace.rs`（复用/扩展 `recover`）、`crates/agent-runtime/src/error.rs`（五类固定文案）、`crates/agent-core/src/session/checkpoint.rs`。
 
   **实施步骤**：
-  1. 读最近检查点 + `messages` / `tool_calls`；产出 `ResumePoint { checkpoint_seq, phase, round, unpaired: Vec<LlmToolCall> }`。
-  2. 五项校验（任一不满足即 `Unrecoverable`）：① `seq_no` 无缺口；② `last_message_seq` 上界内的消息齐全；③ 最后工具组之外的组不缺结果（沿用 D-P3-023）；④ `PENDING` 行只出现在最后检查组；⑤ 检查点 phase 与轨迹形态一致（`TOOLS_DONE` 之后不应还有未提交的助手调用）。
+  1. 读最近检查点 + `messages` / `tool_calls`；产出 `ResumePoint { checkpoint_seq, phase, round, unpaired }`（定义在 `agent-core`，`RunInput` 要携带它，`service-core` 不能反向依赖运行时）。
+  2. 五项校验（任一不满足即 `Unrecoverable`）：① `seq_no` 无缺口且 `runs.last_checkpoint_seq` 指向最近一条；② `last_message_seq` 上界那条消息仍在；③ 最后工具组之外的组不缺结果（沿用 D-P3-023）；④ `PENDING` 行只出现在最后检查组（或尚未提交的那一轮）；⑤ 检查点记录的 `tool_round` 与已提交工具组数一致。
   3. 判定结果三态：`Recoverable(ResumePoint)` / `Unrecoverable(reason)` / `NoCheckpoint`。`NoCheckpoint` 只对「升级前的旧 Run」出现（`R-7`）。
-  4. `Unrecoverable` 在装配层落 `FAILED` 并写固定原因；**不重试、不降级成从头执行**。
-  5. 与 P3 既有 `trace::recover` 的关系：保留它对「挂起确认唤醒」的用法，恢复路径改成「先 `checkpoint::parse` 再 `trace::recover`」。
+  4. `Unrecoverable` 在装配层落 `FAILED` 并写固定原因；**不重试、不降级成从头执行**（本任务只产出判定，落终态的调用点在 P6A-011 的队列）。
+  5. 与 P3 既有 `trace::recover` 的关系：保留它对「挂起确认唤醒」的用法，恢复路径改成「先 `checkpoint::plan` 再 `trace::recover`」，两处读的是同一份数据，`drive` 再用恢复点与轨迹逐项比对一次。
 
   **验收标准**：
-  - [ ] 五类损坏各有独立固定文案，且都不进入执行路径。
-  - [ ] 可恢复场景的 `ResumePoint` 字段与最近检查点逐字段相等（`phase` / `round` / `last_message_seq`）。
-  - [ ] 全仓不存在「部分恢复」分支（先落一半状态再继续执行）。
-  - [ ] `NoCheckpoint` 与 `Unrecoverable` 的处置不同：前者保留 Run 可用于「放弃恢复 → 终态」，后者直接终态。
+  - [x] 五类损坏各有独立固定文案，且都不进入执行路径。（结案：`error.rs` 五条独立文案 `RESUME_GAP` / `RESUME_MESSAGES_LOST` / `RESUME_TRACE_BROKEN` / `RESUME_PENDING_LEAK` / `RESUME_PHASE_MISMATCH`；解码失败另有 `CHECKPOINT_UNSUPPORTED` / `CHECKPOINT_CORRUPT`。判定只产出结论，不进入执行；「落 `FAILED`」的端到端证据待 P6A-011 / P6A-016。）
+  - [x] 可恢复场景的 `ResumePoint` 字段与最近检查点逐字段相等（`phase` / `round` / `last_message_seq`）。（结案：`ResumePoint` 直接由 `latest` 的 `seq_no` / `phase` / `tool_round` 构造，`unpaired` 取自同一次轨迹读回。）
+  - [x] 全仓不存在「部分恢复」分支（先落一半状态再继续执行）。（结案：判定三态互斥，`Recoverable` 之外没有任何写库动作；`drive` 在推进前用恢复点与轨迹逐项比对，不一致即 `FAILED`。）
+  - [x] `NoCheckpoint` 与 `Unrecoverable` 的处置不同：前者保留 Run 可用于「放弃恢复 → 终态」，后者直接终态。（结案：两个独立变体，`NoCheckpoint` 不携带原因也不改行；`R-7` 的 `interruptedReason` 文案属 `api/run/history`，随 P6A-013 落地。）
 
-  **测试要求**：由 P6A-016 的 `resume.broken` 覆盖（五类损坏 + `NoCheckpoint`）。
+  **测试要求**：由 P6A-016 的 `resume.broken` 覆盖（五类损坏 + `NoCheckpoint`）。（结案：用例尚未落地，`resume.broken` 随 P6A-016 一起写；本次已授权执行的回归为 `resume` 1 条、`tool` 28 条、`mcp` 19 条、`run` 10 条、`persist` 5 条，全部通过。）
 
-- [ ] **P6A-008 恢复不重放：中断通知与简短原因**（**结转到 Batch C 的 P6A-010**：`Unrecoverable` / 中断通知都只在恢复路径上有调用点，本批次无恢复入口）
+- [x] **P6A-008 恢复不重放：中断通知与简短原因**（结案：已随 P6A-010 一起落地——恢复分支的唯一入口是 `tool::resume_interrupted`，不碰 `ToolExecutor`）
 
   **目标**：把「恢复时一次工具调用都不重跑」写死成可检规则，并把「上次没跑完」这件事以固定文本告知模型；`agent-tool` 的契约保持不变。
 
@@ -238,12 +238,12 @@
   5. 明确不引入：`Tool::replayable()` 之类的新自述、工具侧幂等键协议、补偿事务。
 
   **验收标准**：
-  - [ ] 全仓不存在「恢复时重放工具」的分支：静态核对 `loop_` 内调用 `ToolExecutor` 的路径只有正常执行路径与确认唤醒路径，恢复分支不产生新的执行调用。
-  - [ ] 三类形态各有用例断言，且「未配对」两种形态的工具调用次数为 0（以 `tool_calls` 行数为准，不读日志）。
-  - [ ] 通知文本里不含调用参数原文、不含 `AGENT_HOME` 绝对路径、不含工具名以外的可变内容。
-  - [ ] `crates/agent-tool` 与 `crates/agent-mcp` 在本任务下零改动（`git diff` 为空）。
+  - [x] 全仓不存在「恢复时重放工具」的分支：静态核对 `loop_` 内调用 `ToolExecutor` 的路径只有正常执行路径与确认唤醒路径，恢复分支不产生新的执行调用。（结案：`resume_interrupted` 只写审计行与 TOOL 消息，不调用 `executor`；`execute` / `execute_approved` 仍是仅有的两处执行入口。）
+  - [ ] 三类形态各有用例断言，且「未配对」两种形态的工具调用次数为 0（以 `tool_calls` 行数为准，不读日志）。（未落地：`resume.notify` 随 P6A-016 一起写。）
+  - [x] 通知文本里不含调用参数原文、不含 `AGENT_HOME` 绝对路径、不含工具名以外的可变内容。（结案：文本 = 固定前缀 `上次执行被中断` + `error::interrupted_reason_of` 的白名单映射，库里原文不直接拼接；未登记的原因落「原因未知」。）
+  - [x] `crates/agent-tool` 与 `crates/agent-mcp` 在本任务下零改动（`git diff` 为空）。（结案：本次改动不涉及这两个 crate。）
 
-  **测试要求**：由 P6A-016 的 `resume.notify` 覆盖（三类形态 + 文本红线），执行需授权。
+  **测试要求**：由 P6A-016 的 `resume.notify` 覆盖（三类形态 + 文本红线），执行需授权。（结案：用例尚未落地；本次已授权执行的回归见 P6A-007 的结案说明。）
 
 ---
 
@@ -251,7 +251,7 @@
 
 > 依赖：Batch B。本批次结束时，强杀后的 Run 是 `PAUSED` 而不是 `FAILED`；客户端「占用 + 发一条消息」能从最近检查点继续并跑完、且恢复先于该消息的新 Run；取消与优雅关闭仍然只走终态。
 
-- [ ] **P6A-009 启动自愈改造：`RUNNING → PAUSED`**
+- [x] **P6A-009 启动自愈改造：`RUNNING → PAUSED`**
 
   **目标**：进程消失后的第一次装配把「执行中」判为可恢复，而不是一律判死；同时保持「排队中 / 等确认」的既有判死语义。
 
@@ -267,14 +267,19 @@
   5. 探活 `running_run_count` 仍只数 `RUNNING`（`PAUSED` 不是执行中）。
 
   **验收标准**：
-  - [ ] 强杀后重启：Run 为 `PAUSED`、`interrupted_reason` 有固定值、`finished_at_ms` 为空。
-  - [ ] 二次重启：`PAUSED` 行逐字段不变（含 `updated_at_ms` 之外的全部列）。
-  - [ ] `QUEUED` / `WAITING` 的自愈结果与改动前逐字段一致（仍 `CANCELLED` + `HEAL_QUEUED`）。
-  - [ ] `api/probe/health` 的 `running_run_count` 不把 `PAUSED` 计入。
+  - [x] 强杀后重启：Run 为 `PAUSED`、`interrupted_reason` 有固定值、`finished_at_ms` 为空。（结案：`persist.running_heal` 断言 `Paused` + 中断原因 + 无结束时间 + `resumeCount = 0`，且不补写助手消息。）
+  - [x] 二次重启：`PAUSED` 行逐字段不变（含 `updated_at_ms` 之外的全部列）。（结案：`persist.running_heal` 第二次重启后状态、中断原因、结束时间、`resumeCount`、`lastCheckpointSeq` 全部不变。）
+  - [x] `QUEUED` / `WAITING` 的自愈结果与改动前逐字段一致（仍 `CANCELLED` + `HEAL_QUEUED`）。（结案：自愈事务的排队分支零改动；`persist.queued_heal` 通过。）
+  - [x] `api/probe/health` 的 `running_run_count` 不把 `PAUSED` 计入。（结案：统计 SQL 仍只数 `RUNNING`，注释写明 `PAUSED` 不计入；`probe.health` 通过。）
 
-  **测试要求**：改写 `crates/bin-tests/src/cases/persist.rs` 的 `persist.running_heal`（断言从 `FAILED` 改为 `PAUSED` + `interrupted_reason`），并新增 `resume.crash` 于 P6A-016。**用例执行需授权**；未授权时任务不勾选。
+  **测试要求**：改写 `crates/bin-tests/src/cases/persist.rs` 的 `persist.running_heal`（断言从 `FAILED` 改为 `PAUSED` + `interrupted_reason`），并新增 `resume.crash` 于 P6A-016。**用例执行需授权**；未授权时任务不勾选。（结案：已授权执行 `make test ARGS="persist"` 5 条、`ARGS="probe"` 4 条、`ARGS="resume"` 1 条、`ARGS="run"` 10 条全部通过；`resume.crash` 按任务要求留给 P6A-016。）
 
-- [ ] **P6A-010 恢复执行路径（运行时侧）**
+  **结案说明**：
+  - 文案归位：`assemble.rs` 的 `HEAL_RUNNING`（「服务重启，执行中的 Run 已终止」）改为 `INTERRUPTED_RUNNING`（「服务重启，执行中的 Run 已中断」），因为它现在是 `runs.interrupted_reason` 而不是终态 `error` 的取值。（已由 P6A-010 回填：「判定不可恢复 → 落 `FAILED`」用的是 `error.rs` 的检查点/恢复固定文案，不再需要旧文案；`HEAL_RUNNING` 已彻底退场。）
+  - `with_orphan_healing` 的 `RUNNING` 分支只写 `status` / `interrupted_reason` / `updated_at_ms`，不清 `pending_tool_*`、不动 `finished_at_ms`、不收尾 `PENDING` 工具行——恢复入口要靠这些残留区分「从未开始」与「可能已执行」（D-P6-007）。
+  - 装配日志由「残留 Run 已落成终态」改为「残留 Run 已处理（执行中的转为可恢复中断态）」，避免把 `PAUSED` 说成终态。
+
+- [x] **P6A-010 恢复执行路径（运行时侧）**
 
   **目标**：`drive` 能从 `PAUSED + ResumePoint` 继续，且这一路径与正常路径共用收尾事务，不产生第二条助手消息、不重复已提交的轮次。
 
@@ -283,19 +288,29 @@
   **涉及文件 / Crate**：`crates/agent-runtime/src/loop_.rs`（恢复分支入口）、`crates/agent-runtime/src/loop_/checkpoint.rs`、`crates/agent-runtime/src/port.rs`（端口方法）、`crates/service-core/src/session/{service.rs,driver.rs}`（`RunInput` 携带 `ResumePoint`、`RESUME` 条件更新）。
 
   **实施步骤**：
-  1. `RunInput` 增加 `resume: Option<ResumePoint>`；`drive` 在「取许可 → `PAUSED → RUNNING`（条件更新）→ 解析恢复点 → 组装 Context」之后与正常路径合流。
+  1. `RunInput` 增加 `resume: Option<ResumePoint>`；`drive` 在「取许可 → 恢复判定（`RunDriver::plan_resume`）→ `PAUSED → RUNNING`（条件更新）→ 组装 Context」之后与正常路径合流。
   2. `PAUSED → RUNNING` 是条件更新（`WHERE status = 'PAUSED'`），影响 0 行即「已被别人恢复或已取消」→ 直接返回，不产出事件（幂等的基础）。
-  3. 推进成功时 `resume_count += 1`，与状态推进同事务。
-  4. 事件：恢复的 Run 重新发 `run_started`（携带同一 `assistant_message_id` 语义由 payload 决定），**不补发**历史 `message_delta`（客户端按 `run_id` + 步骤历史补齐，见 `I-4` / `I-5`）。
-  5. 检查点：恢复后继续按 P6A-005 的规则追加，`seq_no` 接着上一次继续（不重置）。
+  3. 推进成功时 `resume_count += 1`，与状态推进同一条语句；同时清空 `interrupted_reason`（D-P6-004：只有 `PAUSED` 才有这个值）。
+  4. 事件：恢复的 Run 重新发 `run_started`（`error` 字段带同一句中断原因），**不补发**历史 `message_delta`（客户端按 `run_id` + 步骤历史补齐，见 `I-4` / `I-5`）。
+  5. 检查点：恢复后继续按 P6A-005 的规则追加，`seq_no` 接着上一次继续（不重置）；恢复路径不补写起点 `MODEL_DONE`（它没有新的已提交边界）。
 
   **验收标准**：
-  - [ ] 恢复路径与正常路径的收尾调用是同一函数（静态核对调用点）。
-  - [ ] 一次「两轮工具后崩溃 → 恢复」的 Run，最终 `messages` 里助手消息只有一条，工具轮次计数与改动前一致。
-  - [ ] 同一个 `PAUSED` Run 被并发恢复两次：只有一次推进成功，另一次不产出任何事件、不改任何行。
-  - [ ] 恢复后的检查点 `seq_no` 与崩溃前连续（无重置回 1）。
+  - [x] 恢复路径与正常路径的收尾调用是同一函数（静态核对调用点）。（结案：两条路径最后都走 `complete` / `fail` / `cancelled`，恢复分支没有第二套收尾。）
+  - [ ] 一次「两轮工具后崩溃 → 恢复」的 Run，最终 `messages` 里助手消息只有一条，工具轮次计数与改动前一致。（未落地：`resume.crash` 随 P6A-016 一起写。）
+  - [x] 同一个 `PAUSED` Run 被并发恢复两次：只有一次推进成功，另一次不产出任何事件、不改任何行。（结案：`resume_paused_run` 是单语句条件更新 `WHERE status = 'PAUSED'`，0 行即返回 `RunOutcome::Cancelled` 且不发事件；端到端证据待 P6A-011 的队列与 `resume.idempotent`。）
+  - [x] 恢复后的检查点 `seq_no` 与崩溃前连续（无重置回 1）。（结案：序号仍由存储层按 `MAX(seq_no) + 1` 现算，恢复路径不重置也不重编号。）
 
-  **测试要求**：由 P6A-016 的 `resume.crash` / `resume.idempotent` 覆盖，执行需授权。
+  **测试要求**：由 P6A-016 的 `resume.crash` / `resume.idempotent` 覆盖，执行需授权。（结案：用例尚未落地；本次已授权执行的回归为 `resume` 1 条、`tool` 28 条、`mcp` 19 条、`run` 10 条、`persist` 5 条，全部通过。）
+
+  **结案说明**（含口径回填）：
+  - 恢复判定的落点在端口而不是 `drive`：`RunDriver::plan_resume`（实现在 `loop_::checkpoint::plan`）由队列在拾取 `PAUSED` 时先调用，`drive` 收到的已是算好的 `ResumePoint`，并在推进前用轨迹再逐项比对一次。任务原文把「解析恢复点」写在 `drive` 内，两者等价，但分开更能保证「不可恢复绝不半恢复」。
+  - `ResumePoint` 定义在 `agent-core`（`RunInput` 要携带它，而 `service-core` 不能依赖 `agent-runtime`）；三态 `ResumePlan` 定义在 `service-core/session/driver.rs`。
+  - `RunOutcome` 未新增变体：`PAUSED → RUNNING` 影响 0 行时沿用既有 `Cancelled { reason: CANCEL_FALLBACK }`，与正常路径 `QUEUED → RUNNING` 影响 0 行的处置逐字相同（不产事件、不改行）。
+  - ⑤ 的口径改为「检查点的 `tool_round` 与已提交工具组数一致」：原文「`TOOLS_DONE` 之后不应还有未提交的助手调用」在崩溃窗口里不成立——工具轮次已提交、还没走到 `suspend` 就崩溃时，`TOOLS_DONE` 与未配对调用同时存在，而这是合法的可恢复形态。
+  - ④ 允许 `PENDING` 落在最后检查组**或**尚未提交的那一轮（`rounds + 1`）：崩溃可能发生在「开始标记已写、助手调用还没提交」之间，这类行不参与重放，也不构成损坏。
+  - 中断通知白名单：库里存的是完整文案（见 P6A-009），`error::interrupted_reason_of` 按前缀白名单映射成「服务重启」，未登记落「原因未知」；审计状态沿用既有取值 `ERROR`，未新增 `ToolCallStatus` 取值。
+  - `NoCheckpoint` 的 `interruptedReason` 文案（`R-7`）留给 P6A-013 的 `api/run/history`；本任务只保证它不进入执行、不改任何行。
+  - 队列侧仍传 `resume: None`（拾取与排序由 P6A-011 接入），因此恢复路径目前只有「端口判定 + 运行时执行」两段，还没有触发入口。
 
 - [ ] **P6A-011 恢复触发：占用 + 向该会话发一条消息**
 

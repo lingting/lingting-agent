@@ -229,6 +229,77 @@ pub(crate) async fn resume(
     }
 }
 
+/// 恢复：把上一次中断留下的未配对调用收尾，**一次都不重跑**（D-P6-007）。
+///
+/// 与 [`resume`] 的分工：`resume` 处理「客户端回传确认」的挂起唤醒（会执行批准过的调用）；
+/// 这里处理「进程消失」的中断恢复——未配对的调用一律不执行，改为一条 `ERROR` 审计 + 一条 TOOL
+/// 结果消息，正文是固定通知文本「上次执行被中断：<简短原因>」。全仓只有这一处产出该文本，
+/// `agent-tool` / `agent-mcp` 的契约因此零改动（P6A-008）。
+///
+/// 已配对的调用只进轨迹，同样不执行：恢复的所有分支都不产生工具执行调用。
+pub(crate) async fn resume_interrupted(
+    runtime: &AgentRuntime,
+    run: &Run,
+    feed: &mut Feed<'_>,
+    recovered: Recovered,
+) -> Resumed {
+    let Recovered { mut trace, unpaired } = recovered;
+    if unpaired.is_empty() {
+        return Resumed::Ready(trace);
+    }
+    // 未配对的调用属于最后一个已落库的工具组：轮次号就是轨迹里的组数。
+    let round = trace.rounds();
+    let notice = error::interrupted_notice(run.interrupted_reason.as_deref());
+    let calls: Vec<ToolCall> = unpaired.iter().map(|call| to_call(run, round, call)).collect();
+    let mut records = Vec::with_capacity(calls.len());
+    for call in &calls {
+        let pending = ToolCallRecord::pending(call, file_access(runtime, &call.tool_name));
+        // 开始标记：崩溃前写过的那条还在（`PENDING`），旧库行没有——两种形态都收敛到
+        // 「这条调用有开始、没有结果」，插行冲突不算错误（它就是恢复要用的那条证据）。
+        if let Err(failure) = runtime
+            .service
+            .begin_tool_call(&run.id, &run.session_id, &pending)
+            .await
+        {
+            warn!(run_id = %run.id, tool_call_id = %call.tool_call_id, %failure, "恢复时写入工具开始标记失败");
+            return Resumed::Failed(error::TOOL_TRACE_STORAGE.to_string());
+        }
+        let record = pending.finished(ToolCallStatus::Error, notice.clone(), 0);
+        match runtime.service.finish_tool_call(&run.id, &record).await {
+            Ok(true) => records.push(record),
+            Ok(false) => {
+                warn!(run_id = %run.id, tool_call_id = %record.tool_call_id, "恢复收尾未命中开始标记");
+                return Resumed::Failed(error::TOOL_TRACE_BROKEN.to_string());
+            }
+            Err(failure) => {
+                warn!(run_id = %run.id, tool_call_id = %record.tool_call_id, %failure, "恢复时收尾工具审计失败");
+                return Resumed::Failed(error::TOOL_TRACE_STORAGE.to_string());
+            }
+        }
+    }
+    let messages = match tool_messages(run, &records) {
+        Ok(messages) => messages,
+        Err(public) => return Resumed::Failed(public),
+    };
+    if let Err(public) = append(runtime, &messages).await {
+        return Resumed::Failed(public);
+    }
+    // 这一组调用到此终结：写一条 `TOOLS_DONE` 检查点（序号接着递增，不重置），
+    // 恢复后的轨迹因此不必再解释这组调用。
+    let digests = checkpoint::digests(&records);
+    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
+        return Resumed::Failed(public);
+    }
+    if !emit_completed(feed, &records).await {
+        return Resumed::SessionGone;
+    }
+    match trace::llm_messages(&messages) {
+        Ok(items) => trace.push_results(items),
+        Err(public) => return Resumed::Failed(public),
+    }
+    Resumed::Ready(trace)
+}
+
 /// 一批调用的执行结局。
 struct Executed {
     /// 终态记录（按输入顺序；不含需要确认的那条）。

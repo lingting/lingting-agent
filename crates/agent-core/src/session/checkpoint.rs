@@ -10,7 +10,7 @@
 use framework_proc_auto::auto_enum;
 use serde::{Deserialize, Serialize};
 
-use super::ToolCallStatus;
+use super::{LlmToolCallVO, ToolCallStatus};
 
 /// 检查点格式版本：全仓只在这里定义一次，写入时同时进 `format_version` 列与载荷（D-P6-003）。
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
@@ -92,6 +92,21 @@ impl RunCheckpoint {
             created_at_ms,
         }
     }
+}
+/// 一次恢复的确定恢复点：一致性校验通过后由判定层产出（D-P6-007）。
+///
+/// 字段与最近一条检查点逐字段对应：恢复执行时轮次与轨迹必须与这里一致。`unpaired` 里的调用
+/// **一次都不重跑**，只按固定通知文本回灌给模型（D-P6-006）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumePoint {
+    /// 恢复依据的检查点序号：恢复后追加的检查点从这里接着递增，不重置。
+    pub checkpoint_seq: i64,
+    /// 该检查点落在哪一种已提交边界上。
+    pub phase: CheckpointPhase,
+    /// 已提交的工具轮次：恢复后的轮次从这里继续数。
+    pub round: u32,
+    /// 最后一个工具组里没有配对结果的调用：只用于回灌中断通知，绝不执行。
+    pub unpaired: Vec<LlmToolCallVO>,
 }
 
 /// 检查点不可解释的两种情形：都判「不可恢复」，既不猜测也不降级成从头执行（D-P6-003）。

@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use agent_core::session::{Run, RunEvent};
+use agent_core::session::{ResumePoint, Run, RunEvent};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
@@ -21,6 +21,10 @@ pub struct RunInput {
     pub run: Run,
     /// 本次 Run 对应的用户消息正文（作为最后一条消息进入请求）。
     pub prompt: String,
+    /// 恢复点：`Some` 表示这次执行是「从中断处继续」，执行方先推进 `PAUSED -> RUNNING`（D-P6-007）。
+    ///
+    /// 由 [`RunDriver::plan_resume`] 判定并产出；判定为不可恢复时不构造本字段，Run 直接落终态。
+    pub resume: Option<ResumePoint>,
     /// 事件生产方的写入端：所有下行事件只能经它产出（先落盘再转发由写者负责）。
     pub events: mpsc::Sender<RunEvent>,
     /// 停止信号：取消来源与停止类别都由触发方决定。
@@ -111,9 +115,26 @@ pub enum RunOutcome {
     SessionGone,
 }
 
+/// 恢复前的判定结果（D-P6-007）：恢复点唯一，损坏原因是对外固定文案，旧 Run 单独成一态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumePlan {
+    /// 可恢复：从该检查点继续。
+    Recoverable(ResumePoint),
+    /// 不可恢复：原因已是对外固定文案，Run 直接落 `FAILED`，不重试也不从头执行。
+    Unrecoverable(String),
+    /// 没有任何检查点：升级前的旧 Run（R-7），不恢复也不判死，保持可取消的中间态。
+    NoCheckpoint,
+}
+
 /// Run 执行端口：装配层持有实现并注入，执行队列只依赖本 trait。
 #[async_trait]
 pub trait RunDriver: Send + Sync {
     /// 执行一个 `RUNNING` 的 Run，返回结局；终态写入与终态事件由实现方负责。
     async fn drive(&self, input: RunInput) -> RunOutcome;
+
+    /// 恢复前判定：读最近检查点与已提交轨迹，产出确定恢复点或不可恢复原因（D-P6-007）。
+    ///
+    /// 返回 `Err` 只表示「判定所需的读库失败」（对外固定文案）：它不是数据损坏，
+    /// 调用方不应据此把 Run 判成不可恢复。
+    async fn plan_resume(&self, run: &Run) -> Result<ResumePlan, String>;
 }

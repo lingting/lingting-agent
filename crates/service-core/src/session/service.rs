@@ -177,6 +177,25 @@ impl SessionService {
             .map_err(internal)
     }
 
+    /// 把 `PAUSED` 的 Run 推进到 `RUNNING` 并累加恢复次数；返回是否真的推进。
+    ///
+    /// 影响 0 行说明已被别的触发（并发恢复）推进、或已被取消：恢复入口据此直接放弃，
+    /// 不产出事件、不改任何行（D-P6-006 的推进幂等）。
+    pub async fn resume_paused_run(&self, run_id: &str) -> Result<bool, SessionError> {
+        self.repository
+            .resume_paused_run(run_id, time::now_millis())
+            .await
+            .map_err(internal)
+    }
+
+    /// 检查点记录的消息上界是否还有对应消息（恢复一致性校验，D-P6-007）。
+    pub async fn message_seq_exists(&self, session_id: &str, seq: i64) -> Result<bool, SessionError> {
+        self.repository
+            .message_seq_exists(session_id, seq)
+            .await
+            .map_err(internal)
+    }
+
     /// 取 Run 对应的用户消息正文：执行 Run 时作为 prompt。
     pub async fn user_prompt(&self, session_id: &str, run_id: &str) -> Result<Option<String>, SessionError> {
         self.repository.user_prompt(session_id, run_id).await.map_err(internal)

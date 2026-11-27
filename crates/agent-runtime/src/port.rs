@@ -8,11 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_context::ContextBuilder;
+use agent_core::session::Run;
 use agent_route::rig::OpenAiProvider;
 use agent_route::{LlmProvider, ProviderService};
 use agent_tool::{ToolExecutor, ToolLimits, ToolRegistry};
 use async_trait::async_trait;
-use service_core::session::{RunDriver, RunInput, RunOutcome, SessionService};
+use service_core::session::{ResumePlan, RunDriver, RunInput, RunOutcome, SessionService};
 use tokio::sync::Semaphore;
 use types_core::config::AgentConfig;
 
@@ -87,5 +88,10 @@ impl AgentRuntime {
 impl RunDriver for AgentRuntime {
     async fn drive(&self, input: RunInput) -> RunOutcome {
         loop_::drive(self, input).await
+    }
+
+    /// 恢复判定：检查点一致性校验在 `loop_::checkpoint`，这里只把服务依赖装进去。
+    async fn plan_resume(&self, run: &Run) -> Result<ResumePlan, String> {
+        loop_::checkpoint::plan(&self.service, run).await
     }
 }
