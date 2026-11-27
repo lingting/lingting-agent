@@ -15,7 +15,7 @@
 | GET | `api/message/list` | `MessageListParams`（查询参数） | `Message[]` | 按写入顺序；会话不存在 404 |
 | POST | `api/message/create` | `MessageSendPO`（请求体） | `MessageSendVO` | 写入用户消息并创建 `QUEUED` 的 Run |
 | GET | `api/run/get` | `RunGetParams`（查询参数） | `Run` | Run 不存在 404 |
-| POST | `api/run/cancel` | `RunCancelPO`（请求体） | `Run` | 只允许取消 `QUEUED` / `RUNNING`，否则 400 |
+| POST | `api/run/cancel` | `RunCancelPO`（请求体） | `Run` | 只允许取消未结束的 Run（`QUEUED` / `RUNNING` / `WAITING` / `PAUSED`），否则 400 |
 
 会话与 Run 的 ID 只能走查询参数或请求体：`web_api` 的 path 不支持占位符（D-008）。
 
@@ -77,9 +77,12 @@
 |---|---|---|
 | `id` | `string` | Run ID |
 | `sessionId` | `string` | 所属会话 ID |
-| `status` | `RunStatus` | `QUEUED` / `RUNNING` / `WAITING` / `COMPLETED` / `CANCELLED` / `FAILED`；`WAITING` 表示在等客户端确认某次工具调用（`runs.pending_tool_call_id` 非空），不占全局并发许可（D-P3-027） |
+| `status` | `RunStatus` | `QUEUED` / `RUNNING` / `WAITING` / `PAUSED` / `COMPLETED` / `CANCELLED` / `FAILED`；`WAITING` 表示在等客户端确认某次工具调用（`runs.pending_tool_call_id` 非空），不占全局并发许可（D-P3-027）；`PAUSED` 是非预期中断留下的可恢复中间态，见「Run 状态机与检查点」 |
 | `model` | `string` | 本次执行使用的模型标识 |
 | `error` | `string \| null` | 失败原因；仅 `FAILED` 时有值，且不含内部细节 |
+| `interruptedReason` | `string \| null` | 中断原因（固定文案）；仅 `PAUSED` 时有值，不含内部细节与环境路径 |
+| `resumeCount` | `string` | 已成功推进的恢复次数；每次 `PAUSED → RUNNING` 加一（`i64` → 字符串） |
+| `lastCheckpointSeq` | `string \| null` | 最近一条检查点的序号；没有检查点或升级前的旧 Run 为空（`i64` → 字符串） |
 | `inputTokens` | `string \| null` | 输入 token 用量；未统计时为空 |
 | `outputTokens` | `string \| null` | 输出 token 用量；未统计时为空 |
 | `createdAtMs` | `string` | 创建时间（Unix 毫秒） |
@@ -150,10 +153,49 @@ P3 追加上述三个工具事件（D-P3-013）：只新增枚举值与 `RunEven
 | 转发帧 | 一条 `RunEvent` 包成 `session_event` 帧，`data` 里是整条事件；`RunEvent.seq`（文件内序号）与外层 `ClientEvent.seq` 不同源 |
 | 终态 | `run_completed` / `run_failed` / `run_cancelled` / `server_shutdown` 之一收尾，之后不再向该文件追加 |
 | 终态归属 | 每条 Run 的终态事件由执行层发出（P2-024）；写者的兜底补写只在最后一条事件不是终态时才触发，作为安全网 |
-| 断开 | 客户端断开（下行流被 drop）→ 断连处理链停止运行时会话 → `QUEUED` / `RUNNING` / `WAITING` 的 Run 落 `CANCELLED` 并补终态事件 |
-| 取消 | `api/run/cancel` 只允许取消 `QUEUED` / `RUNNING` / `WAITING`；取消把 Run 置 `CANCELLED` 后触发取消信号：执行方 drop 模型流或工具执行并补 `run_cancelled`（`error` = 「用户取消执行」），挂起列随之清空、`PENDING` 审计收尾为 `CANCELLED` |
+| 断开 | 客户端断开（下行流被 drop）→ 断连处理链停止运行时会话 → 未结束的 Run（`QUEUED` / `RUNNING` / `WAITING` / `PAUSED`）落 `CANCELLED` 并补终态事件 |
+| 取消 | `api/run/cancel` 只允许取消未结束的 Run（`QUEUED` / `RUNNING` / `WAITING` / `PAUSED`）；取消把 Run 置 `CANCELLED` 后触发取消信号：执行方 drop 模型流或工具执行并补 `run_cancelled`（`error` = 「用户取消执行」），挂起列随之清空、`PENDING` 审计收尾为 `CANCELLED` |
 | 服务关闭 | 运行时会话以 `server_shutdown` 收尾（含 `status` 与可读 `error`）；关闭期间的新请求返回 `503` `{"code":503,"message":"服务正在关闭，请稍后重试"}` |
 | 客户端 | 编排顺序为 `client/create` → `client/stream` → `occupancy/create` → `message/create` → 消费 `session_event` → `run/get` 对账；下行帧格式、心跳与问询见 [runtime.md](runtime.md)，TUI 与 WebUI 都用 fetch 流式响应自行切帧 |
+
+## Run 状态机与检查点（P6 6A 起）
+
+`RunStatus` 增加一个非终态 `PAUSED`，其余取值与 wire 值逐字不变。
+
+| 迁移 | 允许的前置状态 | 触发者 |
+|---|---|---|
+| `QUEUED → RUNNING` | `QUEUED` | 执行队列拿到全局许可后 |
+| `RUNNING → WAITING` | `RUNNING` | 命中工具确认点（D-P3-027） |
+| `WAITING → QUEUED` | `WAITING` | 客户端回传确认决定 |
+| `RUNNING → PAUSED` | `RUNNING` | 只由启动自愈产生（进程消失后的第一次装配） |
+| `PAUSED → RUNNING` | `PAUSED` | 只由「会话被占用 + 该会话收到一条新消息」触发 |
+| 四个非终态 → `CANCELLED` | `QUEUED` / `RUNNING` / `WAITING` / `PAUSED` | 取消 / 会话停止 / 服务关闭 |
+| `RUNNING → COMPLETED` / `FAILED` | `RUNNING` | 正常收尾 / 结构性失败 |
+
+三条约定：
+
+- **终态唯一**：`COMPLETED` / `CANCELLED` / `FAILED` 各自只能写入一次，任何路径都不得改写已是终态的行；`PAUSED` 不是终态，也不能由终态回到 `PAUSED`。
+- **`PAUSED` 的生产者是且只有启动自愈**（写入条件为 `status = 'RUNNING'`）；它不占全局并发许可、不阻塞同会话后续 Run、不计入 `api/probe/health` 的 `runningRunCount`。
+- **状态集合只有一处定义**：`RunStatus` 的 `TERMINAL` / `ACTIVE` 两个集合与 `is_terminal()` / `is_active()` / `can_cancel()`；数据层的条件更新用 `ACTIVE` 生成取值列表，调用点不另写列表。
+
+### 检查点
+
+检查点是「一次 Run 已提交到哪」的唯一进度指针：只进 SQLite 的 `run_checkpoints` 表，**不进事件文件**（事件文件会被轮转删除、`seq` 每次运行时会话从 0 重计、写入不 `sync_all`，三者都破坏「已提交边界」的定义）。
+
+| 列 | 说明 |
+|---|---|
+| `seqNo` | 同一 Run 内从 1 连续递增，由存储层分配；`UNIQUE (run_id, seq_no)` 让重复写入直接报错 |
+| `phase` | `MODEL_DONE` / `TOOLS_DONE` / `AWAITING_CONFIRM`，依次对应「模型轮次已落库」「工具批次已落库」「Run 停在工具确认点」三种已提交边界 |
+| `toolRound` | 轮次序号：起点为 0，其后每轮加一 |
+| `lastMessageSeq` | 已提交消息的 `seq` 上界，恢复时「从这条之后继续」 |
+| `payload` | 只放恢复所需的最小事实：格式版本 + 本批工具组的调用标识与落库状态；不含上下文全文、系统提示词、`AGENTS.md` 内容与 Provider 原始响应 |
+| `formatVersion` | 格式版本，当前为 `1`；与载荷里的同名字段一并写入，两处必须一致 |
+
+- `Run.lastCheckpointSeq` 与插行在同一事务里更新，插入失败时保持原值。
+- 版本高于当前代码（`Unsupported`）或版本为 0 / 缺字段 / 与列不一致（`Corrupt`）一律判「不可恢复」：不猜测、也不降级成「从头重跑」。
+- Run 落终态后保留最近 20 条检查点，其余删除；未结束的 Run（含 `PAUSED`）一条都不删。
+- 检查点没有对外接口，`Run` 上的 `lastCheckpointSeq` 是它唯一的读出口；步骤历史接口随 P6A-013 落地。
+- **本阶段进度**：状态机、`0003` 迁移与检查点存储已落地；`PAUSED` 的生产者（启动自愈）、恢复触发、循环内的检查点写入点与结算接口分别随 P6A-009 ~ P6A-013 落地。因此当前 `api/run/get` 看到的 Run 一律 `resumeCount = 0`、`interruptedReason` 与 `lastCheckpointSeq` 为空。
 
 ## 请求与响应样例
 
@@ -179,7 +221,7 @@ POST api/message/create
 HTTP/1.1 200 OK
 {"code":200,"message":"Success","data":{
   "message":{"id":"1842000000000000002","sessionId":"1842000000000000001","runId":"1842000000000000003","role":"USER","content":"你好","toolCallId":null,"toolName":null,"toolCalls":null,"model":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000"},
-  "run":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"QUEUED","model":"gpt-4o-mini","error":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225601000","finishedAtMs":null}
+  "run":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"QUEUED","model":"gpt-4o-mini","error":null,"interruptedReason":null,"resumeCount":"0","lastCheckpointSeq":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225601000","finishedAtMs":null}
 }}
 ```
 
@@ -194,7 +236,7 @@ HTTP/1.1 200 OK
 GET api/run/get?runId=1842000000000000003
 
 HTTP/1.1 200 OK
-{"code":200,"message":"Success","data":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"QUEUED","model":"gpt-4o-mini","error":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225601000","finishedAtMs":null}}
+{"code":200,"message":"Success","data":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"QUEUED","model":"gpt-4o-mini","error":null,"interruptedReason":null,"resumeCount":"0","lastCheckpointSeq":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225601000","finishedAtMs":null}}
 ```
 
 ```text
@@ -202,7 +244,7 @@ POST api/run/cancel
 {"runId":"1842000000000000003"}
 
 HTTP/1.1 200 OK
-{"code":200,"message":"Success","data":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"CANCELLED","model":"gpt-4o-mini","error":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225602000","finishedAtMs":"1767225602000"}}
+{"code":200,"message":"Success","data":{"id":"1842000000000000003","sessionId":"1842000000000000001","status":"CANCELLED","model":"gpt-4o-mini","error":null,"interruptedReason":null,"resumeCount":"0","lastCheckpointSeq":null,"inputTokens":null,"outputTokens":null,"createdAtMs":"1767225601000","updatedAtMs":"1767225602000","finishedAtMs":"1767225602000"}}
 ```
 
 

@@ -11,14 +11,14 @@
 use std::sync::Arc;
 
 use agent_core::session::{
-    Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunStatus,
-    SessionCreatePO, SessionSummary,
+    CHECKPOINT_KEEP_LAST, Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO,
+    RunCheckpoint, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
 };
 use agent_tool::{ToolCallRecord, ToolCallStatus};
 use lib_core::{id, time};
 use lib_db::DbError;
 
-use crate::repository::Repository;
+use crate::repository::{CheckpointError, Repository};
 use crate::session::{PendingToolCall, ResumeDecision, SessionError};
 
 /// 未指定标题时的默认会话标题。
@@ -98,6 +98,9 @@ impl SessionService {
             status: RunStatus::Queued,
             model: session.model.clone(),
             error: None,
+            interrupted_reason: None,
+            resume_count: 0,
+            last_checkpoint_seq: None,
             input_tokens: None,
             output_tokens: None,
             created_at_ms: now_millis,
@@ -236,6 +239,36 @@ impl SessionService {
         self.repository.tool_calls(run_id).await.map_err(internal)
     }
 
+    /// 追加一条检查点：插行与 `runs.last_checkpoint_seq` 在同一事务里完成，返回本次序号（D-P6-001）。
+    ///
+    /// 写失败不降级：调用方按 D-P6-010 把 Run 落 `FAILED`，不继续执行。
+    pub async fn append_checkpoint(&self, run_id: &str, checkpoint: &RunCheckpoint) -> Result<i64, CheckpointError> {
+        self.repository.append_checkpoint(run_id, checkpoint).await
+    }
+
+    /// 某 Run 的最近一条检查点；升级前的旧 Run 没有检查点，返回空。
+    pub async fn latest_checkpoint(&self, run_id: &str) -> Result<Option<RunCheckpoint>, CheckpointError> {
+        self.repository.latest_checkpoint(run_id).await
+    }
+
+    /// 某 Run 的全部检查点，按序号升序：步骤历史与恢复一致性校验的输入。
+    pub async fn checkpoints_of_run(&self, run_id: &str) -> Result<Vec<RunCheckpoint>, CheckpointError> {
+        self.repository.checkpoints_of_run(run_id).await
+    }
+
+    /// Run 落终态后清理检查点：只保留最近 [`CHECKPOINT_KEEP_LAST`] 条，返回被删除的条数。
+    ///
+    /// 未结束的 Run（含 `PAUSED`）一条都不删：检查点正是它恢复的依据。
+    pub async fn prune_checkpoints(&self, run_id: &str) -> Result<usize, CheckpointError> {
+        let Some(run) = self.repository.run(run_id).await? else {
+            return Ok(0);
+        };
+        if !run.status.is_terminal() {
+            return Ok(0);
+        }
+        self.repository.prune_checkpoints(run_id, CHECKPOINT_KEEP_LAST).await
+    }
+
     /// 一轮工具轨迹落库：assistant `tool_calls` 与全部 TOOL 结果同一事务写入（D-P3-024）。
     ///
     /// 进下一轮之前必须成功——写不进去就本轮失败，否则恢复时认不出「哪次调用没有结果」。
@@ -355,9 +388,10 @@ impl SessionService {
 
 /// Run 是否处于未结束状态（可取消、可执行）。
 ///
-/// `WAITING`（等工具确认）也是未结束：它没有终态，只是暂时不排队（D-P3-027）。
+/// `WAITING`（等工具确认）与 `PAUSED`（非预期中断）也是未结束：它们没有终态，只是暂时不排队
+/// （D-P3-027 / D-P6-004）。集合定义在 `RunStatus::is_active`，这里不另写列表。
 pub fn is_open(status: RunStatus) -> bool {
-    matches!(status, RunStatus::Queued | RunStatus::Running | RunStatus::Waiting)
+    status.is_active()
 }
 
 /// 「已终态不可取消」的统一文案：与 P1 的 Mock 行为逐字一致。

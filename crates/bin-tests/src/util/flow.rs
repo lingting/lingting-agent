@@ -146,8 +146,8 @@ pub(crate) async fn wait_run(client: &Client, run_id: &str) -> Result<Run> {
             .map_err(ClientError::from_call)?;
         match run.status {
             RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled => return Ok(run),
-            // 等工具确认（WAITING）不是终态：确认或取消后才离开等待。
-            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting => {}
+            // 等工具确认（WAITING）与中断（PAUSED）都不是终态：都要等客户端动作才离开等待。
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting | RunStatus::Paused => {}
         }
         ensure!(
             Instant::now() < deadline,

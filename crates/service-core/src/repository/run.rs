@@ -14,21 +14,21 @@ use super::{Repository, decode_enum};
 
 /// Run 查询的公共投影。
 const SELECT_RUN: &str = "\
-SELECT id, session_id, status, model, error, input_tokens, output_tokens, \
-       created_at_ms, updated_at_ms, finished_at_ms \
+SELECT id, session_id, status, model, error, interrupted_reason, resume_count, last_checkpoint_seq, \
+       input_tokens, output_tokens, created_at_ms, updated_at_ms, finished_at_ms \
 FROM runs";
 
 impl Repository {
-    /// 未结束的 Run 状态取值：终态更新与统计都只针对这三者（`status` 列存 wire 值）。
+    /// 未结束的 Run 状态取值：终态更新与统计都只针对这四个（`status` 列存 wire 值）。
     ///
-    /// `WAITING`（等工具确认）也是未结束：它能被取消、能被自愈清理，但不能被队列取走。
+    /// 取值来自 [`RunStatus::ACTIVE`]，不在这里另写列表：`WAITING`（等工具确认）与 `PAUSED`
+    /// （非预期中断）都是未结束、都能被取消，但都不能被队列当成 `QUEUED` 取走。
     fn open_statuses() -> String {
-        format!(
-            "'{}','{}','{}'",
-            RunStatus::Queued,
-            RunStatus::Running,
-            RunStatus::Waiting
-        )
+        RunStatus::ACTIVE
+            .iter()
+            .map(|status| format!("'{status}'"))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// 按 ID 取 Run；不存在时为空。
@@ -406,6 +406,9 @@ fn run_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Run, DbError> {
         status: decode_enum("status", &row.try_get::<String, _>("status")?)?,
         model: row.try_get("model")?,
         error: row.try_get("error")?,
+        interrupted_reason: row.try_get("interrupted_reason")?,
+        resume_count: row.try_get("resume_count")?,
+        last_checkpoint_seq: row.try_get("last_checkpoint_seq")?,
         input_tokens: row.try_get("input_tokens")?,
         output_tokens: row.try_get("output_tokens")?,
         created_at_ms: row.try_get("created_at_ms")?,

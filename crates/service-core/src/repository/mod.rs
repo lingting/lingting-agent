@@ -12,10 +12,13 @@
 //!   不使用 `sqlx` 的 `derive` / `FromRow`（D-P2-003）。
 //! - 消息顺序由 `seq` 保证，分配放在 `INSERT` 的子查询里，与写入同一条语句完成（D-P2-005）。
 
+mod checkpoint;
 mod message;
 mod run;
 mod session;
 mod tool;
+
+pub use checkpoint::CheckpointError;
 
 use std::sync::Arc;
 

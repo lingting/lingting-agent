@@ -467,6 +467,7 @@ dependencies = [
  "lib-bin-cli",
  "lib-bin-tui",
  "lib-core",
+ "lib-db",
  "manager-agent",
  "rmcp",
  "serde_json",

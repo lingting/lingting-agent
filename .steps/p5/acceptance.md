@@ -56,7 +56,7 @@
 | P-2 | 正文不默认进上下文 | 用例 `skill.index` / `skill.budget`：未调用 `skill_load` 时，请求体里除索引外**不含** Skill 正文字符串；`run_started.input_tokens` 只随索引变化 |
 | P-3 | 按需加载生效 | 用例 `skill.load`：模型请求 `skill_load` 后，该轮工具结果包含正文，且下一轮请求的历史里出现该结果 |
 | P-4 | 大正文分级披露 | 用例 `skill.load`：正文超 `max_inline_chars` 且未给 `section` 时返回章节目录（标题 + 字数）；带 `section` 时只返回该节 |
-| P-5 | 索引预算 | 用例 `skill.index` / `skill.budget`：索引字符数 ≤ `max_index_chars`（含「另有 N 个」那行），且 `shown + hidden` 等于启用项总数 |
+| P-5 | 索引预算 | 用例 `skill.index` / `skill.budget`：索引字符数 ≤ `max_index_chars`（含「另有 N 个」那行），且 `shown + hidden` 等于启用项总数；例外：`max_index_chars` 小到连「另有 N 个」都放不下时渲染为空小节（`shown = hidden = 0`），按「三项全 0」断言，该等式不适用 |
 | P-6 | 正文预算 | 用例 `skill.budget`：`skill_load` 返回值 ≤ `max_inline_chars`；执行器 `[tools] max_result_chars` 未触发截断；`max_inline_chars > max_result_chars` 时启动有 `warn` 且服务可用 |
 | P-7 | 索引规模不影响正文 | 用例 `skill.budget`：同一 Skill 在「只启用它」与「启用 50 个」两种环境下的 `skill_load` 返回逐字符一致 |
 
@@ -69,7 +69,7 @@
 | T-3 | 三种失败都是工具结果 | 用例 `skill.load`：未知技能 / 未启用 / `INVALID` 的调用分别得到可读文本，Run **不** `FAILED`、不挂起，模型可以继续下一轮 |
 | T-4 | 缺工具不假装执行 | 用例 `skill.tools_missing`：声明工具不可用时索引行标注缺失清单，`skill_load` 结果含同一清单与「涉及这些工具的步骤必须停止并告知用户」的约束；最终回复不出现「已执行该工具」的表述 |
 | T-5 | 工具可用性按现状判定 | 用例 `skill.tools_missing`：运行期注册缺失工具（或改权限为 `allow`）后，下一次索引渲染的缺失标记消失，无需重载 Skill |
-| T-6 | 引用材料复用既有工具 | 静态核对：`agent-skill` 只实现一个 `Tool`；用例 `skill.load` 的引用清单路径能被既有 `file_read` 读取（`skills/<dir>/references/<rel>` 在默认允许范围内） |
+| T-6 | 引用材料复用既有工具 | 静态核对：`agent-skill` 只实现一个 `Tool`；用例 `skill.load` 的引用清单路径能被既有 `file_read` 读取（`skills/<dir>/references/<rel>`，相对应用根目录，在默认允许范围内）。基准差别：示例正文里写的 `references/<rel>` 是相对技能目录的写法，不能直接当 `file_read` 入参 |
 
 ## 6. Interface（I-1 ~ I-6）
 
@@ -77,7 +77,7 @@
 |---|---|---|
 | I-1 | 接口清单 | 静态核对：`crates/lib-web/src/skill/api.rs` 只有 3 个 `#[web_api_*]`；接口总数 32（29 + 3） |
 | I-2 | `list` 语义 | 用例 `skill.api`：按 `name` 升序；含禁用与 `INVALID` 项；`INVALID` 带 `error`；字段与 `docs/api/skill.md` 的表一致 |
-| I-3 | `get` 语义 | 用例 `skill.api`：返回元数据 + 正文 + 引用清单；未知 `name` 返回 400 `技能不存在`；`INVALID` 的 `name` 返回 400 `技能加载失败：<原因>` |
+| I-3 | `get` 语义 | 用例 `skill.api`：返回元数据 + 正文 + 引用清单；未知 `name` 返回 400 `技能不存在`；`INVALID` 与已禁用项返回 **200**（清单字段 + 空正文，原因在 `error` / `enabled`）；400 `技能加载失败：<原因>` 只用于「名字在清单里、正文取不出来」（D-P5-015） |
 | I-4 | `update` 语义 | 用例 `skill.api`：`ENABLE` / `DISABLE` 返回动作完成后的整张清单；`RELOAD` 后新增项出现；`RELOAD` 带 `name` 返回 400 `RELOAD 不接受 name`；缺 `name` 返回 400 `技能更新缺少 name` |
 | I-5 | 文档与代码一致 | 静态核对：`docs/api/skill.md` 的 path / 字段 / 枚举取值与代码逐项一致；`docs/api/readme.md` 的领域表与总数已更新 |
 | I-6 | SDK 覆盖新接口 | `make gen` 产物里出现三条 path 与全部 DTO（`grep` 生成目录）；`make gen-check` 通过 |

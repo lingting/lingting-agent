@@ -14,6 +14,9 @@ lib-bin-cli = { workspace = true }
 lib-bin-tui = { workspace = true, features = ["testing"] }
 lib-core = { workspace = true }
 service-core = { workspace = true }
+# 检查点用例（`resume.checkpoint`）在临时库上直接驱动存储层：迁移与事务边界都用产品实现，
+# 不复制 SQL、不复刻迁移脚本。
+lib-db = { workspace = true }
 types-core = { workspace = true }
 # 契约类型快照校验（`runtime.contract` 等用例）的来源（P2-006 起）。
 agent-core = { workspace = true }

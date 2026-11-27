@@ -34,6 +34,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "tool_calls",
         sql: include_str!("../migrations/0002_tool_calls.sql"),
     },
+    Migration {
+        version: 3,
+        name: "checkpoints",
+        sql: include_str!("../migrations/0003_checkpoints.sql"),
+    },
 ];
 
 /// 迁移账本表：建表语句本身也必须是幂等的（每次启动都会执行）。

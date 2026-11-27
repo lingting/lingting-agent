@@ -278,4 +278,27 @@ WebUI 工程位于 `lingting-agent-ui/`，同时是 pnpm workspace 根。
 - `gen-check` 每次清空并重建 `packages/`，下游 cargo 必然重编一次，耗时高于 `make check`；日常改动用 `make check`，改 API 定义或提交前用 `make ci`。
 - 门禁不证明生成物与某个历史基线一致，只证明“生成器可重建、产物完整、可编译”。
 
+## Run 状态机与检查点（P6 6A 起）
+
+Run 的状态判定与进度指针各只有一个事实源；新增状态或边界时按本节的落点改，不在调用点各写一份。
+
+| 项 | 约定 |
+|---|---|
+| 状态集合 | 只有 `agent-core` 的 `RunStatus::TERMINAL` / `ACTIVE` 两个集合，以及 `is_terminal()` / `is_active()` / `can_cancel()` 三个判定；调用点禁止自写 `matches!(…)` 状态列表 |
+| 条件更新 | 数据层的 `WHERE status IN (…)` 由 `RunStatus::ACTIVE` 生成取值串（`repository/run.rs` 的 `open_statuses`），不手写状态字面量 |
+| 终态 | `COMPLETED` / `CANCELLED` / `FAILED` 只能写入一次：一律条件更新，受影响 0 行即表示已被别处推进，调用方据此放弃（D-P2-030 / D-P6-005） |
+| `PAUSED` | 非终态、只能由启动自愈从 `RUNNING` 产生，且只由「会话被占用 + 该会话收到一条新消息」消费；不占并发许可、不计入 `runningRunCount`（D-P6-004 / D-P6-009） |
+| 检查点粒度 | 只落在三种已提交边界（`MODEL_DONE` / `TOOLS_DONE` / `AWAITING_CONFIRM`），顺序永远「先提交，再写检查点」；事务没提交就不写检查点（D-P6-001） |
+| 检查点入口 | 追加 / 读回 / 清理只有 `service-core` 的 `repository/checkpoint.rs` 一处，序号由存储层按 `MAX(seq_no)+1` 分配，插行与 `runs.last_checkpoint_seq` 同事务（D-P6-001） |
+| 检查点载荷 | 只放恢复所需的最小事实（格式版本 + 本批工具组的调用标识与落库状态）；不放上下文全文、系统提示词、`AGENTS.md` 内容与 Provider 原始响应（验收 `C-4` / `E-3`） |
+| 格式版本 | `CHECKPOINT_FORMAT_VERSION` 全仓只定义一处；`> 当前` 判 `Unsupported`，`0` / 缺字段 / 与列不一致判 `Corrupt`，两类都按「不可恢复」处置，不猜测、不降级成从头执行（D-P6-003） |
+| 保留策略 | Run 落终态后只保留最近 `CHECKPOINT_KEEP_LAST`（20）条，未结束的 Run 一条不删（验收 `C-4` / `P-5`） |
+| 迁移 | 只做前进迁移（无 down）：新版本追加到 `lib-db/src/migrate.rs` 的清单，加列语句由 runner 用 `PRAGMA table_info` 预检，因此脚本本身也幂等（D-P2-030） |
+
+用例与数据来源：
+
+- 检查点相关断言落在 `bin-tests` 的 `resume.*` 域；`resume.checkpoint` 的存储半段在进程内临时库上跑（`Database::open` 与产品启动同源），运行时的写入点与 `api/run/history` 侧断言随后续任务并入同一用例。
+- 「注入失败 / 损坏」只能靠直接改库（触发器 `RAISE(ABORT)`、改 `payload` / `format_version`），这是「SQL 只在 repository」的唯一例外：注入代码只允许出现在 `bin-tests`，且只能在临时库上执行，不得写进任何产品 crate。
+- 断言只引用服务层返回值、接口响应、事件与 `metrics` 快照；不读日志、不读事件文件（`AGENTS.md` 的测试数据采集条款）。
+
 ## 待补充

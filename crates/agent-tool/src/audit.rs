@@ -11,6 +11,7 @@
 //! arguments    -> arguments       result       -> result
 //! duration_ms  -> duration_ms     tool_round   -> tool_round
 //! created_at_ms-> created_at_ms
+//! started_at_ms-> started_at_ms（P6 起：执行前写入的开始标记，旧库行为空）
 //! ```
 //!
 //! 失败原因也存进 `result`：OpenAI 兼容协议的工具结果没有 error 字段，审计表也只有一列 `result`，
@@ -69,6 +70,11 @@ pub struct ToolCallRecord {
     pub tool_round: u32,
     /// 记录产生时间（Unix 毫秒）。
     pub created_at_ms: i64,
+    /// 执行开始时间（Unix 毫秒）：执行前写 `PENDING` 时置值，收尾不覆盖。
+    ///
+    /// 空表示「这条记录是执行之后才写的」（旧库行或未前移写入点的路径）：崩溃时它无法区分
+    /// 「从未开始」与「可能已执行」，恢复一律按后者处理（D-P6-007）。
+    pub started_at_ms: Option<i64>,
 }
 
 impl ToolCallRecord {
@@ -86,6 +92,8 @@ impl ToolCallRecord {
             duration_ms: 0,
             tool_round: call.tool_round,
             created_at_ms: now_millis(),
+            // 开始标记由前移的写入点负责（P6A-006）；这里只建记录，不猜时间。
+            started_at_ms: None,
         }
     }
 

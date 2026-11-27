@@ -17,3 +17,7 @@ pub use driver::{RunCancel, RunDriver, RunInput, RunOutcome, RunStop};
 pub use error::SessionError;
 pub use pending::{PendingToolCall, ResumeDecision};
 pub use service::{REASON_CANCELLED, SessionService};
+
+/// 检查点读写的失败类型：定义在数据层的 `repository`，这里做转发，让执行端与装配层不必直接
+/// 引用 `repository` 的模块路径。
+pub use crate::repository::CheckpointError;

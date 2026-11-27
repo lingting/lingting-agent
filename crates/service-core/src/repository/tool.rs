@@ -15,7 +15,8 @@ use super::{Repository, decode_enum};
 
 /// 审计查询的公共投影。
 const SELECT_TOOL_CALL: &str = "\
-SELECT tool_call_id, tool_name, file_access, status, arguments, result, duration_ms, tool_round, created_at_ms \
+SELECT tool_call_id, tool_name, file_access, status, arguments, result, duration_ms, tool_round, created_at_ms, \
+       started_at_ms \
 FROM tool_calls";
 
 impl Repository {
@@ -164,6 +165,7 @@ fn tool_call_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ToolCallRecord, D
         duration_ms: u64::try_from(row.try_get::<i64, _>("duration_ms")?).unwrap_or_default(),
         tool_round: row.try_get("tool_round")?,
         created_at_ms: row.try_get("created_at_ms")?,
+        started_at_ms: row.try_get("started_at_ms")?,
     })
 }
 

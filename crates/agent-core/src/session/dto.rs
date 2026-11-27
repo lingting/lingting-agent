@@ -28,6 +28,12 @@ pub enum RunStatus {
     /// 等待工具确认：`pending_tool_call_id` 指明在等哪一次调用，不占全局并发许可，
     /// 也不阻塞同会话后续 Run（D-P3-027）。
     Waiting,
+    /// 非预期中断留下的可恢复中间态（D-P6-004）。
+    ///
+    /// 三条语义：非终态，可以被恢复成 `RUNNING`、也可以被取消成 `CANCELLED`；只能由启动自愈从
+    /// `RUNNING` 产生；不占并发许可、不阻塞同会话后续 Run、不计入运行中计数。
+    /// 消费它的唯一路径是「会话被占用 + 该会话收到一条新消息」（D-P6-009）。
+    Paused,
     /// 正常结束。
     Completed,
     /// 已取消。
@@ -112,6 +118,12 @@ pub struct Run {
     pub model: String,
     /// 失败原因；仅 `failed` 时有值，且不含内部细节。
     pub error: Option<String>,
+    /// 中断原因（固定文案）；仅 `paused` 时有值，不含内部细节与环境路径（D-P6-004）。
+    pub interrupted_reason: Option<String>,
+    /// 已成功推进的恢复次数；每次 `PAUSED -> RUNNING` 加一（D-P6-006）。
+    pub resume_count: i64,
+    /// 最近一条检查点的序号；没有检查点或升级前的旧 Run 为空（D-P6-001）。
+    pub last_checkpoint_seq: Option<i64>,
     /// 输入 token 用量；未统计时为空。
     pub input_tokens: Option<i64>,
     /// 输出 token 用量；未统计时为空。
