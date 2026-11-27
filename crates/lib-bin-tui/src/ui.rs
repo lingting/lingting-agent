@@ -62,6 +62,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" │ ", faded()),
         Span::styled(connection, Style::new().fg(color)),
     ];
+    // 中断态只给提示，不给动作：继续的方式是发送一条消息（D-P6-009）。
+    if let Some(paused) = &app.paused {
+        spans.push(Span::styled(" │ ", faded()));
+        spans.push(Span::styled(
+            format!("已中断（发送消息可继续）：{}", paused.reason),
+            Style::new().fg(Color::Yellow),
+        ));
+    }
     if let Some(phase) = phase_text(app) {
         spans.push(Span::styled(" │ ", faded()));
         spans.push(Span::styled(

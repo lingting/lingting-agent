@@ -100,14 +100,14 @@
   5. 任一读库失败都映射成既有 `DbError`，不新增错误体系。
 
   **验收标准**：
-  - [ ] 同一 Run 的 `seq_no` 从 1 开始连续递增；人为制造缺口后，读回结果能被上层判为损坏（不静默跳过）。（结案：序号连续已验收；「缺口判损坏」属 P6A-007 的解析，尚未落地。）
+  - [x] 同一 Run 的 `seq_no` 从 1 开始连续递增；人为制造缺口后，读回结果能被上层判为损坏（不静默跳过）。（结案：序号连续由 `resume.checkpoint` 验收；「缺口判损坏」已随 P6A-007 落地，由 `resume.broken` 的 `RESUME_GAP` 分支取证。）
   - [x] 插入失败时 `runs.last_checkpoint_seq` 保持原值（同事务回滚）。
   - [x] `payload` 的序列化结果不含 `api_key`、不含系统提示词全文、不含 `AGENTS.md` 内容（静态核对序列化结构与调用点）。
   - [x] Run 落终态后 `list_of_run` 的条数 ≤ `keep_last`。
 
   **测试要求**：由 P6A-016 的 `resume.checkpoint` 覆盖（序号连续性、事务回滚、清理策略）。（结案：存储半段已由新增的 `resume.checkpoint` 覆盖并通过。）
 
-- [ ] **P6A-004 检查点格式版本化与不识别版本的处置**（部分落地：格式版本与两类解码已落地，三条固定文案结转到 P6A-005 / P6A-007）
+- [x] **P6A-004 检查点格式版本化与不识别版本的处置**
 
   **目标**：检查点格式有版本号，遇到不认识的版本不猜测、不静默降级，直接判「不可恢复」。
 
@@ -124,7 +124,7 @@
 
   **验收标准**：
   - [x] `CHECKPOINT_FORMAT_VERSION` 全仓只出现一处定义。
-  - [ ] 三类错误各有独立文案，文案里不含绝对路径、不含 payload 内容。（未落地：按需求方决定结转到 P6A-005 / P6A-007，Batch A 没有使用点，提前定义会被 `dead_code` 判失败。）
+  - [x] 三类错误各有独立文案，文案里不含绝对路径、不含 payload 内容。（结案：`error.rs` 的 `CHECKPOINT_UNSUPPORTED` / `CHECKPOINT_CORRUPT` 与五条 `RESUME_*` 各自独立；`resume.broken` 逐条断言文案，`E-4` 的绝对路径检索命中 0。）
   - [x] 静态核对：`Unsupported` 与 `Corrupt` 的处置路径相同且都不进入恢复执行。
 
   **测试要求**：由 P6A-016 的 `resume.broken` 覆盖（未知版本、缺字段、序号缺口三类）。（结案：未知版本与缺字段已由 `resume.checkpoint` 覆盖；序号缺口属 P6A-007。）
@@ -239,7 +239,7 @@
 
   **验收标准**：
   - [x] 全仓不存在「恢复时重放工具」的分支：静态核对 `loop_` 内调用 `ToolExecutor` 的路径只有正常执行路径与确认唤醒路径，恢复分支不产生新的执行调用。（结案：`resume_interrupted` 只写审计行与 TOOL 消息，不调用 `executor`；`execute` / `execute_approved` 仍是仅有的两处执行入口。）
-  - [ ] 三类形态各有用例断言，且「未配对」两种形态的工具调用次数为 0（以 `tool_calls` 行数为准，不读日志）。（未落地：`resume.notify` 随 P6A-016 一起写。）
+  - [x] 三类形态各有用例断言，且「未配对」两种形态的工具调用次数为 0（以 `tool_calls` 行数为准，不读日志）。（结案：`resume.notify` 三种形态各一个被强杀的 Run——已配对 0 条审计、`PENDING` 收尾成 1 条 `ERROR`、旧库行补 1 条 `ERROR`；回灌文本断言「上次执行被中断：」且不含参数原文与 `AGENT_HOME` 路径。）
   - [x] 通知文本里不含调用参数原文、不含 `AGENT_HOME` 绝对路径、不含工具名以外的可变内容。（结案：文本 = 固定前缀 `上次执行被中断` + `error::interrupted_reason_of` 的白名单映射，库里原文不直接拼接；未登记的原因落「原因未知」。）
   - [x] `crates/agent-tool` 与 `crates/agent-mcp` 在本任务下零改动（`git diff` 为空）。（结案：本次改动不涉及这两个 crate。）
 
@@ -296,7 +296,7 @@
 
   **验收标准**：
   - [x] 恢复路径与正常路径的收尾调用是同一函数（静态核对调用点）。（结案：两条路径最后都走 `complete` / `fail` / `cancelled`，恢复分支没有第二套收尾。）
-  - [ ] 一次「两轮工具后崩溃 → 恢复」的 Run，最终 `messages` 里助手消息只有一条，工具轮次计数与改动前一致。（未落地：`resume.crash` 随 P6A-016 一起写。）
+  - [x] 一次「两轮工具后崩溃 → 恢复」的 Run，最终 `messages` 里助手消息只有一条，工具轮次计数与改动前一致。（结案：`resume.crash` 的普通段断言恢复完成后该 Run 的助手消息恰好 1 条；工具轮次口径由 `resume.checkpoint` 的「起点 + 每轮模型边界 + 每轮工具边界」覆盖。）
   - [x] 同一个 `PAUSED` Run 被并发恢复两次：只有一次推进成功，另一次不产出任何事件、不改任何行。（结案：`resume_paused_run` 是单语句条件更新 `WHERE status = 'PAUSED'`，0 行即返回 `RunOutcome::Cancelled` 且不发事件；端到端证据待 P6A-011 的队列与 `resume.idempotent`。）
   - [x] 恢复后的检查点 `seq_no` 与崩溃前连续（无重置回 1）。（结案：序号仍由存储层按 `MAX(seq_no) + 1` 现算，恢复路径不重置也不重编号。）
 
@@ -329,8 +329,8 @@
   6. `api/message/create` 的返回结构不变（仍返回新建的 Run）；被恢复 Run 的进展只能通过同一条 `api/client/stream` 的 SSE 事件与 `api/run/get` 观察。
 
   **验收标准**：
-  - [ ] 「先恢复后 `QUEUED`」的顺序有可复算证据：同一会话同时存在 1 个 `PAUSED` 与本次消息产生的 1 个 `QUEUED` 时，`PAUSED` 那个的 `run_completed` 事件序号早于新 Run 的 `run_started`。（未落地：证据由 P6A-016 的 `resume.trigger` 产出；顺序本身已由实现固定——恢复段在 `QUEUED` 段之前，且两段在同一个串行任务里。）
-  - [ ] 只占用不发消息：`PAUSED` Run 的 `status`、`updatedAtMs`、`resumeCount` 逐字段不变。（未落地：证据由 P6A-016 的 `resume.trigger` 产出；实现上恢复段只由 `resume_pending` 触发，`occupancy/create` 启动队列时不做恢复段。）
+  - [x] 「先恢复后 `QUEUED`」的顺序有可复算证据：同一会话同时存在 1 个 `PAUSED` 与本次消息产生的 1 个 `QUEUED` 时，`PAUSED` 那个的 `run_completed` 事件序号早于新 Run 的 `run_started`。（结案：`resume.trigger` 从同一条 SSE 上读到两个序号并断言大小关系；实现上恢复段在 `QUEUED` 段之前，两段在同一个串行任务里。）
+  - [x] 只占用不发消息：`PAUSED` Run 的 `status`、`updatedAtMs`、`resumeCount` 逐字段不变。（结案：`resume.trigger` 在只占用之后观察 2 秒，逐字段比对不变；恢复段只由 `resume_pending` 触发，`occupancy/create` 启动队列时不做恢复段。）
   - [x] `api/run/resume` 与 `resume_on_occupy` 在全仓检索命中数为 0（未引入）。（结案：`crates/`、`lingting-agent-ui/src/`、`packages/` 内检索均无命中。）
   - [x] `make gen` 的路由数与接口数与改动前相同（恢复不新增接口）；`api/message/create` 的响应结构逐字段不变。（结案：`make gen` 输出「路由 32 条，接口 32 条」，两份 SDK 内容无变化；`api/message/create` 只改文档注释，返回类型仍是 `MessageSendVO`。）
 
@@ -382,7 +382,22 @@
 
 > 依赖：Batch C。本批次把「恢复」从内部能力变成可查、可看、可操作的对外能力，并把用例落地。
 
-- [ ] **P6A-013 步骤历史只读接口 `api/run/history`**
+>
+> **Batch D 结案（已执行）**：P6A-013 ~ P6A-016 全部落地并验收。
+>
+> 验收证据：`cargo check --workspace --all-targets`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`make gen-check`、`make ui-check` 全部 0 退出；`make gen` 路由 / 接口各 **33** 条（相对 P5 基线 +1，只新增 `api/run/history`）；`make test ARGS="resume"` **11 个用例全部通过**（`resume.checkpoint` / `terminal` / `crash` / `trigger` / `idempotent` / `notify` / `broken` / `history` / `metrics` / `tui` / `web`）。
+>
+> 需要回填的口径差异：
+>
+> 1. `metrics` 快照的字段名沿用既有各段的 **snake_case**（`checkpoints_written` 等），不是 `O-1` 写的 camelCase：既有七段全部是 snake_case，为一段单独改成 camelCase 会造出两套命名；wire 契约以快照的实际键名为准。
+> 2. `resume.trigger` 的「只占用不发消息」观察窗口是 2 秒（恢复只能在 `api/message/create` 之后发生），不是等待某个事件；`resume.crash` 用「等到首段增量 / 等到工具结果之后的增量」代替 sleep 定位强杀窗口（`RK-6A-09`）。
+> 3. 强杀窗口必须**先杀进程再丢客户端链路**：先 drop 链路会触发该会话的断连清理链，把执行中的 Run 收成 `CANCELLED`，自愈就没有可恢复的残留（已在 `resume::interrupt_batch` / `interrupt_running` 的注释里登记）。
+> 4. `resume.crash` 第二段的断言从「步骤条数变多」改为「已提交步骤前缀逐条不变、总数不减」：收尾那一轮是纯文本，不再产生工具边界，因此恢复后条数可能不变。
+> 5. `resume.broken` 的「五类损坏」用注入库内行的方式构造（指针不符、消息上界缺失、孤儿 TOOL、`PENDING` 落在更早轮次、轮次不符），另加未知格式版本与无检查点两种；`R-6` 的「五类各自落 FAILED 且文案互不相同」逐条断言。
+> 6. `resume.web` 不驱动浏览器：取证来自前端工程的两个用例文件（`tests/resume-paused.test.tsx` / `tests/resume-banner.test.tsx`，共 8 条）+ 客户端源码检索（`api/run/resume` / `resume_on_occupy` 命中 0）。`I-5` 的 `pnpm exec tsc --noEmit` 由 `make ui-check` 覆盖。
+> 7. 顺手修掉一个真实缺陷：`CheckpointError::Storage`（读库失败）原本会被判成「不可恢复」把 Run 判死，现在只有 `Decode`（数据问题）才落终态，读库失败返回 `Err` 并保留中断态等下一次触发（`R-7` 的「环境问题不是损坏」）。
+> 8. 客户端两处改动超出「只显示提示」的字面范围，但都是同一条判据（`I-4` / `I-5` 的「按事件里的 `runId` 归类」）的必要条件：TUI 的 `RunStarted` / `Completed` / `Failed` 与 WebUI 的助手占位登记都改成按 `runId` 归位；WebUI 另加了「刷新后接着看同一条会话」（`sessionStorage` 存会话 ID），否则页面刷新后看不到中断态。
+- [x] **P6A-013 步骤历史只读接口 `api/run/history`**
 
   **目标**：一个 Run 的步骤历史（检查点序列 + 恢复次数 + 中断原因）可查，客户端据此重建「中断 → 恢复」的时间线。
 
@@ -397,13 +412,13 @@
   4. 与 `api/run/get` 的分工写进接口文档待同步清单：`get` 是状态，`history` 是过程。
 
   **验收标准**：
-  - [ ] 返回结构里没有 `payload` 原文字段；`steps` 按 `seqNo` 升序。
-  - [ ] 旧库 Run（无检查点）返回 `steps = []` 且不报错。
-  - [ ] 接口总数 +1；`make gen` 门禁通过。
+  - [x] 返回结构里没有 `payload` 原文字段；`steps` 按 `seqNo` 升序。（结案：`resume.history` 断言字段白名单为 `createdAtMs` / `phase` / `seqNo` / `toolRound`，序号从 1 连续。）
+  - [x] 旧库 Run（无检查点）返回 `steps = []` 且不报错。（结案：`resume.history` 用「未占用 → Run 停在 QUEUED」的形态取证，`steps = []` 且 `status = QUEUED`。）
+  - [x] 接口总数 +1；`make gen` 门禁通过。（结案：`make gen` 路由 / 接口各 33 条，`make gen-check` 0 退出。）
 
   **测试要求**：由 P6A-016 的 `resume.history` 覆盖（正常、空、404），执行需授权。
 
-- [ ] **P6A-014 `metrics` 增加 run / checkpoint / resume 段**
+- [x] **P6A-014 `metrics` 增加 run / checkpoint / resume 段**
 
   **目标**：恢复相关的数字可复算，不靠日志。
 
@@ -418,13 +433,13 @@
   4. 不新增阈值日志；不为采集新增 `warn!` / `debug!`。
 
   **验收标准**：
-  - [ ] 六个字段都能在一次「崩溃 → 恢复 → 完成」里被快照读到，且与接口侧事实逐项相等（检查点条数、`resume_count`）。
-  - [ ] 未开 `metrics` 的构建里这些字段不存在，且不引入静态内存（`Cargo.toml` 特性链核对）。
-  - [ ] 全仓无新增的采集型日志调用（静态核对 `git diff`）。
+  - [x] 六个字段都能在一次「崩溃 → 恢复 → 完成」里被快照读到，且与接口侧事实逐项相等（检查点条数、`resume_count`）。（结案：`resume.metrics` 断言六键存在，`checkpoints_written` == 本进程新增步骤数、`resume_succeeded` == `resumeCount` 之和、`resume_attempts` == 1，拒绝 / 不可恢复 / 清理均为 0。）
+  - [x] 未开 `metrics` 的构建里这些字段不存在，且不引入静态内存（`Cargo.toml` 特性链核对）。（结案：`service-core` 的 `observability` 模块在 `#[cfg(feature = "metrics")]` 下才有 `AtomicU64` 静态量，未开特性时只有空实现与 `Default` 快照；`manager-agent` 的 `metrics` 特性链已加上 `service-core/metrics`。）
+  - [x] 全仓无新增的采集型日志调用（静态核对 `git diff`）。（结案：本批次新增的日志只有恢复段的 `info!` / `warn!` 判定说明（既有格式），没有为采集新增 `warn!` / `debug!`。）
 
   **测试要求**：由 P6A-016 的 `resume.metrics` 覆盖，执行需授权。
 
-- [ ] **P6A-015 客户端：展示中断态并说明如何继续**
+- [x] **P6A-015 客户端：展示中断态并说明如何继续**
 
   **目标**：TUI 与 WebUI 能看见「这个 Run 被打断、可以继续」，并明确告诉用户「发一条消息就会接着跑」；**不新增恢复动作、不新增恢复按钮**。
 
@@ -440,14 +455,14 @@
   5. 客户端的穷尽匹配必须覆盖新状态（TS 侧类型由生成的 SDK 提供）。
 
   **验收标准**：
-  - [ ] 两端都能展示 `PAUSED` + `interruptedReason`，并展示「发送消息可继续」的提示文案。
-  - [ ] 客户端源码里检索不到 `api/run/resume`（未引入恢复动作）；中断态下输入框仍可用。
-  - [ ] 单次发消息可能导致两条 Run 的事件（恢复的旧 Run + 新的 Run），两端都按事件里的 `runId` 归类，不按「时间顺序」猜。
-  - [ ] `pnpm exec tsc --noEmit` 通过（既有 `make ui-check` 口径）。
+  - [x] 两端都能展示 `PAUSED` + `interruptedReason`，并展示「发送消息可继续」的提示文案。（结案：TUI 状态栏显示「已中断（发送消息可继续）：<原因>」（`resume.tui` 断言渲染帧），WebUI 用提示条显示同一句文案（`pausedNoticeOf` 单一产点，`resume-banner` 用例断言）。）
+  - [x] 客户端源码里检索不到 `api/run/resume`（未引入恢复动作）；中断态下输入框仍可用。（结案：`resume.web` 扫 `lingting-agent-ui/src` / `lib-bin-tui/src` / `lib-bin-cli/src`，`api/run/resume` 与 `resume_on_occupy` 命中 0；`resume-banner` 断言输入框未 disabled、没有恢复按钮。）
+  - [x] 单次发消息可能导致两条 Run 的事件（恢复的旧 Run + 新的 Run），两端都按事件里的 `runId` 归类，不按「时间顺序」猜。（结案：TUI 的 `RunStarted` / `Completed` / `Failed` 带 `run_id` 并按它归位；WebUI 的助手占位登记改成 `runId → key` 映射；`resume-paused` 的两个用例分别断言「两段回复各归各的气泡」与「旧 Run 先结束时界面仍在等新 Run」。）
+  - [x] `pnpm exec tsc --noEmit` 通过（既有 `make ui-check` 口径）。（结案：`make ui-check` 0 退出。）
 
   **测试要求**：由 P6A-016 的 `resume.tui` / `resume.web` 覆盖（复用 `skill.tui` / `skill.web` 的驱动方式），执行需授权。
 
-- [ ] **P6A-016 用例落地：`resume.*` 用例域**
+- [x] **P6A-016 用例落地：`resume.*` 用例域**
 
   **目标**：把本子阶段的可执行判据落成用例，域内用例覆盖崩溃、幂等、中断通知、损坏、终态、触发顺序、接口、客户端、可观测。
 
@@ -473,9 +488,9 @@
   4. 用例注册进 `cases/mod.rs`，命名遵守 `<领域>.<场景>`。
 
   **验收标准**：
-  - [ ] `make test ARGS="--list"` 列出上述全部用例名。
-  - [ ] 每个用例的断言只引用接口响应 / 事件 / 快照字段（静态核对无 `server.log` 读取）。
-  - [ ] 用例文件不落在 `crates/bin-tests` 之外的任何 Crate。
+  - [x] `make test ARGS="--list"` 列出上述全部用例名。（结案：`resume` 域 11 条——`checkpoint` / `terminal` / `crash` / `trigger` / `idempotent` / `notify` / `broken` / `history` / `metrics` / `tui` / `web`；`persist.migration` 已在 Batch A 覆盖 `0003`。`resume.retry` 随 P6A-017 登记，本批次未新增。）
+  - [x] 每个用例的断言只引用接口响应 / 事件 / 快照字段（静态核对无 `server.log` 读取）。（结案：新增的九个用例文件只读接口响应、SSE 事件、`metrics` 快照与库内行；`resume.broken` / `resume.notify` 的库内写入是「注入损坏」而不是数据来源。）
+  - [x] 用例文件不落在 `crates/bin-tests` 之外的任何 Crate。（结案：全部在 `crates/bin-tests/src/cases/resume/`。）
 
   **测试要求**：本任务**就是**用例落地；执行需单独授权（`make test ARGS="resume"`）。未授权时只提交用例代码并保持任务未勾选。
 

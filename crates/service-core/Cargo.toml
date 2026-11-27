@@ -8,6 +8,9 @@ description = "通用核心业务服务"
 license.workspace = true
 repository.workspace = true
 publish = false
+[features]
+# 检查点与恢复的进程内计数（P6A-014）：测试构建启用，正式构建是空实现，不做原子操作。
+metrics = []
 
 [dependencies]
 lib-core = { workspace = true }

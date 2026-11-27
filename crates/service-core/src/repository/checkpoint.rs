@@ -114,6 +114,7 @@ impl Repository {
             .execute(transaction.connection())
             .await?;
         transaction.commit().await?;
+        crate::observability::record_checkpoint_written();
         Ok(seq_no)
     }
 
@@ -147,7 +148,9 @@ impl Repository {
         .execute(self.pool())
         .await?
         .rows_affected();
-        Ok(usize::try_from(affected).unwrap_or(usize::MAX))
+        let removed = usize::try_from(affected).unwrap_or(usize::MAX);
+        crate::observability::record_checkpoints_pruned(removed);
+        Ok(removed)
     }
 }
 

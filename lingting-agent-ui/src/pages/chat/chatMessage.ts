@@ -64,6 +64,15 @@ export function fromServerMessage(message: Message): ChatMessage {
   };
 }
 
+/**
+ * 中断态的提示文案（P6A-015）。
+ *
+ * 只说「怎么继续」，不给恢复动作：客户端不需要恢复按钮，发一条消息就恢复（D-P6-009）。
+ */
+export function pausedNoticeOf(reason: string): string {
+  return `已中断（发送消息可继续）：${reason}`;
+}
+
 /** 是否为消息项：渲染与状态迁移据此分流。 */
 export function isChatMessage(item: ChatItem): item is ChatMessage {
   return item.kind === "message";

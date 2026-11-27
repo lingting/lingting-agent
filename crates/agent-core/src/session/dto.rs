@@ -5,6 +5,8 @@
 
 use framework_proc_auto::{auto_enum, auto_type};
 
+use super::checkpoint::CheckpointPhase;
+
 /// 消息角色。
 #[auto_enum]
 pub enum MessageRole {
@@ -143,4 +145,33 @@ pub struct MessageSendVO {
     pub message: Message,
     /// 由本次发送创建的 Run。
     pub run: Run,
+}
+
+/// 一个 Run 的步骤历史：状态在 `Run` 上，过程在这些步骤上（D-P6-001 / P6A-013）。
+///
+/// 步骤只暴露派生字段，`payload` 原文不外泄（验收 `I-2`）；升级前的旧 Run 没有检查点，
+/// `steps` 是空数组而不是错误。
+#[auto_type(default = false, clone = true)]
+pub struct RunHistory {
+    /// 该 Run 的当前状态快照。
+    pub run: Run,
+    /// 已成功推进的恢复次数。
+    pub resume_count: i64,
+    /// 中断原因；只有中断态与恢复过的 Run 有值。
+    pub interrupted_reason: Option<String>,
+    /// 步骤序列：按 `seq_no` 升序，空数组表示没有检查点。
+    pub steps: Vec<RunStep>,
+}
+
+/// 一个已提交边界上的步骤：检查点对外可见的那部分。
+#[auto_type(default = false, clone = true)]
+pub struct RunStep {
+    /// 单调序号：同一 Run 内从 1 开始连续递增。
+    pub seq_no: i64,
+    /// 落在哪一种边界上。
+    pub phase: CheckpointPhase,
+    /// 轮次序号：起点为 0，其后每轮加一。
+    pub tool_round: u32,
+    /// 记录产生时间（Unix 毫秒）。
+    pub created_at_ms: i64,
 }

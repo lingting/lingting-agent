@@ -14,6 +14,8 @@ pub use checkpoint::{
     CHECKPOINT_FORMAT_VERSION, CHECKPOINT_KEEP_LAST, CheckpointDecodeError, CheckpointPayload, CheckpointPhase,
     ResumePoint, RunCheckpoint, ToolCallDigest,
 };
-pub use dto::{LlmToolCallVO, Message, MessageRole, MessageSendVO, Run, RunStatus, SessionSummary};
+pub use dto::{
+    LlmToolCallVO, Message, MessageRole, MessageSendVO, Run, RunHistory, RunStatus, RunStep, SessionSummary,
+};
 pub use event::{RunEvent, RunEventKind, ToolCallStatus};
-pub use request::{MessageListParams, MessageSendPO, RunCancelPO, RunGetParams, SessionCreatePO};
+pub use request::{MessageListParams, MessageSendPO, RunCancelPO, RunGetParams, RunHistoryParams, SessionCreatePO};

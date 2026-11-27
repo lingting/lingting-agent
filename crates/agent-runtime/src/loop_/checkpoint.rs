@@ -70,7 +70,10 @@ pub(crate) fn digest(record: &ToolCallRecord) -> ToolCallDigest {
 pub(crate) async fn plan(service: &SessionService, run: &Run) -> Result<ResumePlan, String> {
     let checkpoints = match service.checkpoints_of_run(&run.id).await {
         Ok(checkpoints) => checkpoints,
-        Err(failure) => return Err(decode_reason(failure)),
+        // 解码失败是数据问题：不猜、不降级，直接判不可恢复（D-P6-003）。
+        Err(CheckpointError::Decode(failure)) => return Ok(ResumePlan::Unrecoverable(decode_text(failure))),
+        // 读库失败是环境问题：Err 表示「这次判定不成」，装配层保留中断态等下一次触发。
+        Err(CheckpointError::Storage(failure)) => return Err(super::logged(error::STORAGE, failure)),
     };
     let Some(latest) = checkpoints.last() else {
         return Ok(ResumePlan::NoCheckpoint);
@@ -126,13 +129,11 @@ fn gap(run: &Run, checkpoints: &[RunCheckpoint], latest: &RunCheckpoint) -> bool
     !continuous || run.last_checkpoint_seq != Some(latest.seq_no)
 }
 
-/// 检查点读取失败 → 判定结论里的文案：解码失败是数据问题（判不可恢复），读库失败是环境问题
-/// （返回 `Err`，交给装配层决定，不当成损坏）。
-fn decode_reason(failure: CheckpointError) -> String {
+/// 解码失败 → 判定结论里的固定文案：未知版本与内容损坏各有独立文本，都不含载荷内容与环境路径。
+fn decode_text(failure: CheckpointDecodeError) -> String {
     match failure {
-        CheckpointError::Decode(CheckpointDecodeError::Unsupported { .. }) => error::CHECKPOINT_UNSUPPORTED.to_string(),
-        CheckpointError::Decode(CheckpointDecodeError::Corrupt) => error::CHECKPOINT_CORRUPT.to_string(),
-        CheckpointError::Storage(failure) => super::logged(error::STORAGE, failure),
+        CheckpointDecodeError::Unsupported { .. } => error::CHECKPOINT_UNSUPPORTED.to_string(),
+        CheckpointDecodeError::Corrupt => error::CHECKPOINT_CORRUPT.to_string(),
     }
 }
 

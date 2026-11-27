@@ -22,7 +22,13 @@ vi.mock("@/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api")>();
   return {
     ...actual,
-    agentApi: { messageCreate: vi.fn(), runCancel: vi.fn(), sessionCreate: vi.fn() },
+    agentApi: {
+      messageCreate: vi.fn(),
+      messageList: vi.fn(),
+      runCancel: vi.fn(),
+      runGet: vi.fn(),
+      sessionCreate: vi.fn(),
+    },
     ChatLink: class {
       constructor(_client: unknown, listener: LinkListener) {
         push = listener;
@@ -40,7 +46,9 @@ vi.mock("@/api", async (importOriginal) => {
 
 const api = agentApi as unknown as {
   messageCreate: ReturnType<typeof vi.fn>;
+  messageList: ReturnType<typeof vi.fn>;
   runCancel: ReturnType<typeof vi.fn>;
+  runGet: ReturnType<typeof vi.fn>;
   sessionCreate: ReturnType<typeof vi.fn>;
 };
 
@@ -79,8 +87,11 @@ function run(status: Run["status"]): Run {
     finishedAtMs: null,
     id: "r-1",
     inputTokens: null,
+    interruptedReason: null,
+    lastCheckpointSeq: null,
     model: "mock-model",
     outputTokens: null,
+    resumeCount: "0",
     sessionId: "s-1",
     status,
     updatedAtMs: "1767225600000",
@@ -130,8 +141,12 @@ async function close(reason: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   push = null;
+  // 会话 ID 会落到 sessionStorage（刷新后接着看）：每个用例从干净状态起步。
+  window.sessionStorage.clear();
   api.sessionCreate.mockResolvedValue(session());
   api.messageCreate.mockResolvedValue(sent());
+  api.messageList.mockResolvedValue([]);
+  api.runGet.mockResolvedValue(run("PAUSED"));
   api.runCancel.mockResolvedValue(run("CANCELLED"));
 });
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useSkillList } from "@/api/skill";
 
+import { pausedNoticeOf } from "./chatMessage";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { SkillDrawer } from "./SkillDrawer";
@@ -11,7 +12,7 @@ import { useChat } from "./useChat";
 
 /** 对话页：发送消息 → 流式展示回复（含工具卡片与确认按钮）→ 可停止生成；失败以提示条呈现。 */
 export function ChatMain() {
-  const { cancel, clearError, confirm, error, items, send, streaming } = useChat();
+  const { cancel, clearError, confirm, error, items, paused, send, streaming } = useChat();
   const [input, setInput] = useState("");
   const [skillsOpen, setSkillsOpen] = useState(false);
   // 头部徽标读的是同一份清单缓存：抽屉打开与否都只请求一次。
@@ -37,6 +38,8 @@ export function ChatMain() {
         </Badge>
       </Flex>
       {error && <Alert banner closable message={error} type="error" onClose={clearError} />}
+      {/* 中断态只提示、不阻止输入：发送一条消息就会先把上次没跑完的 Run 恢复（P6A-015）。 */}
+      {paused && <Alert banner message={pausedNoticeOf(paused.reason)} type="warning" />}
       <div className="min-h-0 flex-1 overflow-hidden">
         {items.length > 0 ? (
           <MessageList items={items} onConfirm={confirm} />

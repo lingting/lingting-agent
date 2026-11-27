@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use agent_core::session::{
     CHECKPOINT_KEEP_LAST, Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO,
-    RunCheckpoint, RunGetParams, RunStatus, SessionCreatePO, SessionSummary,
+    RunCheckpoint, RunGetParams, RunHistory, RunHistoryParams, RunStatus, RunStep, SessionCreatePO, SessionSummary,
 };
 use agent_tool::{ToolCallRecord, ToolCallStatus};
 use lib_core::{id, time};
@@ -314,7 +314,31 @@ impl SessionService {
     pub async fn checkpoints_of_run(&self, run_id: &str) -> Result<Vec<RunCheckpoint>, CheckpointError> {
         self.repository.checkpoints_of_run(run_id).await
     }
-
+    /// 一个 Run 的步骤历史：状态在 `Run` 上，过程在检查点序列上（P6A-013）。
+    ///
+    /// 只读：不触发恢复、不改任何行；`payload` 原文不外泄，只返回派生字段。升级前的旧 Run
+    /// 没有检查点，`steps` 是空数组（`R-7`）；未知 Run 是未找到错误。
+    pub async fn run_history(&self, params: RunHistoryParams) -> Result<RunHistory, SessionError> {
+        let run = self.require_run(&params.run_id).await?;
+        let steps = self
+            .checkpoints_of_run(&params.run_id)
+            .await
+            .map_err(checkpoint_internal)?
+            .into_iter()
+            .map(|checkpoint| RunStep {
+                seq_no: checkpoint.seq_no,
+                phase: checkpoint.phase,
+                tool_round: checkpoint.tool_round,
+                created_at_ms: checkpoint.created_at_ms,
+            })
+            .collect();
+        Ok(RunHistory {
+            resume_count: run.resume_count,
+            interrupted_reason: run.interrupted_reason.clone(),
+            run,
+            steps,
+        })
+    }
     /// Run 落终态后清理检查点：只保留最近 [`CHECKPOINT_KEEP_LAST`] 条，返回被删除的条数。
     ///
     /// 未结束的 Run（含 `PAUSED`）一条都不删：检查点正是它恢复的依据。
@@ -469,5 +493,10 @@ fn next_id() -> Result<String, SessionError> {
 
 /// 数据库错误对外只有内部错误：细节只进日志，不进响应体。
 fn internal(error: DbError) -> SessionError {
+    SessionError::Internal(format!("{error}"))
+}
+
+/// 检查点读库或解码失败对外只有内部错误：客户端无法处置数据问题，细节只进日志。
+fn checkpoint_internal(error: CheckpointError) -> SessionError {
     SessionError::Internal(format!("{error}"))
 }

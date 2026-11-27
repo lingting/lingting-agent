@@ -183,6 +183,16 @@ fn snapshot_table(metrics: &MetricsSnapshot) -> String {
         metrics.mcp.call_timeouts,
         metrics.mcp.shutdown_kills
     ));
+    // 检查点与恢复段（P6A-014）：写入 / 清理 / 判定 / 推进 / 拒绝 / 不可恢复。
+    text.push_str(&format!(
+        "| 检查点与恢复 | 写入 {} 条，清理 {} 条｜恢复判定 {} 次，推进成功 {} 次｜拒绝 {} 次｜不可恢复 {} 次 |\n",
+        metrics.resume.checkpoints_written,
+        metrics.resume.checkpoints_pruned,
+        metrics.resume.resume_attempts,
+        metrics.resume.resume_succeeded,
+        metrics.resume.resume_rejected,
+        metrics.resume.resume_unrecoverable
+    ));
     text.push_str(&format!(
         "| 日志审计 | 事件 {}（ERROR {}｜WARN {}），敏感串命中 {}，panic {} |\n\n",
         metrics.audit.total, metrics.audit.error, metrics.audit.warn, metrics.audit.secret_hits, metrics.audit.panics

@@ -1,10 +1,10 @@
-//! `resume.checkpoint`：检查点的落库形态（存储半边）与运行时写入点（P6A-003 ~ P6A-006）。
-//! `resume.terminal`：终态唯一收口——取消 / 优雅关闭 / 恢复中再次中断 / 竞态（P6A-012）。
+//! `resume.*` 用例域（P6A-016）：检查点、崩溃恢复、触发顺序、幂等、中断通知、损坏、终态、
+//! 接口、可观测与两端客户端。
 //!
-//! 检查点还没有 HTTP 接口（`api/run/history` 随 P6A-013 落地），因此证据只有两类：
-//! 存储半边在临时数据库上经 `SessionService` 直接驱动；运行时半边起一次私有服务端，
-//! 断言取自接口响应（`run/get` / `message/list` / `tool/audit/list`）与库内行。
-//! **不读日志、不读事件文件**。
+//! 检查点有 HTTP 接口之后（`api/run/history`，P6A-013），运行期事实优先从接口读：
+//! `run/get` / `run/history` / `message/list` / `tool/audit/list` / `probe/metrics`。
+//! 只有「接口还没有暴露」的过程量（检查点原始列、注入损坏、`PENDING` 审计行）才经
+//! 产品自己的 `Repository` 或裸连接池读回。**不读日志、不读事件文件**。
 //!
 //! 存储半边四段：
 //!
@@ -33,10 +33,21 @@ use sqlx::SqlitePool;
 
 use crate::case::{Case, CaseFuture, CaseKind};
 use crate::util::context::TestContext;
+use crate::util::flow::{self, Reopened};
+use crate::util::server::Server;
 use crate::util::support::temp_directory;
 
+mod broken;
 mod checkpoint;
+mod crash;
+mod history;
+mod idempotent;
+mod metrics;
+mod notify;
 mod terminal;
+mod trigger;
+mod tui;
+mod web;
 
 /// 单条载荷的字节上界（验收 `C-4`）：载荷只放最小事实，正常形态远小于这个值。
 const PAYLOAD_LIMIT: usize = 2048;
@@ -58,7 +69,145 @@ pub(crate) fn cases() -> Vec<Case> {
             prep: &[],
             run: terminal,
         },
+        // 强杀 / 重启都按用例自己的节奏发生：服务端一律由用例启停（P6A-016）。
+        Case {
+            name: "resume.crash",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: crash::case,
+        },
+        Case {
+            name: "resume.trigger",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: trigger::case,
+        },
+        Case {
+            name: "resume.idempotent",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: idempotent::case,
+        },
+        Case {
+            name: "resume.notify",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: notify::case,
+        },
+        Case {
+            name: "resume.broken",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: broken::case,
+        },
+        // 只读接口：隔离服务端足够，不需要自己启停。
+        Case {
+            name: "resume.history",
+            kind: CaseKind::Isolated,
+            prep: &[],
+            run: history::case,
+        },
+        Case {
+            name: "resume.metrics",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: metrics::case,
+        },
+        Case {
+            name: "resume.tui",
+            kind: CaseKind::SelfServed,
+            prep: &[],
+            run: tui::case,
+        },
+        // 客户端用例只跑前端工程与静态核对：不需要服务端，复用共享服务端即可。
+        Case {
+            name: "resume.web",
+            kind: CaseKind::Shared,
+            prep: &[],
+            run: web::case,
+        },
     ]
+}
+
+/// 起一次用例自己的服务端（同一 `AGENT_HOME` 与端口）。
+pub(super) async fn start(context: &TestContext) -> Result<Server> {
+    Server::start(context.port()?, context.home().to_path_buf())
+        .await
+        .with_context(|| format!("启动服务端失败：{}", context.home().display()))
+}
+
+/// 强杀后在同一 `AGENT_HOME` 与端口上重启：进程内的执行状态随进程一起丢失。
+pub(super) async fn crash(context: &TestContext, server: Server) -> Result<Server> {
+    let home = server.log_dir().to_path_buf();
+    server.stop().await.context("强杀服务端失败")?;
+    Server::start(context.port()?, home)
+        .await
+        .with_context(|| format!("重启服务端失败：{}", context.home().display()))
+}
+
+/// 一个被强杀的 Run 及其会话。
+pub(super) struct PausedRun {
+    /// 所属会话。
+    pub(super) session_id: String,
+    /// 被强杀的 Run。
+    pub(super) run_id: String,
+}
+
+/// 起一批「执行中被强杀」的 Run：每个会话一个客户端与一条慢速消息，等到首段增量后一起强杀重启。
+///
+/// 一批一起被杀：`RUNNING → PAUSED` 的自愈在一次重启里把它们全部处理完，省掉反复启停。
+pub(super) async fn interrupt_batch(
+    context: &TestContext,
+    server: Server,
+    tag: &str,
+    count: usize,
+) -> Result<(Server, Vec<PausedRun>)> {
+    let mut runs = Vec::new();
+    let mut links = Vec::new();
+    for index in 0..count {
+        let session = flow::create_session(context, &format!("{tag}-{index}")).await?;
+        let mut link = Reopened::open(context, &session.id).await?;
+        let content = format!("mock:slow {tag} {}", context.token());
+        let sent = flow::send_message(context, &session.id, &content).await?;
+        flow::wait_first_delta(&mut link.stream, &sent.run.id).await?;
+        links.push(link);
+        runs.push(PausedRun {
+            session_id: session.id,
+            run_id: sent.run.id,
+        });
+    }
+    // 先杀进程再丢链路：客户端断连会触发该会话的 Run 收尾（断连清理链），
+    // 那会把「执行中」变成 `CANCELLED`，自愈就没有可恢复的残留了。
+    let server = crash(context, server).await?;
+    drop(links);
+    for run in &runs {
+        let paused = flow::run_get(context, &run.run_id).await?;
+        ensure!(
+            paused.status == lib_bin_cli::sdk::RunStatus::Paused,
+            "强杀重启后 Run 应是 PAUSED，实际 {:?}",
+            paused.status
+        );
+    }
+    Ok((server, runs))
+}
+
+/// 造一个「执行中被强杀」的中断态：占用 → `mock:slow` → 等到首段增量 → 强杀 → 重启。
+///
+/// 判定动作是「等到首段增量」而不是 sleep：增量说明模型流已经开始、检查点已经写好了
+/// 起点边界，此时强杀留下的一定是「执行中」的残留（`RK-6A-09`）。
+pub(super) async fn interrupt_running(
+    context: &TestContext,
+    server: Server,
+    session_id: &str,
+) -> Result<(Server, String)> {
+    let mut link = Reopened::open(context, session_id).await?;
+    let content = format!("mock:slow 中断 {}", context.token());
+    let sent = flow::send_message(context, session_id, &content).await?;
+    flow::wait_first_delta(&mut link.stream, &sent.run.id).await?;
+    // 先杀进程再丢链路：断连本身会取消该会话的 Run（见 `interrupt_batch`）。
+    let server = crash(context, server).await?;
+    drop(link);
+    Ok((server, sent.run.id))
 }
 
 /// 终态唯一收口（P6A-012）：取消 / 优雅关闭 / 恢复中再次中断 / 竞态。

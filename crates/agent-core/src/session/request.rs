@@ -42,3 +42,10 @@ pub struct RunCancelPO {
     /// 目标 Run ID。
     pub run_id: String,
 }
+
+/// 查询 Run 步骤历史的查询参数。
+#[auto_type]
+pub struct RunHistoryParams {
+    /// 目标 Run ID。
+    pub run_id: String,
+}

@@ -7,8 +7,8 @@
 //! 装配与跨服务协调在 `manager-agent`（P2-013 起不再读进程级单例）。
 
 use agent_core::session::{
-    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
-    SessionSummary,
+    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunHistory,
+    RunHistoryParams, SessionCreatePO, SessionSummary,
 };
 use anyhow::Result;
 use framework_web::{Json, Query, WebError, web_api_get, web_api_post};
@@ -50,6 +50,15 @@ pub async fn message_create(Json(po): Json<MessageSendPO>) -> Result<MessageSend
 #[web_api_get(path = "api/run/get")]
 pub async fn run_get(Query(po): Query<RunGetParams>) -> Result<Run> {
     manager_agent::get_run(po).await.map_err(api_error)
+}
+
+/// 查询 Run 的步骤历史：检查点序列 + 恢复次数 + 中断原因（P6A-013）。
+///
+/// 只读接口：不触发恢复、不改状态。`api/run/get` 回答「现在怎么样」，本接口回答「过程到哪一步」；
+/// 升级前建的旧 Run 没有检查点，返回空的 `steps`。`payload` 原文不外泄。
+#[web_api_get(path = "api/run/history")]
+pub async fn run_history(Query(po): Query<RunHistoryParams>) -> Result<RunHistory> {
+    manager_agent::get_run_history(po).await.map_err(api_error)
 }
 
 /// 取消未结束的 Run。

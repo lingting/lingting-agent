@@ -6,5 +6,6 @@
 //! 「进程内运行时」在装配层 `manager-agent`（D-P2-035），因此这里既不持有进程级单例，
 //! 也不感知 Agent / 运行时。
 
+pub mod observability;
 pub mod repository;
 pub mod session;

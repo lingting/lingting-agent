@@ -26,7 +26,8 @@ pub enum Update {
         run_id: String,
     },
     /// Run 开始执行，助手消息的位置可以占位了。
-    RunStarted,
+    /// Run 开始执行，助手消息的位置可以占位了；`run_id` 用来把事件归到正确的 Run（P6A-015）。
+    RunStarted { run_id: String },
     /// 助手回复的增量文本。
     Delta(String),
     /// 一次工具调用开始执行（参数已脱敏，界面只展示工具名）。
@@ -45,16 +46,18 @@ pub enum Update {
         name: String,
         arguments: String,
     },
-    /// Run 正常结束，助手消息已落库。
-    Completed,
+    /// Run 正常结束，助手消息已落库；`run_id` 用于区分「被恢复的旧 Run」与「本次的新 Run」。
+    Completed { run_id: String },
     /// Run 执行失败。
-    Failed { reason: String },
+    Failed { run_id: String, reason: String },
     /// 取消请求已受理。
     Cancelled,
     /// 事件流中断：连接断开、服务关闭或帧无法解析。
     Interrupted { reason: String },
     /// 事件流结束但没有终态事件：取消后服务端就是这样收尾的。
     StreamEnded,
+    /// 该会话有一个可恢复的中断态 Run（P6A-015）：发送一条消息即可继续，不需要额外动作。
+    Paused { run_id: String, reason: String },
     /// 技能清单快照：面板打开与每次动作 / 重载之后都用整张清单替换。
     Skills(Vec<SkillVO>),
     /// 一条技能的详情（正文与引用清单）。

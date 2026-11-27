@@ -7,8 +7,8 @@
 //! 可以让 `service-core` 继续不感知 Provider。
 
 use agent_core::session::{
-    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, SessionCreatePO,
-    SessionSummary,
+    Message, MessageListParams, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunGetParams, RunHistory,
+    RunHistoryParams, SessionCreatePO, SessionSummary,
 };
 use agent_route::{LlmError, ProviderService};
 use service_core::session::{SessionError, SessionService, ToolAuditListParams, ToolCallVO};
@@ -78,6 +78,13 @@ pub async fn send_message(po: MessageSendPO) -> Result<MessageSendVO, SessionErr
 /// 查询 Run。
 pub async fn get_run(po: RunGetParams) -> Result<Run, SessionError> {
     session()?.get_run(po).await
+}
+
+/// 查询 Run 的步骤历史（检查点序列 + 恢复次数 + 中断原因，P6A-013）。
+///
+/// 只读：不触发恢复、不改状态；`payload` 原文不外泄，只返回派生字段。
+pub async fn get_run_history(po: RunHistoryParams) -> Result<RunHistory, SessionError> {
+    session()?.run_history(po).await
 }
 
 /// 取消未结束的 Run：数据库先落终态，再让执行方中断模型调用（D-P2-010 第 2 条）。

@@ -43,15 +43,22 @@ export function useChat() {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 可恢复的中断态：只提示「发送消息可继续」，不提供恢复动作（P6A-015）。 */
+  const [paused, setPaused] = useState<{ runId: string; reason: string } | null>(null);
 
   /** 当前会话 ID：首次发送时创建，之后复用。 */
   const sessionIdRef = useRef<string | null>(null);
 
-  /** 进行中的 Run ID；为空表示空闲。 */
+  /** 最近一次发送产生的 Run ID；为空表示空闲。取消生成用它定位目标。 */
   const runIdRef = useRef<string | null>(null);
 
-  /** 进行中回复的助手占位消息 key。 */
-  const assistantKeyRef = useRef<string | null>(null);
+  /**
+   * 进行中的 Run → 助手占位消息 key。
+   *
+   * 一次发送可能同时带出两条 Run（被恢复的旧 Run + 本次的新 Run），因此占位登记必须按 `runId`
+   * 分开，不能只留一个「当前占位」（P6A-015 第 3 条）。
+   */
+  const runKeysRef = useRef<Map<string, string>>(new Map());
 
   /** 消息创建还没返回时先到达的下行事件：按序缓冲，不做半条拼接（D-011 第 4 条）。 */
   const pendingRef = useRef<RunEvent[]>([]);
@@ -144,10 +151,46 @@ export function useChat() {
     );
   }, []);
 
-  /** 本轮结束：清掉进行中的标记。 */
-  const clearRun = useCallback(() => {
+  /**
+   * 某个 Run 的助手占位 key：没有就补一条占位（先到的增量也能落到正确位置）。
+   *
+   * 被恢复的旧 Run 先执行，因此它的占位插在当前（最新）Run 的占位之前：两段回复的顺序与
+   * 服务端的执行顺序一致，不会因为「谁先建占位」而上下颠倒。
+   */
+  const ensureRunKey = useCallback((runId: string): string => {
+    const existing = runKeysRef.current.get(runId);
+    if (existing) return existing;
+    const key = nextLocalKey("assistant");
+    const currentKey = runIdRef.current ? runKeysRef.current.get(runIdRef.current) : undefined;
+    runKeysRef.current.set(runId, key);
+    setItems((previous) => {
+      const placeholder: ChatMessage = { kind: "message", key, role: "ASSISTANT", content: "", status: "streaming" };
+      const index = currentKey ? previous.findIndex((item) => item.key === currentKey) : -1;
+      if (index < 0) return [...previous, placeholder];
+      return [...previous.slice(0, index), placeholder, ...previous.slice(index)];
+    });
+    return key;
+  }, []);
+
+  /**
+   * 一条 Run 结束：清掉它的登记。
+   *
+   * 返回是否「全部结束」——只有全部都结束才算本轮收尾，否则界面会在新 Run 刚开始时就退回空闲。
+   */
+  const finishRun = useCallback((runId: string): boolean => {
+    runKeysRef.current.delete(runId);
+    if (runKeysRef.current.size > 0) return false;
     runIdRef.current = null;
-    assistantKeyRef.current = null;
+    streamingRef.current = false;
+    pendingRef.current = [];
+    setStreaming(false);
+    return true;
+  }, []);
+
+  /** 本轮整体收尾：清掉全部登记（发送失败、连接中断这类再也收不到事件的情形）。 */
+  const clearRun = useCallback(() => {
+    runKeysRef.current.clear();
+    runIdRef.current = null;
     streamingRef.current = false;
     pendingRef.current = [];
     setStreaming(false);
@@ -195,12 +238,16 @@ export function useChat() {
     [upsertTool],
   );
 
-  /** 把一条 Run 事件应用到对话流。 */
+  /**
+   * 把一条 Run 事件应用到对话流。
+   *
+   * 归类只按事件里的 `runId`：一次发送同时可能有「被恢复的旧 Run」与「本次的新 Run」两条，
+   * 按到达顺序猜会把两段回复拼成一条（P6A-015）。
+   */
   const applyRunEvent = useCallback(
     (event: RunEvent) => {
       if (applyToolEvent(event)) return;
-      const key = assistantKeyRef.current;
-      if (!key) return;
+      const key = ensureRunKey(event.runId);
       switch (event.event) {
         case "message_delta": {
           const delta = event.delta ?? "";
@@ -209,64 +256,110 @@ export function useChat() {
         }
         case "run_completed":
           finishMessage(key, "done");
-          markUnfinished();
-          clearRun();
+          if (finishRun(event.runId)) markUnfinished();
           break;
         case "run_failed": {
           const reason = event.error ?? "Run 执行失败";
           finishMessage(key, "interrupted", failedNote(reason));
-          markUnfinished();
+          if (finishRun(event.runId)) markUnfinished();
           setError(reason);
-          clearRun();
           break;
         }
         case "run_cancelled":
           finishMessage(key, "interrupted", stoppedRef.current ? STOPPED_NOTE : INTERRUPTED_NOTE);
-          markUnfinished();
+          if (finishRun(event.runId)) markUnfinished();
           if (!stoppedRef.current) setError(event.error ?? "Run 已取消");
-          clearRun();
           break;
         case "server_shutdown":
           finishMessage(key, "interrupted", INTERRUPTED_NOTE);
-          markUnfinished();
+          if (finishRun(event.runId)) markUnfinished();
           setError(event.error ?? "服务正在关闭，回复已中断");
-          clearRun();
           break;
         case "run_started":
+          // 被恢复的 Run 开始执行：中断提示从此不再成立。
+          setPaused((current) => (current?.runId === event.runId ? null : current));
+          break;
         case "heartbeat":
           break;
       }
     },
-    [applyToolEvent, clearRun, finishMessage, markUnfinished, pushDelta],
+    [applyToolEvent, ensureRunKey, finishMessage, finishRun, markUnfinished, pushDelta],
   );
 
-  /** 下行事件入口：只处理本轮 Run，连接关闭时收尾并提示。 */
+  /**
+   * 问一次 Run 的状态：`PAUSED` 说明上一次执行被中断、发一条消息就能继续。
+   *
+   * 问不到就没有提示：中断提示只是辅助信息，不因此报错。
+   */
+  const refreshPaused = useCallback(async (runId: string) => {
+    try {
+      const run = await agentApi.runGet({ runId });
+      if (run.status !== "PAUSED") return;
+      setPaused({ runId, reason: run.interruptedReason ?? "执行被中断" });
+    } catch {
+      // 状态问不到，界面保持原样。
+    }
+  }, []);
+
+  /** 下行事件入口：按 `runId` 归类；连接关闭时全部收尾并提示。 */
   const onLinkEvent = useCallback(
     (linkEvent: LinkEvent) => {
       if (linkEvent.type === "closed") {
-        const key = assistantKeyRef.current;
-        if (key) finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+        for (const key of runKeysRef.current.values()) {
+          finishMessage(key, "interrupted", INTERRUPTED_NOTE);
+        }
         markUnfinished();
+        const unfinished = runIdRef.current;
         clearRun();
         setError(`连接中断：${linkEvent.reason}`);
+        // 连接断了但 Run 还在库里：查一次状态，中断态就给出「发一条消息即可继续」。
+        if (unfinished) void refreshPaused(unfinished);
         return;
       }
 
       const event = linkEvent.event;
+      // 空闲期没有本轮：迟到的帧（心跳、上一次的收尾）不改界面。
+      if (!streamingRef.current) return;
       // 消息创建还没返回：本轮事件先缓冲，拿到 Run ID 后按序放出。
       if (runIdRef.current === null) {
-        if (streamingRef.current) pendingRef.current.push(event);
+        pendingRef.current.push(event);
         return;
       }
-      if (event.runId !== runIdRef.current) return;
       applyRunEvent(event);
     },
-    [applyRunEvent, clearRun, finishMessage, markUnfinished],
+    [applyRunEvent, clearRun, finishMessage, markUnfinished, refreshPaused],
   );
 
   useEffect(() => {
     listenerRef.current = onLinkEvent;
   }, [onLinkEvent]);
+
+  /** 页面刷新后接着看同一条会话：历史消息与「上次是否被中断」都从服务端读回（P6A-015）。 */
+  const restore = useCallback(
+    async (sessionId: string) => {
+      try {
+        const history = await agentApi.messageList({ sessionId });
+        setItems(history.map(fromServerMessage));
+        const lastRun = history
+          .map((message) => message.runId)
+          .filter((runId): runId is string => Boolean(runId))
+          .pop();
+        if (lastRun) await refreshPaused(lastRun);
+      } catch {
+        // 历史读不回来不影响新对话：忘掉这条会话，下一次发送会新建。
+        storeSession(null);
+        sessionIdRef.current = null;
+      }
+    },
+    [refreshPaused],
+  );
+
+  useEffect(() => {
+    const stored = readStoredSession();
+    if (!stored) return;
+    sessionIdRef.current = stored;
+    void restore(stored);
+  }, [restore]);
 
   // 连接生命周期与页面一致：挂载即注册并建立下行流，卸载时交还占用、反注册、停心跳。
   useEffect(() => {
@@ -306,12 +399,16 @@ export function useChat() {
         await connecting;
         const sessionId = sessionIdRef.current ?? (await createSession(text));
         sessionIdRef.current = sessionId;
+        storeSession(sessionId);
         // 先占用会话：未被占用的会话里 Run 停在 QUEUED，不会执行（D-P1.1-004）。
         await link.occupy(sessionId);
 
         const sent = await agentApi.messageCreate({ content: text, sessionId });
         runIdRef.current = sent.run.id;
-        assistantKeyRef.current = assistantKey;
+        // 消息创建成功即触发恢复（D-P6-009）：中断提示从此不再成立。
+        setPaused(null);
+        // 先登记占位再放缓冲事件：事件按 `runId` 找 key，被恢复的旧 Run 会自己补一条占位。
+        runKeysRef.current.set(sent.run.id, assistantKey);
         setItems((previous) => [
           ...previous,
           fromServerMessage(sent.message),
@@ -324,9 +421,9 @@ export function useChat() {
           },
         ]);
 
-        // 缓冲里已攒下本轮开头的几条事件：按到达顺序放出。
+        // 缓冲里已攒下本轮开头的几条事件：按到达顺序放出（可能含被恢复的旧 Run 的事件）。
         for (const event of pendingRef.current.splice(0)) {
-          if (event.runId === sent.run.id) applyRunEvent(event);
+          applyRunEvent(event);
         }
       } catch (failure) {
         setError(errorMessageOf(failure));
@@ -375,7 +472,7 @@ export function useChat() {
   const cancel = useCallback(async () => {
     const runId = runIdRef.current;
     stoppedRef.current = true;
-    const key = assistantKeyRef.current;
+    const key = runId ? runKeysRef.current.get(runId) : undefined;
     try {
       if (runId) await agentApi.runCancel({ runId });
     } catch (failure) {
@@ -387,7 +484,29 @@ export function useChat() {
     }
   }, [clearRun, finishMessage, markUnfinished]);
 
-  return { cancel, clearError, confirm, error, items, messages, send, streaming };
+  return { cancel, clearError, confirm, error, items, messages, paused, send, streaming };
+}
+
+/** 会话 ID 的存储键：刷新页面后接着看同一条对话（P6A-015）。 */
+const SESSION_KEY = "lingting.session";
+
+/** 读回上次打开的会话 ID；没有 storage（隐私模式）时视为没有。 */
+function readStoredSession(): string | null {
+  try {
+    return window.sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 记住 / 忘掉当前会话 ID：存储失败只影响「刷新后能否接着看」，不影响本次对话。 */
+function storeSession(sessionId: string | null): void {
+  try {
+    if (sessionId) window.sessionStorage.setItem(SESSION_KEY, sessionId);
+    else window.sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // 没有 storage 时不保存。
+  }
 }
 
 /** 首次发送时创建会话：标题取第一条消息，与服务端 CLI 的 `run` 行为一致。 */

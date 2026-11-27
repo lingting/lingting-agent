@@ -156,6 +156,27 @@ pub struct LimitMetrics {
     /// 读取瞬间正在执行的 Run 数。
     pub running_now: i64,
 }
+/// 检查点与恢复的统计（P6A-014）：写入与清理来自 `service-core`，判定与拒绝来自装配层的恢复段。
+///
+/// 「可复算」的口径（验收 `O-2`）：`checkpoints_written` 对应 `api/run/history` 的 `steps` 条数、
+/// `resume_succeeded` 对应 `api/run/get` 的 `resumeCount` 增长、`resume_unrecoverable` 对应
+/// 判定为「不可恢复」的次数——三者都不经过日志。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "metrics", derive(serde::Serialize, serde::Deserialize))]
+pub struct ResumeMetrics {
+    /// 成功写入的检查点条数。
+    pub checkpoints_written: u64,
+    /// 终态清理删掉的检查点条数。
+    pub checkpoints_pruned: u64,
+    /// 进入恢复判定的次数（每拾起一个 `PAUSED` Run 记一次）。
+    pub resume_attempts: u64,
+    /// `PAUSED -> RUNNING` 真正推进成功的次数。
+    pub resume_succeeded: u64,
+    /// 拒绝恢复的次数：没有检查点（升级前的旧 Run）与判定读库失败。
+    pub resume_rejected: u64,
+    /// 判定为不可恢复的次数：五类损坏与不认识的格式版本。
+    pub resume_unrecoverable: u64,
+}
 
 /// 日志审计的统计：转写 `lib-core` 的审计快照，把「日志里发生了什么」变成可断言的数据。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -203,6 +224,8 @@ pub struct MetricsSnapshot {
     pub mcp: agent_mcp::metrics::McpMetrics,
     /// Skill 的发现、加载与索引（P5-011）：状态现状取自 manager，累计量取自 `agent-skill`。
     pub skills: agent_skill::metrics::SkillMetrics,
+    /// 检查点与恢复（P6A-014）：写入与清理取自 `service-core`，判定与拒绝取自恢复段。
+    pub resume: ResumeMetrics,
 }
 
 // 断连清理链。
@@ -274,6 +297,16 @@ static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
 static WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "metrics")]
 static WAIT_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+
+// 恢复判定（P6A-014）：进入判定、拒绝（没有检查点 / 读库失败）与不可恢复各记一次。
+#[cfg(feature = "metrics")]
+static RESUME_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static RESUME_REJECTED_NO_CHECKPOINT: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static RESUME_REJECTED_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "metrics")]
+static RESUME_UNRECOVERABLE: AtomicU64 = AtomicU64::new(0);
 
 /// 限流快照的来源：由装配层把 `agent-runtime` 的快照转写进来（本 Crate 不依赖 `agent-runtime`）。
 #[cfg(feature = "metrics")]
@@ -363,6 +396,7 @@ pub fn snapshot() -> MetricsSnapshot {
             },
             mcp: mcp_snapshot(),
             skills: skills_snapshot(),
+            resume: resume_snapshot(),
         }
     }
     #[cfg(not(feature = "metrics"))]
@@ -387,6 +421,21 @@ fn skills_snapshot() -> agent_skill::metrics::SkillMetrics {
         installed.skills().state_counts()
     });
     agent_skill::metrics::snapshot(counts)
+}
+
+/// 检查点与恢复段：写入与清理取 `service-core` 的原子量，判定与拒绝取本模块的原子量。
+#[cfg(feature = "metrics")]
+fn resume_snapshot() -> ResumeMetrics {
+    let checkpoints = service_core::observability::snapshot();
+    ResumeMetrics {
+        checkpoints_written: checkpoints.checkpoints_written,
+        checkpoints_pruned: checkpoints.checkpoints_pruned,
+        resume_attempts: RESUME_ATTEMPTS.load(Ordering::Relaxed),
+        resume_succeeded: checkpoints.resume_succeeded,
+        resume_rejected: RESUME_REJECTED_NO_CHECKPOINT.load(Ordering::Relaxed)
+            + RESUME_REJECTED_ERROR.load(Ordering::Relaxed),
+        resume_unrecoverable: RESUME_UNRECOVERABLE.load(Ordering::Relaxed),
+    }
 }
 
 /// 处理链的在场守卫：进入 +1、离开 -1，并累计耗时。
@@ -535,6 +584,30 @@ pub(crate) fn record_session_lock_wait(elapsed: Duration) {
         WAIT_NANOS.fetch_add(nanos, Ordering::Relaxed);
         WAIT_MAX_NANOS.fetch_max(nanos, Ordering::Relaxed);
     }
+}
+
+/// 记一次恢复判定：每拾起一个 `PAUSED` Run 记一次（无论结论是什么）。
+pub(crate) fn record_resume_attempt() {
+    #[cfg(feature = "metrics")]
+    RESUME_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记一次「没有检查点」的拒绝：升级前的旧 Run 不进入执行，也不改行（`R-7`）。
+pub(crate) fn record_resume_rejected_no_checkpoint() {
+    #[cfg(feature = "metrics")]
+    RESUME_REJECTED_NO_CHECKPOINT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记一次「判定读库失败」的拒绝：环境问题，保留中断态等下一次触发。
+pub(crate) fn record_resume_rejected_error() {
+    #[cfg(feature = "metrics")]
+    RESUME_REJECTED_ERROR.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记一次判定为不可恢复：Run 直接落终态，不重试、不降级成从头重跑。
+pub(crate) fn record_resume_unrecoverable() {
+    #[cfg(feature = "metrics")]
+    RESUME_UNRECOVERABLE.fetch_add(1, Ordering::Relaxed);
 }
 
 /// 时长转纳秒：饱和到 `u64`，不 panic。

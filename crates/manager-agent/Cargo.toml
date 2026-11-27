@@ -12,7 +12,14 @@ publish = false
 [features]
 # 运行时进程内指标（P2.1-003 / P2.2-001）：测试构建启用，正式构建是空实现，
 # 也不编 `serde`（快照的序列化只服务于 debug + `metrics` 限定的探针）。
-metrics = ["lib-db/metrics", "lib-core/metrics", "agent-mcp/metrics", "agent-skill/metrics", "dep:serde"]
+metrics = [
+    "lib-db/metrics",
+    "lib-core/metrics",
+    "agent-mcp/metrics",
+    "agent-skill/metrics",
+    "service-core/metrics",
+    "dep:serde",
+]
 
 [dependencies]
 lib-core = { workspace = true }

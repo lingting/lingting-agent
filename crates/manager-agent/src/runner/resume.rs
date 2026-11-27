@@ -18,6 +18,10 @@ use tracing::{info, warn};
 
 use super::cancel::RunCancels;
 use super::queue::{fail, run_one};
+use crate::runtime::metrics::{
+    record_resume_attempt, record_resume_rejected_error, record_resume_rejected_no_checkpoint,
+    record_resume_unrecoverable,
+};
 
 /// 拾取该会话全部 `PAUSED` Run；返回 `true` 表示执行队列应当退出（停止信号到达或生产方关闭）。
 ///
@@ -45,6 +49,7 @@ pub(crate) async fn paused(
             warn!(run_id = %run.id, "执行端口未装配，可恢复 Run 保持中断态");
             continue;
         };
+        record_resume_attempt();
         match driver.plan_resume(&run).await {
             Ok(ResumePlan::Recoverable(point)) => {
                 info!(run_id = %run.id, checkpoint_seq = point.checkpoint_seq, "从检查点恢复 Run");
@@ -52,15 +57,20 @@ pub(crate) async fn paused(
             }
             // 不可恢复：只落终态与固定文案，不重试、也不降级成「从头重跑」（D-P6-007）。
             Ok(ResumePlan::Unrecoverable(reason)) => {
+                record_resume_unrecoverable();
                 warn!(run_id = %run.id, %reason, "Run 不可恢复，直接落终态");
                 fail(service, &run, &reason, producer).await;
             }
             // 没有检查点就没有「从哪儿继续」：保持中断态，等取消或下一次触发（`R-7`）。
             Ok(ResumePlan::NoCheckpoint) => {
+                record_resume_rejected_no_checkpoint();
                 info!(run_id = %run.id, "Run 没有检查点，保持中断态不恢复");
             }
             // 读库失败是环境问题，不是数据损坏：保留中断态，等下一次消息触发。
-            Err(error) => warn!(run_id = %run.id, %error, "恢复判定读库失败，保持中断态"),
+            Err(error) => {
+                record_resume_rejected_error();
+                warn!(run_id = %run.id, %error, "恢复判定读库失败，保持中断态");
+            }
         }
         // 生产方关闭说明运行时会话已在收尾，再恢复下一个也没有意义。
         if producer.is_closed() {

@@ -17,7 +17,8 @@ use lib_bin_cli::client::{Client, ClientError, EventStream};
 use lib_bin_cli::sdk::{
     ApiClient, ClientCreatePO, ClientDecision, ClientDeletePO, ClientEvent, ClientEventKind, ClientPostKind,
     ClientPostPO, ClientStreamParams, MessageListParams, MessageSendPO, OccupancyCreatePO, OccupancyDeletePO,
-    RunCancelPO, RunEvent, RunEventKind, SessionCreatePO, SkillAction, SkillGetParams, SkillUpdatePO, ToolCallStatus,
+    RunCancelPO, RunEvent, RunEventKind, RunGetParams, RunStatus, SessionCreatePO, SkillAction, SkillGetParams,
+    SkillUpdatePO, ToolCallStatus,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -671,19 +672,49 @@ async fn create_session(link: &Arc<Link>, updates: &Sender<Update>) {
 }
 
 /// 拉取会话历史消息：重连后的整体重载也走这条路。
+///
+/// 拉完消息再看一眼这条会话最后一个 Run 的状态（消息带 `runId`）：`PAUSED` 说明上一次执行被
+/// 打断且可以继续，界面据此给出「已中断（发送消息可继续）」的提示（P6A-015）。查询失败不影响
+/// 历史消息的展示——它只是一条提示，没读到就没有提示。
 async fn open_session(link: &Arc<Link>, session_id: String, updates: &Sender<Update>) {
     let params = MessageListParams {
         session_id: session_id.clone(),
     };
-    match link.client.message_list(params).await.map_err(ClientError::from_call) {
-        Ok(messages) => send(updates, Update::Messages { session_id, messages }),
-        Err(error) => send(
-            updates,
-            Update::Notice {
-                text: error.to_string(),
-            },
-        ),
+    let messages = match link.client.message_list(params).await.map_err(ClientError::from_call) {
+        Ok(messages) => messages,
+        Err(error) => {
+            send(
+                updates,
+                Update::Notice {
+                    text: error.to_string(),
+                },
+            );
+            return;
+        }
+    };
+    let last_run = messages.iter().rev().find_map(|message| message.run_id.clone());
+    send(updates, Update::Messages { session_id, messages });
+    if let Some(run_id) = last_run {
+        paused_update(link, run_id, updates).await;
     }
+}
+
+/// 最后一个 Run 处于 `PAUSED` 时推一条提示；其余状态（执行中 / 已终态 / 查询失败）不推。
+async fn paused_update(link: &Arc<Link>, run_id: String, updates: &Sender<Update>) {
+    let params = RunGetParams { run_id: run_id.clone() };
+    let Ok(run) = link.client.run_get(params).await.map_err(ClientError::from_call) else {
+        return;
+    };
+    if run.status != RunStatus::Paused {
+        return;
+    }
+    send(
+        updates,
+        Update::Paused {
+            run_id,
+            reason: run.interrupted_reason.unwrap_or_else(|| "执行被中断".to_string()),
+        },
+    );
 }
 
 /// 发送消息：先占用会话（Run 只有被占用时才会执行），再把用户消息与 Run 交给界面。
@@ -900,16 +931,29 @@ async fn reconnect_after_unregistered(link: &Arc<Link>, generation: u64) {
 /// 一条 `RunEvent` 转成界面更新。
 fn dispatch_run_event(updates: &Sender<Update>, run_event: RunEvent) {
     match run_event.event {
-        RunEventKind::RunStarted => send(updates, Update::RunStarted),
+        // 一次发送可能带出两条 Run（被恢复的旧 Run + 本次的新 Run）：终态与开始都带上 `runId`，
+        // 界面按它归类，不按到达顺序猜（P6A-015 第 3 条）。
+        RunEventKind::RunStarted => send(
+            updates,
+            Update::RunStarted {
+                run_id: run_event.run_id,
+            },
+        ),
         RunEventKind::MessageDelta => {
             if let Some(delta) = run_event.delta {
                 send(updates, Update::Delta(delta));
             }
         }
-        RunEventKind::RunCompleted => send(updates, Update::Completed),
+        RunEventKind::RunCompleted => send(
+            updates,
+            Update::Completed {
+                run_id: run_event.run_id,
+            },
+        ),
         RunEventKind::RunFailed => send(
             updates,
             Update::Failed {
+                run_id: run_event.run_id,
                 reason: run_event.error.unwrap_or_else(|| "未提供失败原因".to_string()),
             },
         ),

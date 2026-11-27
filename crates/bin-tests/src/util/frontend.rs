@@ -85,6 +85,27 @@ pub(crate) async fn tool_tests() -> Result<()> {
     .context("前端工具事件用例失败")
 }
 
+/// 只跑中断态相关的用例文件：`resume.web` 用它取证「提示文案 + 双 Run 归类」（P6A-015）。
+pub(crate) async fn resume_tests() -> Result<()> {
+    let dir = installed_dir()?;
+    run_pnpm(
+        &dir,
+        &[
+            "exec",
+            "vp",
+            "test",
+            "run",
+            "--maxWorkers",
+            "2",
+            "tests/resume-paused.test.tsx",
+            "tests/resume-banner.test.tsx",
+        ],
+        &[],
+    )
+    .await
+    .context("前端中断态用例失败")
+}
+
 /// 跑对话与关服两个项目（`playwright test --project chat --project shutdown`）。
 ///
 /// 服务端由调用方启动，地址通过 `WEBUI_BASE_URL` 传给 Playwright 配置；浏览器二进制需事先

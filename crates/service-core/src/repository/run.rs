@@ -140,6 +140,9 @@ impl Repository {
         .execute(self.pool())
         .await?
         .rows_affected();
+        if affected > 0 {
+            crate::observability::record_resume_succeeded();
+        }
         Ok(affected > 0)
     }
 

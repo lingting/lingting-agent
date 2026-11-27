@@ -79,6 +79,16 @@ pub struct PendingConfirm {
     pub submitted: bool,
 }
 
+/// 一个可恢复的中断态 Run（P6A-015）：界面只提示「已中断 + 原因」，不提供恢复动作。
+///
+/// 继续的方式就是发一条消息（D-P6-009）：发送成功后这个提示随之消失。
+pub struct PausedRun {
+    /// 被中断的 Run ID：收到它的 `run_started` 说明已被恢复。
+    pub run_id: String,
+    /// 中断原因，原样来自 `api/run/get` 的 `interruptedReason`。
+    pub reason: String,
+}
+
 impl ChatMessage {
     /// 角色标签。
     pub fn label(&self) -> &'static str {
@@ -115,6 +125,8 @@ pub struct App {
     pub run_id: Option<String>,
     /// 待确认的工具调用：`None` 时 `y` / `n` 不产生任何上行（D-P3-026）。
     pub pending: Option<PendingConfirm>,
+    /// 可恢复的中断态（P6A-015）：只提示「已中断（发送消息可继续）」，不提供恢复动作。
+    pub paused: Option<PausedRun>,
     /// 一行提示（错误或操作反馈）。
     pub notice: Option<String>,
     /// 消息区距底部的行数：`0` 表示跟随最新内容。
@@ -147,6 +159,7 @@ impl App {
             phase: Phase::Idle,
             run_id: None,
             pending: None,
+            paused: None,
             notice: None,
             back: 0,
             skills: None,
@@ -227,6 +240,12 @@ impl App {
                 self.phase = Phase::Idle;
                 Vec::new()
             }
+            Update::Paused { run_id, reason } => {
+                // 只提示、不改阶段：输入框仍然可用，发送一条消息即可继续（D-P6-009）。
+                self.paused = Some(PausedRun { run_id, reason });
+                self.back = 0;
+                Vec::new()
+            }
             Update::Sent {
                 session_id,
                 message,
@@ -237,11 +256,20 @@ impl App {
                 self.run_id = Some(run_id);
                 self.phase = Phase::Waiting;
                 self.notice = None;
+                // 发送即触发恢复（D-P6-009）：中断提示从此不再成立，等新的事件说明进展。
+                self.paused = None;
                 self.back = 0;
                 self.bump_message_count();
                 Vec::new()
             }
-            Update::RunStarted => {
+            Update::RunStarted { run_id } => {
+                // 被恢复的旧 Run 也发 `run_started`：它只结束中断提示，不抢走当前 Run 的位置。
+                if self.paused.as_ref().is_some_and(|paused| paused.run_id == run_id) {
+                    self.paused = None;
+                }
+                if self.run_id.is_none() {
+                    self.run_id = Some(run_id);
+                }
                 self.phase = Phase::Streaming;
                 self.push_assistant();
                 Vec::new()
@@ -288,21 +316,29 @@ impl App {
                 self.back = 0;
                 Vec::new()
             }
-            Update::Completed => {
+            Update::Completed { run_id } => {
+                // 一次发送可能带出两条 Run（被恢复的旧 Run + 本次的新 Run）：只有当前那条结束
+                // 才清掉「进行中」，否则界面会在新 Run 刚开始时就退回空闲（P6A-015 第 3 条）。
+                self.bump_message_count();
+                if self.run_id.as_deref().is_some_and(|current| current != run_id) {
+                    return Vec::new();
+                }
                 self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
                 self.notice = None;
-                self.bump_message_count();
                 Vec::new()
             }
-            Update::Failed { reason } => {
+            Update::Failed { run_id, reason } => {
                 // 已经有助手占位就直接挂说明；还没开始执行就失败时补一条，界面不会只剩提示行。
                 let started = matches!(self.phase, Phase::Streaming | Phase::Cancelling);
+                self.fail_message(started, &reason);
+                if self.run_id.as_deref().is_some_and(|current| current != run_id) {
+                    return Vec::new();
+                }
                 self.pending = None;
                 self.phase = Phase::Idle;
                 self.run_id = None;
-                self.fail_message(started, &reason);
                 self.notice = Some(format!("Run 执行失败：{reason}"));
                 Vec::new()
             }

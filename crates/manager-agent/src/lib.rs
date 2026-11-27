@@ -21,7 +21,8 @@ mod skill;
 pub use assemble::{AssemblyOptions, assemble, assemble_with};
 pub use holder::{AgentHolder, holder, install, runtime, shutdown};
 pub use session::{
-    cancel_run, create_session, get_run, list_messages, list_sessions, list_tool_calls, running_run_count, send_message,
+    cancel_run, create_session, get_run, get_run_history, list_messages, list_sessions, list_tool_calls,
+    running_run_count, send_message,
 };
 /// Skill 的装配侧适配：发现、`skill_load` 注册、工具可用性判定与管理门面（P5-006 / P5-010 / P5-012）。
 pub use skill::{RegistryAvailability, SkillManager, build_skills, skill_get, skill_list, skill_update};
