@@ -1,5 +1,8 @@
 //! Run 触发点：会话被占用时执行该会话的 `QUEUED` Run（RT-018、D-P1.1-004）。
 //!
+//! **先恢复后执行**：会话收到一条新消息时，先拾取该会话全部 `PAUSED` Run（`updated_at_ms` 升序），
+//! 再执行 `QUEUED` Run；只占用不发消息不触发恢复（P6A-011 / D-P6-009）。
+//!
 //! **一条规则**：Run 只有在所属会话当前被占用时才会被执行；执行者始终是该会话的运行时会话。
 //! 因此执行队列随运行时会话创建而启动、随其停止而结束，事件一律写进运行时会话的生产方，
 //! 由写者先落盘再转发（RT-015）。
@@ -11,8 +14,9 @@
 //! 终态写入与终态事件都在执行方完成；未装配端口时 Run 直接落 `FAILED`（D-P2-028 第 3 条）。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use agent_core::session::{Run, RunEvent, RunEventKind, RunStatus};
+use agent_core::session::{ResumePoint, Run, RunEvent, RunEventKind, RunStatus};
 use lib_core::time::now_millis;
 use service_core::session::{RunDriver, RunInput, RunOutcome, RunStop, SessionService};
 use tokio::sync::mpsc;
@@ -20,6 +24,7 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::runner::cancel::RunCancels;
+use crate::runner::resume;
 
 /// 唤醒通道容量：一次唤醒足以让执行任务重扫队列，多余的通知可以丢掉。
 const WAKE_CAPACITY: usize = 1;
@@ -38,6 +43,8 @@ pub(crate) struct RunExecutor {
     session_id: String,
     /// 唤醒端：有新 Run 排队时让执行任务重扫队列。
     wake: mpsc::Sender<()>,
+    /// 恢复待处理：会话收到新消息时置位，执行任务据此先拾取该会话的 `PAUSED` Run（D-P6-009）。
+    resume_pending: Arc<AtomicBool>,
     /// 停止端：让执行任务在跑完当前 Run 后退出。
     stop: mpsc::Sender<()>,
     /// 在跑 Run 的取消信号表：与运行时状态共享同一份。
@@ -51,6 +58,7 @@ impl RunExecutor {
     ///
     /// 启动后立即尝试执行存量 `QUEUED` Run（`QUEUED` 按 `created_at_ms` 升序），
     /// 因此 `occupancy/create` 之后不需要额外的唤醒。
+    /// 存量 `PAUSED` Run 不在这里拾取：恢复只由「会话已被占用 ∧ 收到一条新消息」触发（D-P6-009）。
     pub(crate) fn spawn(
         session_id: String,
         producer: mpsc::Sender<RunEvent>,
@@ -60,11 +68,14 @@ impl RunExecutor {
     ) -> Self {
         let (wake, wakeups) = mpsc::channel(WAKE_CAPACITY);
         let (stop, stops) = mpsc::channel(STOP_CAPACITY);
+        // 恢复待处理标记与唤醒通道分开：唤醒可能被丢弃（容量 1），标记不会。
+        let resume_pending = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(drain(
             session_id.clone(),
             producer,
             wakeups,
             stops,
+            Arc::clone(&resume_pending),
             service,
             driver,
             Arc::clone(&cancels),
@@ -72,6 +83,7 @@ impl RunExecutor {
         Self {
             session_id,
             wake,
+            resume_pending,
             stop,
             cancels,
             task,
@@ -81,6 +93,14 @@ impl RunExecutor {
     /// 有新 Run 排队：队列空时唤醒执行任务；已有待处理通知时忽略（一次唤醒足够重扫）。
     pub(crate) fn notify(&self) {
         let _ = self.wake.try_send(());
+    }
+
+    /// 会话收到一条新消息：置「恢复待处理」并唤醒队列（D-P6-009 的唯一恢复触发点）。
+    ///
+    /// 标记与唤醒分开：唤醒通道容量为 1，连续两条消息的唤醒会被合并丢弃，标记不会。
+    pub(crate) fn notify_message(&self) {
+        self.resume_pending.store(true, Ordering::SeqCst);
+        self.notify();
     }
 
     /// 停止执行队列：先给在跑 Run 收取消信号，再等它收尾退出。
@@ -100,17 +120,31 @@ impl RunExecutor {
     }
 }
 
-/// 执行队列主循环：有 `QUEUED` Run 就逐个跑，空了就等下一次唤醒或停止信号。
+/// 执行队列主循环：先按消息触发恢复该会话的 `PAUSED` Run，再逐个跑 `QUEUED` Run；
+/// 都空了就等下一次唤醒或停止信号。
+///
+/// 顺序是这一子阶段的判据之一（D-P6-009）：同一批里被恢复的 Run 必须早于本次消息产生的
+/// `QUEUED` Run，因此恢复段在 `QUEUED` 段之前，且两段都在同一个串行任务里。
+#[allow(clippy::too_many_arguments)]
 async fn drain(
     session_id: String,
     producer: mpsc::Sender<RunEvent>,
     mut wakeups: mpsc::Receiver<()>,
     mut stops: mpsc::Receiver<()>,
+    resume_pending: Arc<AtomicBool>,
     service: Arc<SessionService>,
     driver: Option<Arc<dyn RunDriver>>,
     cancels: Arc<RunCancels>,
 ) {
     loop {
+        // 一、会话收到新消息：先恢复该会话全部 `PAUSED` Run（`updated_at_ms` 升序），再执行 `QUEUED`。
+        //     `queued_run` 取最早的一条，因此本次消息产生的新 Run 一定排在恢复段之后（D-P6-009）。
+        if resume_pending.swap(false, Ordering::SeqCst)
+            && resume::paused(&service, driver.as_ref(), &cancels, &session_id, &mut stops, &producer).await
+        {
+            return;
+        }
+        // 二、串行执行该会话的 `QUEUED` Run。
         loop {
             let run = match service.next_queued_run(&session_id).await {
                 Ok(Some(run)) => run,
@@ -120,7 +154,7 @@ async fn drain(
                     break;
                 }
             };
-            run_one(&service, driver.as_ref(), &cancels, run, &producer).await;
+            run_one(&service, driver.as_ref(), &cancels, run, None, &producer).await;
             // 生产方关闭说明运行时会话已经在收尾，再跑下一个也没有意义。
             if producer.is_closed() {
                 return;
@@ -143,11 +177,15 @@ async fn drain(
 }
 
 /// 执行一个已推进到 `RUNNING` 的 Run：取提示词，交给执行端口。
-async fn run_one(
+///
+/// `resume` 由恢复段（[`resume::paused`]）判定后给出；`None` 表示按正常 `QUEUED → RUNNING` 执行。
+/// 提示词一律取该 Run 自己那条用户消息，恢复不使用触发它的新消息正文（D-P6-009）。
+pub(super) async fn run_one(
     service: &SessionService,
     driver: Option<&Arc<dyn RunDriver>>,
     cancels: &RunCancels,
     run: Run,
+    resume: Option<ResumePoint>,
     producer: &mpsc::Sender<RunEvent>,
 ) {
     let prompt = match service.user_prompt(&run.session_id, &run.id).await {
@@ -167,7 +205,7 @@ async fn run_one(
     // 未装配执行端口：Run 直接落 FAILED 并留一条终态事件，原因可读（D-P2-028 第 3 条）。
     let Some(driver) = driver else {
         warn!(run_id = %run.id, "执行端口未装配，Run 直接落 FAILED");
-        unassembled(service, &run, producer).await;
+        fail(service, &run, REASON_NOT_ASSEMBLED, producer).await;
         return;
     };
 
@@ -177,8 +215,7 @@ async fn run_one(
         .drive(RunInput {
             run,
             prompt,
-            // 恢复点由队列在拾取 `PAUSED` Run 时经 `plan_resume` 判定（P6A-011 接入）。
-            resume: None,
+            resume,
             events: producer.clone(),
             cancel,
         })
@@ -200,9 +237,12 @@ fn log_outcome(run_id: &str, outcome: RunOutcome) {
     }
 }
 
-/// 未装配执行端口：写 `FAILED` 并补一条 `run_failed`（写库失败时只记日志）。
-async fn unassembled(service: &SessionService, run: &Run, producer: &mpsc::Sender<RunEvent>) {
-    match service.fail_run(&run.id, REASON_NOT_ASSEMBLED).await {
+/// 直接落 `FAILED`：写库后补一条 `run_failed` 事件（写库失败时只记日志）。
+///
+/// 两个调用点：未装配执行端口（D-P2-028 第 3 条）与恢复判定为不可恢复（D-P6-007）。
+/// 两者都只写终态与固定文案，不写助手消息、不重跑任何调用。
+pub(super) async fn fail(service: &SessionService, run: &Run, reason: &str, producer: &mpsc::Sender<RunEvent>) {
+    match service.fail_run(&run.id, reason).await {
         Ok(true) => {}
         Ok(false) => return,
         Err(error) => {
@@ -220,7 +260,7 @@ async fn unassembled(service: &SessionService, run: &Run, producer: &mpsc::Sende
         delta: None,
         message_id: None,
         status: Some(RunStatus::Failed),
-        error: Some(REASON_NOT_ASSEMBLED.to_string()),
+        error: Some(reason.to_string()),
         input_tokens: None,
         output_tokens: None,
         tool_call_id: None,

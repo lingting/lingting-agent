@@ -310,9 +310,9 @@
   - ④ 允许 `PENDING` 落在最后检查组**或**尚未提交的那一轮（`rounds + 1`）：崩溃可能发生在「开始标记已写、助手调用还没提交」之间，这类行不参与重放，也不构成损坏。
   - 中断通知白名单：库里存的是完整文案（见 P6A-009），`error::interrupted_reason_of` 按前缀白名单映射成「服务重启」，未登记落「原因未知」；审计状态沿用既有取值 `ERROR`，未新增 `ToolCallStatus` 取值。
   - `NoCheckpoint` 的 `interruptedReason` 文案（`R-7`）留给 P6A-013 的 `api/run/history`；本任务只保证它不进入执行、不改任何行。
-  - 队列侧仍传 `resume: None`（拾取与排序由 P6A-011 接入），因此恢复路径目前只有「端口判定 + 运行时执行」两段，还没有触发入口。
+  - 队列侧仍传 `resume: None`（拾取与排序由 P6A-011 接入），因此恢复路径目前只有「端口判定 + 运行时执行」两段，还没有触发入口。（已由 P6A-011 接入：队列在 `api/message/create` 之后调 `plan_resume` 并把恢复点交给 `drive`。）
 
-- [ ] **P6A-011 恢复触发：占用 + 向该会话发一条消息**
+- [x] **P6A-011 恢复触发：占用 + 向该会话发一条消息**（代码与静态门禁已落地；两条需要 `resume.trigger` 的验收项仍未勾）
 
   **目标**：把恢复挂在既有 Run 触发路径上——**不新增接口、不新增配置**；同一批里先恢复 `PAUSED`，再执行 `QUEUED`，顺序写死且可验。
 
@@ -329,12 +329,20 @@
   6. `api/message/create` 的返回结构不变（仍返回新建的 Run）；被恢复 Run 的进展只能通过同一条 `api/client/stream` 的 SSE 事件与 `api/run/get` 观察。
 
   **验收标准**：
-  - [ ] 「先恢复后 `QUEUED`」的顺序有可复算证据：同一会话同时存在 1 个 `PAUSED` 与本次消息产生的 1 个 `QUEUED` 时，`PAUSED` 那个的 `run_completed` 事件序号早于新 Run 的 `run_started`。
-  - [ ] 只占用不发消息：`PAUSED` Run 的 `status`、`updatedAtMs`、`resumeCount` 逐字段不变。
-  - [ ] `api/run/resume` 与 `resume_on_occupy` 在全仓检索命中数为 0（未引入）。
-  - [ ] `make gen` 的路由数与接口数与改动前相同（恢复不新增接口）；`api/message/create` 的响应结构逐字段不变。
+  - [ ] 「先恢复后 `QUEUED`」的顺序有可复算证据：同一会话同时存在 1 个 `PAUSED` 与本次消息产生的 1 个 `QUEUED` 时，`PAUSED` 那个的 `run_completed` 事件序号早于新 Run 的 `run_started`。（未落地：证据由 P6A-016 的 `resume.trigger` 产出；顺序本身已由实现固定——恢复段在 `QUEUED` 段之前，且两段在同一个串行任务里。）
+  - [ ] 只占用不发消息：`PAUSED` Run 的 `status`、`updatedAtMs`、`resumeCount` 逐字段不变。（未落地：证据由 P6A-016 的 `resume.trigger` 产出；实现上恢复段只由 `resume_pending` 触发，`occupancy/create` 启动队列时不做恢复段。）
+  - [x] `api/run/resume` 与 `resume_on_occupy` 在全仓检索命中数为 0（未引入）。（结案：`crates/`、`lingting-agent-ui/src/`、`packages/` 内检索均无命中。）
+  - [x] `make gen` 的路由数与接口数与改动前相同（恢复不新增接口）；`api/message/create` 的响应结构逐字段不变。（结案：`make gen` 输出「路由 32 条，接口 32 条」，两份 SDK 内容无变化；`api/message/create` 只改文档注释，返回类型仍是 `MessageSendVO`。）
 
-  **测试要求**：由 P6A-016 的 `resume.trigger`（顺序、只占用不恢复、响应结构不变）覆盖，执行需授权。
+  **测试要求**：由 P6A-016 的 `resume.trigger`（顺序、只占用不恢复、响应结构不变）覆盖，执行需授权。（未执行：`resume.trigger` 随 P6A-016 一起写；本次未取得用例执行授权，两条依赖它的验收项保持未勾。）
+
+  **结案说明**：
+  - 恢复段落在装配层的执行队列（新增 `crates/manager-agent/src/runner/resume.rs`），不在 `drive` 内：队列按 `updated_at_ms` 升序读该会话全部 `PAUSED`，逐条调 `RunDriver::plan_resume`，再按三态处置——`Recoverable` 交给 `run_one` 走与正常路径同一个 `drive`；`Unrecoverable` 用与「未装配执行端口」同一个 `fail` 落 `FAILED` + 固定文案 + `run_failed` 事件；`NoCheckpoint` 与判定读库失败一律**不改行**（前者是升级前的旧 Run，后者是环境问题，都不构成损坏）。
+  - 任务原文把「消息创建后登记恢复」写在 `service-core`：实际落点是 `service-core` 的只读 `SessionService::paused_runs` 加上装配层 `send_message` 的 `notify_message`。`service-core` 不能反向依赖运行时队列（`AGENTS.md` 第 6 条），因此「交给执行队列」这个动作只能在装配层完成，与 P6A-010 把判定移到端口是同一取舍。
+  - 触发信号用独立的 `resume_pending` 标记，不塞进唤醒通道：唤醒通道容量为 1，连续两条消息的唤醒会被合并丢弃，标记不会。`occupancy/create`（启动队列）与确认唤醒仍只走 `notify_run`，因此「只占用不发消息」不会恢复。
+  - `PAUSED → RUNNING` 仍由执行方在拿到全局并发许可后条件更新（P6A-010 已落地），队列只读不推进——这条与任务原文「逐个 `PAUSED → RUNNING` 条件更新」在位置上不同，但语义一致：判定与推进之间隔着许可，恢复不享有特权（D-P6-011）。
+  - 未装配执行端口时 `PAUSED` **不判死**（只记日志、保持中断态）：把可恢复的中断态落成终态会永久摧毁可恢复性，而端口缺失是装配问题；这与 `QUEUED` 的 fail-fast（D-P2-028 第 3 条）有意不同。
+  - 门禁证据：`cargo check --workspace --all-targets`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全部 0 退出；`make gen` 路由 / 接口各 32 条（未新增）。
 
 - [ ] **P6A-012 终态唯一收口：取消 / 关闭 / 恢复中再次中断**
 

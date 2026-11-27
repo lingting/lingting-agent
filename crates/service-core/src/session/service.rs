@@ -169,6 +169,15 @@ impl SessionService {
         self.repository.queued_run(&session_id).await.map_err(internal)
     }
 
+    /// 该会话全部可恢复（`PAUSED`）的 Run，按最后更新时间升序：队列在消息触发时先拾取它们（D-P6-009）。
+    ///
+    /// 只读：恢复点判定与 `PAUSED → RUNNING` 推进分别由端口与执行方完成，本方法不改任何行。
+    pub async fn paused_runs(&self, session_id: &str) -> Result<Vec<Run>, SessionError> {
+        // 同 `next_queued_run`：跨 await 持有 `&str` 会让 `Send` 推导失败（D-P2-033）。
+        let session_id = session_id.to_string();
+        self.repository.paused_runs(&session_id).await.map_err(internal)
+    }
+
     /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；返回是否真的推进（0 行表示已被取消或已终态）。
     pub async fn start_run(&self, run_id: &str) -> Result<bool, SessionError> {
         self.repository

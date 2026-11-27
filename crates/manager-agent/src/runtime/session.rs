@@ -133,6 +133,13 @@ impl RuntimeSession {
         self.executor.notify();
     }
 
+    /// 会话收到一条新消息：唤醒执行队列，并让它先恢复该会话的 `PAUSED` Run（D-P6-009）。
+    ///
+    /// 与 [`Self::notify_run`] 的区别只在恢复：确认唤醒只回填 `QUEUED` Run，不触发恢复。
+    pub(crate) fn notify_message(&self) {
+        self.executor.notify_message();
+    }
+
     /// 停止会话：先把未结束的 Run 落成终态，再让执行队列收取消信号，最后追加终态事件并 flush。
     ///
     /// 顺序与 P1.1 不同（P2-024）：数据库先落终态，取消原因才能作为权威文本被执行方取到，

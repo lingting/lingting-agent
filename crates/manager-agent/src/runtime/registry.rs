@@ -266,6 +266,18 @@ impl RuntimeState {
         read(&self.inner).sessions.get(session_id).map(RuntimeSession::producer)
     }
 
+    /// 会话收到一条新消息：唤醒执行队列，并让它先恢复该会话的 `PAUSED` Run（D-P6-009）。
+    ///
+    /// 返回该会话当前是否被占用：没有被占用的会话没有执行队列，恢复与执行都不会发生。
+    pub fn notify_message(&self, session_id: &str) -> bool {
+        let inner = read(&self.inner);
+        let Some(session) = inner.sessions.get(session_id) else {
+            return false;
+        };
+        session.notify_message();
+        true
+    }
+
     /// 唤醒某会话的 Run 执行队列，返回该会话当前是否被占用。
     ///
     /// 没有被占用的会话没有执行队列：新建的 Run 停在 `QUEUED`，由调用方记录原因（D-P1.1-004）。

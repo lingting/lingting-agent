@@ -36,6 +36,11 @@ pub async fn message_list(Query(po): Query<MessageListParams>) -> Result<Vec<Mes
 }
 
 /// 发送消息：写入用户消息并创建对应的 Run。
+///
+/// 副作用（D-P6-009）：会话已被占用时，该会话里 `PAUSED` 的 Run 会**先被恢复并跑完**，本次消息
+/// 产生的 `QUEUED` Run 在它们之后执行。恢复不新增接口、不新增配置：客户端发一条消息即可，
+/// 被恢复 Run 的进展通过同一条 `api/client/stream` 的 SSE 事件（按 `runId` 归类）与
+/// `api/run/get` 观察；本接口的响应结构不变（仍返回新建的 Run）。
 #[web_api_post(path = "api/message/create")]
 pub async fn message_create(Json(po): Json<MessageSendPO>) -> Result<MessageSendVO> {
     manager_agent::send_message(po).await.map_err(api_error)

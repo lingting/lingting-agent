@@ -84,6 +84,20 @@ impl Repository {
         row.as_ref().map(run_from_row).transpose()
     }
 
+    /// 该会话全部 `PAUSED` 的 Run，按最后更新时间升序（D-P6-009 的拾取顺序）。
+    ///
+    /// 只读、不推进状态：`PAUSED → RUNNING` 由执行方在拿到全局并发许可后条件更新，因此这里取到的
+    /// Run 可能已被别的触发推进或取消，调用方必须按「影响 0 行即放弃」处理（D-P6-006）。
+    pub async fn paused_runs(&self, session_id: &str) -> Result<Vec<Run>, DbError> {
+        let sql = format!("{SELECT_RUN} WHERE session_id = ? AND status = ? ORDER BY updated_at_ms, id");
+        let rows = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(RunStatus::Paused.to_string())
+            .fetch_all(self.pool())
+            .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
     /// 把 `QUEUED` 的 Run 推进到 `RUNNING`；返回是否真的推进（0 行表示已被取消或已终态）。
     pub async fn start_run(&self, run_id: &str, now_ms: i64) -> Result<bool, DbError> {
         let affected = sqlx::query("UPDATE runs SET status = ?, updated_at_ms = ? WHERE id = ? AND status = ?")

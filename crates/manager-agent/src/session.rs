@@ -1,7 +1,8 @@
 //! 会话业务的对外入口：转调 `service-core` 的 Service，并补齐装配层的协调动作。
 //!
-//! 两个协调点：一是「发送消息后唤醒该会话的执行队列」：Run 只有在会话被占用时才会被执行
-//! （D-P1.1-004），而占用信息在运行时会话里，因此这个动作只能在装配层完成（D-P2-035）；
+//! 两个协调点：一是「发送消息后唤醒该会话的执行队列，并让它先恢复该会话的 `PAUSED` Run」：
+//! Run 只有在会话被占用时才会被执行（D-P1.1-004），而占用信息在运行时会话里，因此这个动作
+//! 只能在装配层完成（D-P2-035）；
 //! 二是「创建会话时的模型归属校验」：模型清单来自 Provider 配置（D-P2-015），校验放在这里
 //! 可以让 `service-core` 继续不感知 Provider。
 
@@ -57,11 +58,14 @@ pub async fn list_messages(po: MessageListParams) -> Result<Vec<Message>, Sessio
 }
 
 /// 发送消息：写入用户消息与 `QUEUED` 的 Run，并在会话被占用时唤醒执行队列。
+///
+/// 会话被占用时这条消息同时是**恢复的唯一触发点**（D-P6-009）：该会话里 `PAUSED` 的 Run 会先被
+/// 恢复并跑完，本次消息产生的 `QUEUED` Run 在它们之后执行；未被占用时 `PAUSED` 保持原样。
 pub async fn send_message(po: MessageSendPO) -> Result<MessageSendVO, SessionError> {
     let sent = session()?.send_message(po).await?;
     // 未被占用的会话里 Run 停在 QUEUED，不排队也不执行，这里记录原因便于排查。
     if let Some(runtime) = runtime()
-        && !runtime.notify_run(&sent.run.session_id)
+        && !runtime.notify_message(&sent.run.session_id)
     {
         tracing::info!(
             session_id = %sent.run.session_id,
