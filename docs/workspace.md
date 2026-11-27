@@ -272,6 +272,7 @@ Agent Skills 能力（P5 起落地）。
 - 章节切分只认 ATX 标题与代码围栏，不引入任何 Markdown crate；`SKILL.md` 不识别 Setext 标题（D-P5-017）。
 - **不依赖** `types-core`：`skills.toml` 由装配层读成上限参数再喂进来（与 `agent-tool` 处理 `[tools]`、`agent-mcp` 处理 `mcp.toml` 同一口径）。
 - **不依赖** `agent-runtime` / `agent-route` / `rig-core` / `service-core` / `lib-db` / `lib-web*` / `bin-*`。
+- 自带的示例 Skill 放在 `assets/skills/<name>/`（`SKILL.md` + `references/`）：纯数据，不参与编译、不注册工具、不获得执行能力；用例把它们复制到临时应用根目录后当普通 Skill 使用（D-P5-020）。
 
 #### agent-tool
 

@@ -65,11 +65,11 @@ async fn chat(socket: &mut TcpStream, state: &MockState, request: &Request) -> R
         }
         _ => {}
     }
-    // 工具调用脚本：写在用户输入的 `tool:{…}` 里（P3-030）。
-    let script = Script::parse(&tools::last_content(&body));
+    // 工具调用剧本：写在用户输入的 `tool:{…}` 里（P3-030 / P5-019）。
+    let script = tools::parse_in(&body);
     if !streaming {
-        let completion = match script.as_ref().filter(|script| script.applies_to(&body)) {
-            Some(script) => reply::completion_with_calls(&body, script),
+        let completion = match script.as_ref().and_then(|script| script.round(&body)) {
+            Some(calls) => reply::completion_with_calls(&body, calls),
             None => reply::completion(&body, &reply::text(&body)),
         };
         return http::write_json(socket, 200, &completion).await;
@@ -90,8 +90,11 @@ async fn stream(
         return Ok(());
     }
     // 工具调用帧与文本分块帧互斥：这一轮要么要求调用工具，要么给出正文。
-    let (frames, done) = match script.as_ref().filter(|script| script.applies_to(body)) {
-        Some(script) => (reply::tool_frames(body, script), !script.missing_end),
+    let (frames, done) = match script
+        .as_ref()
+        .and_then(|script| script.round(body).map(|calls| (script, calls)))
+    {
+        Some((script, calls)) => (reply::tool_frames(body, script, calls), !script.missing_end),
         None => (reply::stream_frames(body, &reply::text(body)), true),
     };
 

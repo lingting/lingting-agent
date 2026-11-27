@@ -1,6 +1,6 @@
 # P5：Skills
 
-**状态：未开工（规划已定稿，2026-11-26）。** 已展开为 20 个任务 / 6 个批次（[tasks.md](tasks.md)）、判据 10 组 53 条（[acceptance.md](acceptance.md)）、决策 20 项（[decisions.md](decisions.md)）。阶段边界见下文 §一 / §二，本文件其余章节只保留阶段级目标，不重复任务拆分细节。
+**状态：已完成（2026-11-27）。** 20 个任务 / 6 个批次全部结案（[tasks.md](tasks.md)）；判据 10 组 53 条逐条取证（[acceptance.md](acceptance.md)、[`docs/reports/p5-020-acceptance.md`](../../docs/reports/p5-020-acceptance.md)）；决策 21 项（[decisions.md](decisions.md)）。阶段边界见下文 §一 / §二，本文件其余章节只保留阶段级目标，不重复任务拆分细节。
 
 ---
 

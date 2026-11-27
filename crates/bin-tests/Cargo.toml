@@ -24,6 +24,9 @@ agent-mcp = { workspace = true }
 # 进程内用例的装配入口（P2-013 起 holder 归 manager-agent）；`metrics` 让运行时采集指标，
 # 运行结束后由测试报告输出快照（P2.1-003）。
 manager-agent = { workspace = true, features = ["metrics"] }
+# Skill 用例：`skill.parse` / `skill.discover` / `skill.budget` 在进程内直接核对解析、发现与预算
+# 口径，`skill.index` / `skill.load` 用同一套注册表构造请求级断言的输入（P5-016 ~ P5-018）。
+agent-skill = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -1,6 +1,6 @@
 # P5 任务清单
 
-**状态：进行中（Batch A、Batch B、Batch C、Batch D、Batch E 已完成，2026-11-27）。** 20 个任务 / 6 个批次，15 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
+**状态：已完成（Batch A ~ Batch F 全部结案，2026-11-27）。** 20 个任务 / 6 个批次，20 个任务结案。阶段目标与边界见 [README.md](README.md) §一 / §二，判据见 [acceptance.md](acceptance.md)，决策见 [decisions.md](decisions.md)。
 
 批次之间强序，批次内可并行。**每个任务的「测试要求」只允许在 `crates/bin-tests` 落地用例；其他 Crate 不得写 `#[cfg(test)]`**（仓库 `AGENTS.md` 第 28 条）。**所有需要执行用例的步骤都必须先取得明确授权**；未授权时只推进代码、静态检查与文档部分，相关验收项保持未勾选。
 
@@ -17,7 +17,7 @@
 
 > 依赖：无。本批次只造地基：新 crate 可编译、`skills.toml` 能装载校验、一份 `SKILL.md` 能被解析成结构化数据并给出可定位错误。此时还没有发现、索引与工具。
 >
-> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；用例 `skill.config` 新增并通过（`make test ARGS="skill.config"`）。`serde_yaml_ng` 实测解析到 0.10.0，`cargo tree -i serde_yaml_ng` 只命中 `agent-skill`。P5-003 的解析口径（D-2 ~ D-6）由 P5-016 的 `skill.parse` 覆盖，本批次**未取证**，相关条目保持未勾选。
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿；用例 `skill.config` 新增并通过（`make test ARGS="skill.config"`）。`serde_yaml_ng` 实测解析到 0.10.0，`cargo tree -i serde_yaml_ng` 只命中 `agent-skill`。P5-003 的解析口径（D-2 ~ D-6）由 P5-016 的 `skill.parse` 覆盖（已授权执行并通过，见 `docs/reports/p5-020-acceptance.md`）；其中符号链接跟随一项按「未采集：Windows 缺少创建链接的权限」记录。
 
 - [x] **P5-001 新增 Crate `agent-skill` 与依赖边界**
 
@@ -65,10 +65,10 @@
   5. 引用扫描：`references/` 子目录下递归的普通文件（跳过符号链接与目录），按相对路径字典序，上限 200 条；每条产出**相对应用根目录**的路径（`skills/<dir>/references/<rel>`），拒绝任何含 `..` 的路径分量。
   6. 所有错误集中在 `error.rs` 一处构造（`SkillError`），`Display` 形如 `<相对路径>:<行号>: <原因>`，不含绝对路径、不含正文内容。
   **验收标准**：
-  - [ ] 合法 `SKILL.md` 解析出全部字段；`未知字段`（如 `allowed-tools`）被忽略且不产生错误。（待 P5-016 的 `skill.parse` 取证）
-  - [ ] 六类非法输入各有独立文案：缺 frontmatter、缺结束分隔符、YAML 语法错（带行号）、缺 `name`、缺 `description`、`name` 不合规。`name` 与目录名不一致**不报错**（D-P5-004）。（待 P5-016 的 `skill.parse` 取证）
-  - [ ] 章节表与正文逐条对得上：代码围栏内的 `#` 不生成章节；每个章节的字符数可由正文独立复算。（待 P5-016 的 `skill.parse` 取证）
-  - [ ] 引用清单：`references/../../config.toml` 这类路径不出现在清单里；符号链接不被跟随；超过 200 条时截断并给出确定性顺序。（待 P5-016 的 `skill.parse` 取证）
+  - [x] 合法 `SKILL.md` 解析出全部字段；`未知字段`（如 `allowed-tools`）被忽略且不产生错误。（用例 `skill.parse` 取证）
+  - [x] 六类非法输入各有独立文案：缺 frontmatter、缺结束分隔符、YAML 语法错（带行号）、缺 `name`、缺 `description`、`name` 不合规。`name` 与目录名不一致**不报错**（D-P5-004）。（用例 `skill.parse` 取证）
+  - [x] 章节表与正文逐条对得上：代码围栏内的 `#` 不生成章节；每个章节的字符数可由正文独立复算。（用例 `skill.parse` 取证）
+  - [x] 引用清单：`references/../../config.toml` 这类路径不出现在清单里；符号链接不被跟随；超过 200 条时截断并给出确定性顺序。（用例 `skill.parse` 取证）
   - [x] `cargo clippy -p agent-skill --all-targets -- -D warnings` 通过。
   **测试要求**：解析口径由 P5-016 的 `skill.parse` 用例覆盖；本任务不新增用例。
 
@@ -78,7 +78,7 @@
 
 > 依赖：Batch A。本批次结束时，进程内能发现 `skills/` 下的全部 Skill、区分「可用 / 非法」、按名字查找与加载，并知道每个 Skill 声明的工具此刻是否可用。还没有上下文注入、没有工具、没有接口。
 >
-> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿。本批次 12 条验收项（P5-004 / P5-005 / P5-006 各 4 条）由 P5-016 的 `skill.discover`、P5-017 的 `skill.index` / `skill.load`、P5-019 的 `skill.tools_missing` 取证；用例执行未授权，相关条目保持未勾选。
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿。本批次 12 条验收项（P5-004 / P5-005 / P5-006 各 4 条）由 P5-016 的 `skill.discover`、P5-017 的 `skill.index` / `skill.load`、P5-019 的 `skill.tools_missing` 取证（已授权执行并通过）。
 
 - [x] **P5-004 Skill Discovery 与快照**
 
@@ -92,10 +92,10 @@
   4. 同名冲突（两个目录声明同一个 `name`）：两份都置 `Invalid`，错误文案同时给出两个目录；不做「先到先得」。
   5. 快照按 `name` 升序（`Invalid` 也参与排序，同名的按目录名排序），保证两次扫描结果逐字节可比。
   **验收标准**：
-  - 目录缺失、空目录、只有无关子目录时都得到空清单且无错误。（待 P5-016 的 `skill.discover` 取证）
-  - 缺 `SKILL.md` 的目录不进清单；`SKILL.md` 内容非法的目录进清单且 `status = INVALID`、`error` 可定位。（待 P5-016 的 `skill.discover` 取证）
-  - 同名两份都 `INVALID`，`error` 含两个目录名；改名后重新扫描两份都 `READY`。（待 P5-016 的 `skill.discover` 取证）
-  - 两次扫描同一目录，快照完全一致（顺序、字段、错误文案）。（待 P5-016 的 `skill.discover` 取证）
+  - 目录缺失、空目录、只有无关子目录时都得到空清单且无错误。（用例 `skill.discover` 取证）
+  - 缺 `SKILL.md` 的目录不进清单；`SKILL.md` 内容非法的目录进清单且 `status = INVALID`、`error` 可定位。（用例 `skill.discover` 取证）
+  - 同名两份都 `INVALID`，`error` 含两个目录名；改名后重新扫描两份都 `READY`。（用例 `skill.discover` 取证）
+  - 两次扫描同一目录，快照完全一致（顺序、字段、错误文案）。（用例 `skill.discover` 取证）
   **测试要求**：由 P5-016 的 `skill.discover` 用例覆盖。
 
 - [x] **P5-005 SkillRegistry：启用状态、索引渲染与加载**
@@ -110,10 +110,10 @@
   4. 加载 `load(name) -> Result<SkillContent, SkillError>`：`Ready`/`enabled` 才可加载；返回正文、章节表与引用清单；工具缺失**不阻断**，由调用方把缺失清单拼进返回文本（D-P5-009）。
   5. `entries()` 出清单用（含 `Invalid` 与 `enabled` 标记，按 `name` 升序）；`enabled_count()`、`invalid_count()` 供指标与接口。
   **验收标准**：
-  - 索引只含启用项；`Invalid` 项永不出现；行格式与 D-P5-003 的样例逐字符一致。（待 P5-017 的 `skill.index` 取证）
-  - 超 `max_index_chars` 时整行截断且 `shown + hidden` 等于启用项总数；`chars` ≤ `max_index_chars`（含结尾那行）。（待 P5-017 的 `skill.index` 取证）
-  - `disable` 后索引立即不含该项，`enable` 后立即恢复；两次往返结果一致。（待 P5-017 的 `skill.index` 取证）
-  - `load` 对禁用 / 未知 / `INVALID` 三种输入返回三种不同文案；`INVALID` 的文案带着解析期的可定位错误。（待 P5-017 的 `skill.load` 取证）
+  - 索引只含启用项；`Invalid` 项永不出现；行格式与 D-P5-003 的样例逐字符一致。（用例 `skill.index` 取证）
+  - 超 `max_index_chars` 时整行截断且 `shown + hidden` 等于启用项总数；`chars` ≤ `max_index_chars`（含结尾那行）。（用例 `skill.index` 取证）
+  - `disable` 后索引立即不含该项，`enable` 后立即恢复；两次往返结果一致。（用例 `skill.index` 取证）
+  - `load` 对禁用 / 未知 / `INVALID` 三种输入返回三种不同文案；`INVALID` 的文案带着解析期的可定位错误。（用例 `skill.load` 取证）
   **测试要求**：由 P5-017 的 `skill.index` / `skill.load` 覆盖。
 
 - [x] **P5-006 工具可用性判定与降级文案**
@@ -127,9 +127,9 @@
   3. 文案单一产点在 `availability.rs`：索引行后缀 `（缺少工具：a、b）`，加载结果末尾追加一节「缺少的工具」+ 一句约束「涉及这些工具的步骤必须停止，并明确告知用户无法执行」。
   4. 装配层（`manager-agent`）提供实现：`struct RegistryAvailability(Arc<ToolRegistry>)`，`available` 走注册表查找；权限为 `deny` 的工具算**不可用**（它不会出现在模型清单里）。
   **验收标准**：
-  - 声明两个工具、只注册一个时：索引行标注缺少的那一个；`load` 结果含同样清单与那句约束。（待 P5-019 的 `skill.tools_missing` 取证）
-  - 权限 `deny` 的工具算缺失；改成 `allow` 后重新渲染即消失。（待 P5-019 的 `skill.tools_missing` 取证）
-  - 运行期注册新工具（MCP 连接）后，下一次渲染的缺失标记自动消失，无需重载 Skill。（待 P5-019 的 `skill.tools_missing` 取证）
+  - 声明两个工具、只注册一个时：索引行标注缺少的那一个；`load` 结果含同样清单与那句约束。（用例 `skill.tools_missing` 取证）
+  - 权限 `deny` 的工具算缺失；改成 `allow` 后重新渲染即消失。（用例 `skill.tools_missing` 取证）
+  - 运行期注册新工具（MCP 连接）后，下一次渲染的缺失标记自动消失，无需重载 Skill。（用例 `skill.tools_missing` 取证）
   - 文案只存在于 `availability.rs` 一处（全仓检索无第二个同类拼接点）。（静态核对：`agent-skill` 内只有 `availability.rs` 拼接索引后缀与缺失小节）
   **测试要求**：由 P5-019 的 `skill.tools_missing` 用例覆盖。
 
@@ -139,7 +139,7 @@
 
 > 依赖：Batch B。本批次结束时，服务端的模型请求里带一段 Skill 索引，模型可以调用 `skill_load` 拿到正文，且预算口径全程成立。本批次不改 Agent Loop 的时序与事件。
 >
-> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿，`make gen-check` 通过。新增依赖边两条：`agent-context -> agent-skill`（索引进系统提示）、`manager-agent -> agent-context`（`ContextBuilder` 由装配层构造），已同步 `docs/workspace.md` 的 §5.1 / §8.1.3。本批次的请求体级验收项由 P5-017 的 `skill.index` / `skill.load` / `skill.budget` 与 P5-019 的 `skill.tools_missing` 取证；用例执行未授权，相关条目保持未勾选。
+> **状态：已完成（2026-11-26）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿，`make gen-check` 通过。新增依赖边两条：`agent-context -> agent-skill`（索引进系统提示）、`manager-agent -> agent-context`（`ContextBuilder` 由装配层构造），已同步 `docs/workspace.md` 的 §5.1 / §8.1.3。本批次的请求体级验收项由 P5-017 的 `skill.index` / `skill.load` / `skill.budget` 与 P5-019 的 `skill.tools_missing` 取证（已授权执行并通过）。
 
 - [x] **P5-007 索引注入系统提示**
 
@@ -152,10 +152,10 @@
   3. 合成后仍是一条 `ContextItem`（`ContextSource::System`、`MessageRole::System`），**不新增 `ContextSource` 取值**（D-P5-003）；`available_tokens(system_tokens)` 自动把索引算进系统开销。
   4. 两段都为空时不发 system 消息（P2 既有行为）；索引渲染在每次 `build` 时现场进行（无缓存），与系统提示词「改完即生效」的口径一致。
   **验收标准**：
-  - 只配 AGENTS.md：请求体与 P2 逐字节一致（`git diff` 只含新增分支）。（待 P5-017 的 `skill.index` 取证）
-  - 只配 Skill（无 AGENTS.md）：system 消息以 `## 可用 Skill` 开头，且只有一条 system 消息。（待 P5-017 的 `skill.index` 取证）
-  - 两者都有：AGENTS.md 内容在前，中间恰一个空行，索引小节在后。（待 P5-017 的 `skill.index` 取证）
-  - 无启用 Skill 时不产生空小节、不产生空 system 消息。（待 P5-017 的 `skill.index` 取证）
+  - 只配 AGENTS.md：请求体与 P2 逐字节一致（`git diff` 只含新增分支）。（用例 `skill.index` 取证）
+  - 只配 Skill（无 AGENTS.md）：system 消息以 `## 可用 Skill` 开头，且只有一条 system 消息。（用例 `skill.index` 取证）
+  - 两者都有：AGENTS.md 内容在前，中间恰一个空行，索引小节在后。（用例 `skill.index` 取证）
+  - 无启用 Skill 时不产生空小节、不产生空 system 消息。（用例 `skill.index` 取证）
   - [x] `cargo clippy -p agent-context --all-targets -- -D warnings` 通过。
   **测试要求**：由 P5-017 的 `skill.index` 用例覆盖（断言请求体形态与 system 消息条数）。
 
@@ -171,10 +171,10 @@
   4. 篇幅判定（D-P5-010）：`无 section` 时正文总字符 ≤ `max_inline_chars` → 全文；否则 → 章节目录（每节 `标题（n 字）`）+ 一句「请用 section 参数按节读取」。`有 section` 时按标题精确匹配（允许省略 `#` 前缀），只返回该节（含子节），超过 `max_inline_chars` 则截断并标注「本节已截断，剩余 n 字符」。
   5. 未知技能 / 禁用 / `INVALID` / 未知章节分别返回 `ToolError`，`Display` 文案来自 `error.rs` 单一产点；`ToolError` 经执行器映射为模型可读文本，Run 不 `FAILED`。
   **验收标准**：
-  - 小正文：一次加载返回全文 + 引用清单；字符数与 `SKILL.md` 正文逐字符相等（除固定包装行）。（待 P5-017 的 `skill.load` 取证）
-  - 大正文（超 `max_inline_chars`）：没有 `section` 时返回章节目录，目录里的标题与字符数与解析结果一致；带 `section` 时返回该节正文。（待 P5-017 的 `skill.load` 取证）
-  - 未知章节的错误文案列出可用章节名（按正文顺序，最多前 10 个）。（待 P5-017 的 `skill.load` 取证）
-  - 工具不派生进程、不写文件：`git diff` 与进程计数可核对；`file_access` 为 `Read`，在只读工具的并行执行里不被串行。（静态部分已核对：本工具不碰文件系统与进程 API；串行与否待 P5-017 取证）
+  - 小正文：一次加载返回全文 + 引用清单；字符数与 `SKILL.md` 正文逐字符相等（除固定包装行）。（用例 `skill.load` 取证）
+  - 大正文（超 `max_inline_chars`）：没有 `section` 时返回章节目录，目录里的标题与字符数与解析结果一致；带 `section` 时返回该节正文。（用例 `skill.load` 取证）
+  - 未知章节的错误文案列出可用章节名（按正文顺序，最多前 10 个）。（用例 `skill.load` 取证）
+  - [x] 工具不派生进程、不写文件：`git diff` 与进程计数可核对；`file_access` 为 `Read`，在只读工具的并行执行里不被串行。（用例 `skill.load`：`file_access = Read`、`risk = ReadOnly`；同一轮两个 `skill_load` 的开始事件都早于第一个结束事件）
   - [x] `cargo clippy -p agent-skill --all-targets -- -D warnings` 通过。
   **测试要求**：由 P5-017 的 `skill.load` 覆盖。
 
@@ -189,10 +189,10 @@
   3. `run_started.input_tokens` 只随索引增长：正文只作为工具结果出现在**后续轮次**，不算进首次 `input_tokens`——这一点写进 `builder.rs` 与用例口径。
   4. 极端输入：`max_index_chars` 小于单行长度时，最多输出「另有 N 个」这一行（不输出半行）；正文为空、章节全空时返回明确文案而不是空字符串。
   **验收标准**：
-  - 索引字符数 ≤ `max_index_chars`（含结尾行）；正文返回值 ≤ `max_inline_chars`（含包装行）。（待 P5-017 的 `skill.budget` 取证）
-  - 同一份 Skill 在「只启用它」与「启用 50 个」两种场景下，`skill_load` 的返回逐字符一致（索引规模不影响正文）。（待 P5-017 的 `skill.budget` 取证）
-  - 换一份 10 倍大的 Skill，`run_started.input_tokens` 不增长（排除索引变化后逐值相等）；工具结果长度上限不变。（待 P5-017 的 `skill.budget` 取证）
-  - `max_inline_chars > max_result_chars` 时启动日志有一条 `warn`，服务照常启动。（`warn` 已在装配期落地；日志取证需授权执行，未取）
+  - 索引字符数 ≤ `max_index_chars`（含结尾行）；正文返回值 ≤ `max_inline_chars`（含包装行）。（用例 `skill.budget` 取证）
+  - 同一份 Skill 在「只启用它」与「启用 50 个」两种场景下，`skill_load` 的返回逐字符一致（索引规模不影响正文）。（用例 `skill.budget` 取证）
+  - 换一份 10 倍大的 Skill，`run_started.input_tokens` 不增长（排除索引变化后逐值相等）；工具结果长度上限不变。（用例 `skill.budget` 取证）
+  - `max_inline_chars > max_result_chars` 时启动日志有一条 `warn`，服务照常启动。（`warn` 已在装配期落地；**未采集**：该证据只能从日志读取，按 `AGENTS.md` 采集条款不得作为数据来源。服务可用性由全部 `self` 用例覆盖）
   **测试要求**：由 P5-017 的 `skill.budget` 覆盖。
 
 - [x] **P5-010 装配接入与 `agent-runtime` 构造调整**
@@ -207,9 +207,9 @@
   4. `AgentHolder` 增加 `skills: Arc<SkillManager>` 与访问器；`lib-web` 的接口经 `manager_agent::skill_*` 门面取用（P5-012）。
   5. `skills.toml` 的 `enabled = false` 时：不发现、不注册、不注入，等同 P2 行为，且 `api/skill/list` 返回空清单。
   **验收标准**：
-  - 启动后一个 Skill 出现在请求体的 system 消息里；`skill_load` 出现在 `tools` 字段里。（待 P5-017 / P5-019 取证）
+  - [x] 启动后一个 Skill 出现在请求体的 system 消息里；`skill_load` 出现在 `tools` 字段里。（用例 `skill.index` / `skill.load` / `skill.e2e` 取证）
   - [x] `git diff --stat` 显示 `crates/agent-runtime/` 只有 `port.rs` 的构造签名改动，循环（`loop_.rs`）零改动。
-  - `enabled = false` 时 `cargo tree` 不变、请求体与 P2 一致、`skill_load` 不在 `tools` 里。（`cargo tree` 已核对：该分支不新增依赖；请求体差异待 P5-017 取证）
+  - [x] `enabled = false` 时 `cargo tree` 不变、请求体与 P2 一致、`skill_load` 不在 `tools` 里。（用例 `skill.index` 的第三段：system 消息只剩 `AGENTS.md`、`tools` 里没有 `skill_load`、清单为空）
   - [x] `cargo build --workspace` 与 `cargo clippy --workspace --all-targets -- -D warnings` 通过。
   **测试要求**：无新增用例；装配结果由 P5-017 / P5-019 用例间接取证。
 
@@ -234,7 +234,7 @@
   **验收标准**：
   - [x] 开 `metrics` 构建下：放入 3 个 Skill（1 个坏）后 `discovered = 3`、`invalid = 1`、`enabled = 2`；一次成功加载与一次失败加载后 `loads` / `load_failures` 各加 1。（用例 `skill.metrics` 实测 `discovered=3 invalid=1 enabled=2 loads=1 load_failures=1 sections_served=1 reloads=2`）
   - [x] `index_chars` 等于同一时刻索引渲染的字符数（用例内独立复算；实测 `index_chars = 77`）。
-  - 未开 `metrics` 时快照全 `0`，且 `cargo tree` 不新增依赖。
+  - 未开 `metrics` 时快照全 `0`，且 `cargo tree` 不新增依赖。（**未采集**：探针只在 debug + `metrics` 注册，未开特性时接口不存在，读不出「全 0」；`cargo tree` 不新增依赖已核对）
   **测试要求**：由 P5-018 的 `skill.metrics` 覆盖；未开特性时按「未采集：原因」显式报告。用例已提前落地并执行通过（`make test ARGS="skill.metrics"`）。
 
 - [x] **P5-012 三条管理接口与契约类型**
@@ -315,8 +315,10 @@
 ## Batch F：用例、回归与阶段验收（P5-016 ~ P5-020）
 
 > 依赖：Batch A ~ E。用例只写在 `crates/bin-tests/src/cases/skill/`（`AGENTS.md` 第 28 条）。**执行任何用例前必须取得明确授权**；未授权的条目在验收报告里写「未授权」，不得写「通过」。
+>
+> **状态：已完成（2026-11-27）。** 门禁：`cargo build --workspace`、`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全绿，`make gen` / `make gen-check` / `make ui-check` 退出码 0。落地 10 个新用例（`skill.parse` / `discover` / `index` / `load` / `budget` / `invalid` / `reload` / `security` / `e2e` / `tools_missing`）、3 份示例 Skill（`crates/agent-skill/assets/skills/`）、Mock LLM 剧本的逐轮形态（`rounds`，D-P5-019）与 `util/paths.rs` 的 Skill 目录辅助；生产代码零改动。**取证（已授权执行）**：`skill` 组 15/15、`tool` 28/28、`mcp` 19/19、`run` 10/10、`client` 2/2、`persist` 5/5、`runtime` 18/18，全量 `make test ARGS="--all"` 138/138 通过。未采集项三项（符号链接跟随、启动 `warn`、无特性快照），逐条原因见 `docs/reports/p5-020-acceptance.md` §六。
 
-- [ ] **P5-016 用例：配置、解析与发现**
+- [x] **P5-016 用例：配置、解析与发现**
 
   **目标**：把 Batch A / B 的口径逐条钉成可执行用例。
   **涉及文件**：新增 `crates/bin-tests/src/cases/skill/{mod.rs,config.rs,parse.rs,discover.rs}`、`crates/bin-tests/src/cases/mod.rs`（登记）、`crates/bin-tests/src/util/paths.rs`（Skill 目录布局的临时 HOME 辅助）。
@@ -325,9 +327,9 @@
   2. `skill.parse`：六类解析错误与合法样例（含未知字段被忽略、名字与目录不一致、代码围栏内的 `#`、引用路径越权、符号链接）。
   3. `skill.discover`：目录缺失 / 空目录 / 缺 `SKILL.md` / `INVALID` / 同名冲突 / 两次扫描一致。
   **验收标准**：三个用例各自断言与 P5-002 / P5-003 / P5-004 的验收标准一一对应；用例名可单独指定（`make test ARGS="skill.parse"`）。
-  **测试要求**：本次落地三个用例；执行需授权。
+  **测试要求**：本次落地三个用例（`skill.config` / `skill.parse` / `skill.discover`）；已授权执行并通过。
 
-- [ ] **P5-017 用例：索引、加载与预算**
+- [x] **P5-017 用例：索引、加载与预算**
 
   **目标**：证明「索引常驻、正文按需、预算不破」不是文档承诺。
   **涉及文件**：新增 `crates/bin-tests/src/cases/skill/{index.rs,load.rs,budget.rs}`。
@@ -336,9 +338,9 @@
   2. `skill.load`：全文 / 章节目录 / 指定章节 / 未知章节 / 未知技能 / 禁用 / `INVALID` / `INVALID` 的 `skill_load` 工具执行路径（Mock LLM 第一轮请求该工具）。
   3. `skill.budget`：`max_index_chars` 与 `max_inline_chars` 的边界、同一 Skill 在 1 个与 50 个 Skill 场景下返回一致、10 倍大正文不改变 `run_started.input_tokens`、执行器 `max_result_chars` 未触发。
   **验收标准**：断言值来自接口响应、SSE 事件与 `metrics` 快照（`AGENTS.md` 测试数据采集条款），不读日志。
-  **测试要求**：本次落地三个用例；执行需授权。
+  **测试要求**：本次落地三个用例（`skill.index` / `skill.load` / `skill.budget`）；已授权执行并通过。
 
-- [ ] **P5-018 用例：格式拒绝、重载、接口、安全与指标**
+- [x] **P5-018 用例：格式拒绝、重载、接口、安全与指标**
 
   **目标**：把「坏 Skill 不可能被悄悄用上」「重载即生效」「接口语义」「越权不可达」「指标可复算」钉住。
   **涉及文件**：新增 `crates/bin-tests/src/cases/skill/{invalid.rs,reload.rs,api.rs,security.rs,metrics.rs}`（`api.rs` 与 `metrics.rs` 已随 Batch D 的取证提前落地）。
@@ -349,9 +351,9 @@
   4. `skill.security`：引用清单无 `..`；技能目录下的可执行文件不产生任何执行路径（无工具注册、无子进程）；索引 / 接口 / 事件里不出现绝对路径。
   5. `skill.metrics`：`metrics` 特性下的八项数值（`discovered` / `invalid` / `enabled` / `loads` / `load_failures` / `sections_served` / `index_chars` / `reloads`）。
   **验收标准**：每条判据都能在 `docs/reports/p5-020-acceptance.md` 里指名到用例与断言；未开 `metrics` 特性的构建按「未采集：原因」报告。
-  **测试要求**：本次落地五个用例；执行需授权（`api.rs` / `metrics.rs` 两个已落地并执行通过，其余三个随本任务）。
+  **测试要求**：本次落地五个用例（`skill.invalid` / `skill.reload` / `skill.security` 随本任务，`skill.api` / `skill.metrics` 已随 Batch D 提前落地）；均已授权执行并通过。
 
-- [ ] **P5-019 示例 Skill 与端到端用例**
+- [x] **P5-019 示例 Skill 与端到端用例**
 
   **目标**：用 2–3 个真实示例证明「模型的下一步确实按 Skill 的步骤走」，并覆盖客户端与工具缺失两条路径。
   **涉及文件**：新增 `crates/agent-skill/assets/skills/{pdf-report,db-migrate,log-triage}/SKILL.md`（含 `references/` 与一份长正文）、新增 `crates/bin-tests/src/cases/skill/{e2e.rs,tools_missing.rs,tui.rs,web.rs}`。
@@ -361,9 +363,9 @@
   3. `skill.tools_missing`：声明工具不可用时，索引标注 + `skill_load` 结果含缺失清单与那句约束；模型在此之后的回复里不出现「已执行该工具」的表述。
   4. `skill.tui` / `skill.web`：打开面板 / 抽屉、切换启用、重载、读取详情四条路径。
   **验收标准**：示例 Skill 三份都在 `assets/skills/` 下且能原样被解析器接受；端到端用例的两个关键断言（步骤顺序、降级表述）可核对。
-  **测试要求**：本次落地四个用例；执行需授权（`tui.rs` / `web.rs` 两个已随 Batch E 提前落地并执行通过，`e2e.rs` / `tools_missing.rs` 随本任务）。
+  **测试要求**：本次落地四个用例（`skill.e2e` / `skill.tools_missing` 随本任务，`skill.tui` / `skill.web` 已随 Batch E 提前落地）；均已授权执行并通过。
 
-- [ ] **P5-020 全量回归与阶段验收报告**
+- [x] **P5-020 全量回归与阶段验收报告**
 
   **目标**：确认本阶段没有破坏 P1 ~ P4 的既有语义，并按判据逐条出稿。
   **涉及文件**：新增 `docs/reports/p5-020-acceptance.md`、`.steps/README.md`（P5 状态行）、`.steps/p5/README.md`（状态行）、`docs/workspace.md`（若 §3.2 有遗漏）。
@@ -376,4 +378,4 @@
   - 报告中每条判据都有「证据类型 + 具体命令/用例名/断言」。
   - 未取证项为零遗漏（逐条注明原因），不得留空。
   - `.steps/README.md`、`p5/README.md`、`decisions.md` 三处状态口径一致（20 个任务、6 个批次、判据组数）。
-  **测试要求**：回归执行需授权；未授权时报告标注「未授权」，阶段不视为完成。
+  **测试要求**：回归执行需授权；本轮已获授权并执行（全量 138/138 通过），报告见 `docs/reports/p5-020-acceptance.md`。

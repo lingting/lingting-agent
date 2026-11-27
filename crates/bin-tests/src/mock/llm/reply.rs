@@ -99,10 +99,10 @@ pub(crate) fn stream_frames(body: &Value, text: &str) -> Vec<String> {
 ///
 /// `missing_end` 为真时不写结束帧（`finish_reason = tool_calls`），也不写 `[DONE]`：
 /// Rig 侧因此拿不到 `End` 事件，应把这次回复判为「工具调用缺少结束事件」。
-pub(crate) fn tool_frames(body: &Value, script: &Script) -> Vec<String> {
+pub(crate) fn tool_frames(body: &Value, script: &Script, calls: &[tools::ScriptedCall]) -> Vec<String> {
     let model = model(body);
     let mut frames = Vec::new();
-    for (index, call) in script.calls.iter().enumerate() {
+    for (index, call) in calls.iter().enumerate() {
         let pieces = tools::fragments_of(&call.arguments, script.fragments);
         // 首帧带上 id / type / name 与第一片参数；后续帧只带参数。
         frames.push(frame(
@@ -139,7 +139,7 @@ pub(crate) fn tool_frames(body: &Value, script: &Script) -> Vec<String> {
 }
 
 /// 普通（非流式）补全里的工具调用响应体：消息带 `tool_calls`、正文为空。
-pub(crate) fn completion_with_calls(body: &Value, script: &Script) -> Value {
+pub(crate) fn completion_with_calls(body: &Value, calls: &[tools::ScriptedCall]) -> Value {
     let (input, output) = usage(body, "");
     json!({
         "id": "chatcmpl-mock",
@@ -151,7 +151,7 @@ pub(crate) fn completion_with_calls(body: &Value, script: &Script) -> Value {
             "message": {
                 "role": "assistant",
                 "content": null,
-                "tool_calls": script.calls.iter().enumerate().map(|(index, call)| json!({
+                "tool_calls": calls.iter().enumerate().map(|(index, call)| json!({
                     "index": index,
                     "id": call.id,
                     "type": "function",
