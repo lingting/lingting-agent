@@ -13,9 +13,10 @@
 | POST | `api/session/create` | `SessionCreatePO`（请求体） | `SessionSummary` | 标题缺省为「新会话」，模型缺省取 `[provider]` 的 `default_model`；指定未配置的模型返回 400「模型不可用：<id>」 |
 | GET | `api/session/list` | 无 | `SessionSummary[]` | 按 `updatedAtMs` 倒序 |
 | GET | `api/message/list` | `MessageListParams`（查询参数） | `Message[]` | 按写入顺序；会话不存在 404 |
-| POST | `api/message/create` | `MessageSendPO`（请求体） | `MessageSendVO` | 写入用户消息并创建 `QUEUED` 的 Run |
+| POST | `api/message/create` | `MessageSendPO`（请求体） | `MessageSendVO` | 写入用户消息并创建 `QUEUED` 的 Run；会话已被占用时，该会话的 `PAUSED` Run 会先被恢复（D-P6-009） |
 | GET | `api/run/get` | `RunGetParams`（查询参数） | `Run` | Run 不存在 404 |
 | POST | `api/run/cancel` | `RunCancelPO`（请求体） | `Run` | 只允许取消未结束的 Run（`QUEUED` / `RUNNING` / `WAITING` / `PAUSED`），否则 400 |
+| GET | `api/run/history` | `RunHistoryParams`（查询参数） | `RunHistory` | Run 的步骤历史（检查点序列 + 恢复次数 + 中断原因）；只读，Run 不存在 404 |
 
 会话与 Run 的 ID 只能走查询参数或请求体：`web_api` 的 path 不支持占位符（D-008）。
 
@@ -30,6 +31,7 @@
 | `MessageSendPO` | `content` | body | 是 | 用户消息正文；全为空白时 400 |
 | `RunGetParams` | `runId` | query | 是 | 目标 Run ID |
 | `RunCancelPO` | `runId` | body | 是 | 目标 Run ID |
+| `RunHistoryParams` | `runId` | query | 是 | 目标 Run ID |
 
 ## 载荷类型
 
@@ -89,6 +91,27 @@
 | `updatedAtMs` | `string` | 最后更新时间（Unix 毫秒） |
 | `finishedAtMs` | `string \| null` | 结束时间（Unix 毫秒）；未结束时为空 |
 
+### RunHistory
+
+`api/run/history` 的响应：状态在 `run` 上，过程在 `steps` 上（`get` 是状态，`history` 是过程）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `run` | `Run` | 该 Run 的当前状态快照 |
+| `resumeCount` | `string` | 已成功推进的恢复次数（`i64` → 字符串） |
+| `interruptedReason` | `string \| null` | 中断原因；只有中断态与恢复过的 Run 有值 |
+| `steps` | `RunStep[]` | 步骤序列：按 `seqNo` 升序；升级前的旧 Run 为空数组（合法响应，不是错误） |
+
+### RunStep
+
+一个已提交边界上的步骤：只暴露派生字段，`payload` 原文不外泄。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `seqNo` | `string` | 同一 Run 内从 1 连续递增（`i64` → 字符串） |
+| `phase` | `CheckpointPhase` | `MODEL_DONE` / `TOOLS_DONE` / `AWAITING_CONFIRM` |
+| `toolRound` | `string` | 轮次序号：起点为 0，其后每轮加一 |
+| `createdAtMs` | `string` | 记录产生时间（Unix 毫秒） |
 ### MessageSendVO
 
 | 字段 | 类型 | 说明 |
@@ -188,14 +211,15 @@ P3 追加上述三个工具事件（D-P3-013）：只新增枚举值与 `RunEven
 | `phase` | `MODEL_DONE` / `TOOLS_DONE` / `AWAITING_CONFIRM`，依次对应「模型轮次已落库」「工具批次已落库」「Run 停在工具确认点」三种已提交边界 |
 | `toolRound` | 轮次序号：起点为 0，其后每轮加一 |
 | `lastMessageSeq` | 已提交消息的 `seq` 上界，恢复时「从这条之后继续」 |
-| `payload` | 只放恢复所需的最小事实：格式版本 + 本批工具组的调用标识与落库状态；不含上下文全文、系统提示词、`AGENTS.md` 内容与 Provider 原始响应 |
+| `payload` | 只放恢复所需的最小事实：格式版本 + 本批工具组的调用标识与落库状态 + 起点检查点的助手消息 ID；不含上下文全文、系统提示词、`AGENTS.md` 内容与 Provider 原始响应 |
 | `formatVersion` | 格式版本，当前为 `1`；与载荷里的同名字段一并写入，两处必须一致 |
 
 - `Run.lastCheckpointSeq` 与插行在同一事务里更新，插入失败时保持原值。
 - 版本高于当前代码（`Unsupported`）或版本为 0 / 缺字段 / 与列不一致（`Corrupt`）一律判「不可恢复」：不猜测、也不降级成「从头重跑」。
-- Run 落终态后保留最近 20 条检查点，其余删除；未结束的 Run（含 `PAUSED`）一条都不删。
-- 检查点没有对外接口，`Run` 上的 `lastCheckpointSeq` 是它唯一的读出口；步骤历史接口随 P6A-013 落地。
-- **本阶段进度**：状态机、`0003` 迁移与检查点存储已落地；`PAUSED` 的生产者（启动自愈）、恢复触发、循环内的检查点写入点与结算接口分别随 P6A-009 ~ P6A-013 落地。因此当前 `api/run/get` 看到的 Run 一律 `resumeCount = 0`、`interruptedReason` 与 `lastCheckpointSeq` 为空。
+- **落终态即裁剪**：`COMPLETED` / `FAILED` / `CANCELLED` 三条收尾路径都在推进状态的事务里把该 Run 的检查点裁到最近 20 条（`CHECKPOINT_KEEP_LAST`），因此不存在「终态已提交、检查点还留着全部过程」的窗口。未结束的 Run（含 `PAUSED`）一条都不删。
+- 步骤历史由 `api/run/history` 提供（只读，`steps` 按 `seqNo` 升序，不含 `payload` 原文）；`Run.lastCheckpointSeq` 仍是「已提交到哪」的指针。
+- **恢复时重发的 `run_started` 复用起点检查点记下的助手消息 ID**（`payload.assistantMessageId`）：客户端的助手气泡因此不会因为恢复多出一条；该字段只在起点检查点（`toolRound = 0` 的 `MODEL_DONE`）上有值。
+- **`PAUSED` 的生产者是启动自愈，消费入口是 `api/message/create`**：会话被占用后发一条消息，该会话的 `PAUSED` Run 会先被恢复并跑完，本次消息产生的 `QUEUED` Run 在其后执行；只占用不发消息不触发恢复。
 
 ## 请求与响应样例
 

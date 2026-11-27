@@ -3,7 +3,7 @@
 //! 需要多语句原子性的操作以 `with_xxx` 命名，事务经 [`Repository::begin`] 取得（D-P2-034）；
 //! 单语句操作直接走连接池。
 
-use agent_core::session::{Message, Run, RunStatus};
+use agent_core::session::{CHECKPOINT_KEEP_LAST, Message, Run, RunStatus};
 use agent_tool::{REJECTED_TEXT, ToolCallStatus};
 use lib_db::{DbError, Transaction};
 use sqlx::Row;
@@ -184,11 +184,17 @@ impl Repository {
         self.insert_message_in(&mut transaction, assistant).await?;
         self.touch_session_in(&mut transaction, &assistant.session_id, now_ms)
             .await?;
+        // 落终态即裁剪检查点（D-P6-001 / `P-5`）：与状态推进同一事务，不留「已终态但检查点还在长」的行。
+        self.prune_checkpoints_in(&mut transaction, run_id, CHECKPOINT_KEEP_LAST)
+            .await?;
         transaction.commit().await?;
         Ok(true)
     }
 
     /// 把未结束的 Run 落成 `FAILED`；返回是否真的推进（0 行表示已终态）。
+    ///
+    /// 落终态即裁剪检查点（D-P6-001 / `P-5`）：裁剪与状态推进在同一事务里，因此「终态已提交但检查点
+    /// 还留着全部过程」这种半收尾状态不会出现。0 行时不提交，检查点也保持原样。
     pub async fn fail_run(&self, run_id: &str, error: Option<&str>, now_ms: i64) -> Result<bool, DbError> {
         let status = RunStatus::Failed.to_string();
         let sql = format!(
@@ -196,16 +202,24 @@ impl Repository {
              WHERE id = ? AND status IN ({})",
             Self::open_statuses()
         );
+        let mut transaction = self.begin().await?;
         let affected = sqlx::query(&sql)
             .bind(&status)
             .bind(error)
             .bind(now_ms)
             .bind(now_ms)
             .bind(run_id)
-            .execute(self.pool())
+            .execute(transaction.connection())
             .await?
             .rows_affected();
-        Ok(affected > 0)
+        if affected == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        self.prune_checkpoints_in(&mut transaction, run_id, CHECKPOINT_KEEP_LAST)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     /// 把未结束的 Run 落成 `CANCELLED`；返回是否真的推进（0 行表示已终态）。
@@ -235,6 +249,9 @@ impl Repository {
             .rows_affected();
         if affected > 0 {
             self.finish_pending_tool_calls_in(&mut transaction, run_id).await?;
+            // 取消同样是终态：检查点按终态策略裁剪，与状态推进同一事务（`P-5`）。
+            self.prune_checkpoints_in(&mut transaction, run_id, CHECKPOINT_KEEP_LAST)
+                .await?;
         }
         transaction.commit().await?;
         Ok(affected > 0)
@@ -270,6 +287,9 @@ impl Repository {
             .rows_affected();
         if affected > 0 {
             self.finish_pending_tool_calls_of_session_in(&mut transaction, session_id)
+                .await?;
+            // 会话停止收尾的也是终态：检查点按终态策略裁剪（`P-5`），与状态推进同一事务。
+            self.prune_checkpoints_of_session_in(&mut transaction, session_id, CHECKPOINT_KEEP_LAST)
                 .await?;
         }
         transaction.commit().await?;

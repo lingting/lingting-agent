@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use agent_core::session::{
-    CHECKPOINT_KEEP_LAST, Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO,
-    RunCheckpoint, RunGetParams, RunHistory, RunHistoryParams, RunStatus, RunStep, SessionCreatePO, SessionSummary,
+    Message, MessageListParams, MessageRole, MessageSendPO, MessageSendVO, Run, RunCancelPO, RunCheckpoint,
+    RunGetParams, RunHistory, RunHistoryParams, RunStatus, RunStep, SessionCreatePO, SessionSummary,
 };
 use agent_tool::{ToolCallRecord, ToolCallStatus};
 use lib_core::{id, time};
@@ -155,9 +155,7 @@ impl SessionService {
         run.interrupted_reason = None;
         run.updated_at_ms = now_millis;
         run.finished_at_ms = Some(now_millis);
-        // 取消是终态：检查点按终态策略清理（只留最近若干条，D-P6-005 的收尾口径）。
-        // 清理失败不改取消结果——终态已提交，检查点只是过程数据，下一次终态清理会再删一次。
-        let _ = self.prune_checkpoints(&params.run_id).await;
+        // 取消是终态：检查点已随上面的条件更新在同一事务里裁剪（`P-5`），这里不再补一次。
         Ok(run)
     }
 
@@ -339,18 +337,8 @@ impl SessionService {
             steps,
         })
     }
-    /// Run 落终态后清理检查点：只保留最近 [`CHECKPOINT_KEEP_LAST`] 条，返回被删除的条数。
-    ///
-    /// 未结束的 Run（含 `PAUSED`）一条都不删：检查点正是它恢复的依据。
-    pub async fn prune_checkpoints(&self, run_id: &str) -> Result<usize, CheckpointError> {
-        let Some(run) = self.repository.run(run_id).await? else {
-            return Ok(0);
-        };
-        if !run.status.is_terminal() {
-            return Ok(0);
-        }
-        self.repository.prune_checkpoints(run_id, CHECKPOINT_KEEP_LAST).await
-    }
+    // 裁剪的入口在数据层（`Repository::prune_checkpoints_in`），由三条终态收尾在同一事务里调用：
+    // 服务层不再暴露「事后清理」的方法，避免出现第二条清理路径（`P-5`）。
 
     /// 一轮工具轨迹落库：assistant `tool_calls` 与全部 TOOL 结果同一事务写入（D-P3-024）。
     ///

@@ -12,8 +12,10 @@
 //! - **载荷必须是恢复所需的最小事实**：只有工具组的调用标识与落库状态，不放上下文全文、系统
 //!   提示词、`AGENTS.md` 内容与 Provider 原始响应。
 
-use agent_core::session::{CHECKPOINT_FORMAT_VERSION, CheckpointDecodeError, CheckpointPayload, RunCheckpoint};
-use lib_db::DbError;
+use agent_core::session::{
+    CHECKPOINT_FORMAT_VERSION, CheckpointDecodeError, CheckpointPayload, RunCheckpoint, RunStatus,
+};
+use lib_db::{DbError, Transaction};
 use sqlx::Row;
 use std::fmt::{Display, Formatter};
 
@@ -136,8 +138,15 @@ impl Repository {
 
     /// 只保留某 Run 最近 `keep_last` 条检查点，返回被删除的条数。
     ///
-    /// 是否「该清理」由调用方判断（只在 Run 落终态时清理）；`keep_last` 大于已有条数时一条都不删。
-    pub async fn prune_checkpoints(&self, run_id: &str, keep_last: usize) -> Result<usize, CheckpointError> {
+    /// **这是清理的唯一实现**：终态收尾（`COMPLETED` / `FAILED` / `CANCELLED`）都经
+    /// [`Self::prune_checkpoints_in`] 在与状态推进同一个事务里调用它，因此不存在「终态已提交、
+    /// 检查点还留着全部过程」的窗口；`keep_last` 大于已有条数时一条都不删。
+    pub(super) async fn prune_checkpoints_in(
+        &self,
+        transaction: &mut Transaction,
+        run_id: &str,
+        keep_last: usize,
+    ) -> Result<usize, DbError> {
         let keep_last = i64::try_from(keep_last).unwrap_or(i64::MAX);
         let affected = sqlx::query(
             "DELETE FROM run_checkpoints \
@@ -147,9 +156,41 @@ impl Repository {
         .bind(run_id)
         .bind(run_id)
         .bind(keep_last)
-        .execute(self.pool())
+        .execute(transaction.connection())
         .await?
         .rows_affected();
+        let removed = usize::try_from(affected).unwrap_or(usize::MAX);
+        crate::observability::record_checkpoints_pruned(removed);
+        Ok(removed)
+    }
+
+    /// 会话级终态收尾：把该会话里已落终态 Run 的检查点按同一策略裁剪。
+    ///
+    /// 只删「所属 Run 已是终态」的行：会话里可能还有 `PAUSED`（可恢复，一条都不删）。
+    pub(super) async fn prune_checkpoints_of_session_in(
+        &self,
+        transaction: &mut Transaction,
+        session_id: &str,
+        keep_last: usize,
+    ) -> Result<usize, DbError> {
+        let keep_last = i64::try_from(keep_last).unwrap_or(i64::MAX);
+        let terminal = RunStatus::TERMINAL
+            .iter()
+            .map(|status| format!("'{status}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "DELETE FROM run_checkpoints \
+                 WHERE run_id IN (SELECT id FROM runs WHERE session_id = ? AND status IN ({terminal})) \
+                   AND seq_no <= (SELECT COALESCE(MAX(seq_no), 0) FROM run_checkpoints WHERE run_id = run_checkpoints.run_id) \
+                                 - ?"
+        );
+        let affected = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(keep_last)
+            .execute(transaction.connection())
+            .await?
+            .rows_affected();
         let removed = usize::try_from(affected).unwrap_or(usize::MAX);
         crate::observability::record_checkpoints_pruned(removed);
         Ok(removed)

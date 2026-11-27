@@ -1,7 +1,7 @@
 # 6A：可靠性（Checkpoint / Resume / Run Persistence / Task Recovery）
 
-**状态：已完成（Batch A ~ E 全部结案）。** 20 个任务 / 5 个批次（[tasks.md](tasks.md)），判据 10 组 58 条（[acceptance.md](acceptance.md)），决策 13 项 `D-P6-001` ~ `D-P6-013`（[decisions.md](decisions.md)）。已定案：`D-P6-004` 新增非终态 `PAUSED`、`D-P6-007` 一律不重放并回灌中断原因、`D-P6-009` 由「占用 + 发消息」触发恢复。**阶段报告见 [`docs/reports/p6a-020-acceptance.md`](../../../docs/reports/p6a-020-acceptance.md)**：判据除 `O-3`（未采集：无 `metrics` 特性的构建不注册该探针）外全部成立；结转风险 `KI-P6A-001` ~ `KI-P6A-008`。
-
+**状态：已完成（Batch A ~ E 全部结案）。** 20 个任务 / 5 个批次（[tasks.md](tasks.md)），判据 10 组 59 条（[acceptance.md](acceptance.md)），决策 13 项 `D-P6-001` ~ `D-P6-013`（[decisions.md](decisions.md)）。已定案：`D-P6-004` 新增非终态 `PAUSED`、`D-P6-007` 一律不重放并回灌中断原因、`D-P6-009` 由「占用 + 发消息」触发恢复。**阶段报告见 [`docs/reports/p6a-020-acceptance.md`](../../../docs/reports/p6a-020-acceptance.md)**：判据除 `O-3`（未采集：无 `metrics` 特性的构建不注册该探针）外全部成立；结转风险 `KI-P6A-001` ~ `KI-P6A-008`。
+**复核轮补正（2026-11-28）**：三处代码补正与文档同步已按授权完成，明细见报告 §八 —— ① 检查点裁剪收敛到推进终态的同一事务（原实现只在取消时事后清理，`COMPLETED` / `FAILED` 会漏）；② 起点检查点补记 `assistant_message_id`，恢复重发的 `run_started` 与收尾复用它（`P6A-005` 第 1 条原为悬空项）；③ 文档（`docs/api/session.md` / `docs/api/probe.md` / `docs/workspace.md` / `docs/develop.md`）与 `.steps/` 状态行同步，`acceptance.md` 的重复编号修正并新增 `S-4`。
 > 依据：阶段级规划 [`.steps/p6/README.md`](../README.md) 第二节「可靠性」与第六节验收方向 1、第八节风险 1 / 2 / 8；P5 结案结论与结转风险 [`docs/reports/p5-020-acceptance.md`](../../../docs/reports/p5-020-acceptance.md)（`KI-P5-001` ~ `KI-P5-004`）；结构权威 [`docs/workspace.md`](../../../docs/workspace.md)；开发规范 [`docs/develop.md`](../../../docs/develop.md)；仓库根 `AGENTS.md`。
 >
 > 凡文档与代码不一致之处，以代码为准并记入 [decisions.md](decisions.md)。

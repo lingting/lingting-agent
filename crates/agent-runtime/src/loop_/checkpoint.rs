@@ -28,19 +28,28 @@ use super::trace;
 /// 追加一条检查点：`seq_no` 由存储层分配（同一 Run 内从 1 连续），返回本次分配的序号。
 ///
 /// `last_message_seq` 在这里统一取「会话已提交消息的上界」，调用点不再各自算进度。
+/// `assistant_message_id` 只有起点检查点（`MODEL_DONE` + `tool_round = 0`）传值，其余边界为 `None`。
 pub(crate) async fn append(
     runtime: &AgentRuntime,
     run: &Run,
     phase: CheckpointPhase,
     tool_round: u32,
     tool_calls: Vec<ToolCallDigest>,
+    assistant_message_id: Option<String>,
 ) -> Result<i64, String> {
     let last_message_seq = runtime
         .service
         .last_message_seq(&run.session_id)
         .await
         .map_err(|error| super::logged(error::STORAGE, error))?;
-    let checkpoint = RunCheckpoint::new(phase, tool_round, last_message_seq, tool_calls, time::now_millis());
+    let checkpoint = RunCheckpoint::new(
+        phase,
+        tool_round,
+        last_message_seq,
+        tool_calls,
+        assistant_message_id,
+        time::now_millis(),
+    );
     runtime
         .service
         .append_checkpoint(&run.id, &checkpoint)
@@ -117,6 +126,11 @@ pub(crate) async fn plan(service: &SessionService, run: &Run) -> Result<ResumePl
         phase: latest.phase,
         round: latest.tool_round,
         unpaired: recovered.unpaired.iter().map(call_of).collect(),
+        // 起点检查点才带助手消息 ID；恢复点指向的是最近一条，因此要回到第 1 条去取
+        // （第 1 条就是起点：序号从 1 连续，起点必然存在，`gap` 已保证连续）。
+        assistant_message_id: checkpoints
+            .first()
+            .and_then(|start| start.payload.assistant_message_id.clone()),
     }))
 }
 

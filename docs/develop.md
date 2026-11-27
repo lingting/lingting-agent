@@ -90,7 +90,8 @@
 |---|---|
 | 配置文件 | `<应用根目录>/config.toml`：`[server]` 的 `addr` / `port` / `log_level`、`[runtime.events]` 的事件文件轮转、`[provider]` / `[[provider.models]]` 的模型清单、`[agent]` 的运行参数；文件不存在时全部取默认值（`[provider]` 缺省即「Provider 未配置」，服务端照常启动） |
 | `[provider]` / `[[provider.models]]` | 只读 Provider 配置：`id` / `kind`（只接受 `openai-compatible`）/ `base_url` / `api_key` / `default_model`；每个模型有 `id` / `context_window`（缺省 8192）/ `max_output_tokens`（缺省 1024）。段一旦存在，缺字段、未知 `kind`、`default_model` 不在 `models` 中、`models` 为空或 id 重复、数值非正或 `max_output_tokens > context_window` 都是启动期硬错误（退出码 2） |
-| `[agent]` | 运行参数：`max_concurrent_runs`（缺省 `"3C"`，即 3 × CPU 核数；也可写整数如 `4` 表示绝对许可数）、`run_queue_timeout_ms`（缺省 120000）、`llm_idle_timeout_ms`（缺省 60000）、`context_max_messages`（缺省 40）、`context_safety_tokens`（缺省 256）。核数在装配时取一次（`available_parallelism()`），运行期不变；`0` / `0C` / 非法后缀 / 负数 / 超过信号量上限都是启动期硬错误（退出码 2） |
+| `[agent]` | 运行参数：`max_concurrent_runs`（缺省 `"3C"`，即 3 × CPU 核数；也可写整数如 `4` 表示绝对许可数）、`run_queue_timeout_ms`（缺省 120000）、`llm_idle_timeout_ms`（缺省 60000）、`context_max_messages`（缺省 40）、`context_safety_tokens`（缺省 256）、`max_tool_rounds`、`run_max_retries`（缺省 `0` = 不重试，上限 10）、`run_retry_backoff_ms`（缺省 500，`0` = 立即重试，上限 60000）。核数在装配时取一次（`available_parallelism()`），运行期不变；`0` / `0C` / 非法后缀 / 负数 / 超过信号量上限 / 重试次数与退避越界都是启动期硬错误（退出码 2） |
+| 失败分类与重试 | Run 级重试只覆盖「同一次 LLM 请求」：可重试（上游瞬时错误、`LlmError` 传输类、工具 `Retryable`）按 `run_max_retries` 重发并有计数；不可重试（认证、上下文超预算、轮次用尽、轨迹损坏、检查点不可用/写失败、取消）立即落 `FAILED` + 固定文案，不消耗重试预算。已推过 `message_delta` 的轮次不重试，因此「流中断在半途」仍是直接失败（D-P6-012） |
 | 系统提示词 | `<应用根目录>/AGENTS.md`：名称全大写优先，其次忽略大小写的 Markdown 文件；每次组装 Context 现场读取、不缓存；缺失或为空时不发 system 消息 |
 | 应用根目录 | `framework-core` 的 `ApplicationDirectory::user_in("agent", ".lingting")`：Windows 为 `%USERPROFILE%\.lingting\agent`；debug 构建为可执行文件同级的 `runtime` 目录 |
 | 环境变量 | 只有 `AGENT_HOME`（应用根目录覆盖）；地址 / 端口 / 日志级别等配置项不再支持环境变量 |
@@ -292,7 +293,7 @@ Run 的状态判定与进度指针各只有一个事实源；新增状态或边�
 | 检查点入口 | 追加 / 读回 / 清理只有 `service-core` 的 `repository/checkpoint.rs` 一处，序号由存储层按 `MAX(seq_no)+1` 分配，插行与 `runs.last_checkpoint_seq` 同事务（D-P6-001） |
 | 检查点载荷 | 只放恢复所需的最小事实（格式版本 + 本批工具组的调用标识与落库状态）；不放上下文全文、系统提示词、`AGENTS.md` 内容与 Provider 原始响应（验收 `C-4` / `E-3`） |
 | 格式版本 | `CHECKPOINT_FORMAT_VERSION` 全仓只定义一处；`> 当前` 判 `Unsupported`，`0` / 缺字段 / 与列不一致判 `Corrupt`，两类都按「不可恢复」处置，不猜测、不降级成从头执行（D-P6-003） |
-| 保留策略 | Run 落终态后只保留最近 `CHECKPOINT_KEEP_LAST`（20）条，未结束的 Run 一条不删（验收 `C-4` / `P-5`） |
+| 保留策略 | Run 落终态后只保留最近 `CHECKPOINT_KEEP_LAST`（20）条，未结束的 Run 一条不删；**裁剪在推进终态的同一事务里完成**（`COMPLETED` / `FAILED` / `CANCELLED` 三条收尾路径都调 `Repository::prune_checkpoints_in`），不做事后补清理（验收 `C-4` / `P-5`） |
 | 迁移 | 只做前进迁移（无 down）：新版本追加到 `lib-db/src/migrate.rs` 的清单，加列语句由 runner 用 `PRAGMA table_info` 预检，因此脚本本身也幂等（D-P2-030） |
 
 用例与数据来源：

@@ -152,7 +152,10 @@ service-core
     |
     +-- session/        会话业务入口（`service.rs`）、执行端口（`driver.rs`）与业务错误（`error.rs`）
     |
-    +-- repository/     数据访问（SQL 与行映射），仅由本 Crate 的 service 调用
+    +-- repository/     数据访问（SQL 与行映射），仅由本 Crate 的 service 调用；
+    |                   P6 6A 起含检查点的追加 / 读回 / 终态裁剪（`checkpoint.rs`，D-P6-001）
+    |
+    +-- observability.rs  检查点与恢复的进程内计数（仅 `metrics` 特性，P6A-014）
 ```
 
 进程内运行时（客户端注册表、会话占用、事件文件、断连处理链、Run 执行队列）**不在本 Crate**：
@@ -179,11 +182,12 @@ Agent 装配、进程内运行时与跨 Service 编排（P2-013 / P2-035 起）�
   `tools` / `mcp` / `skills` / `context_builder`）。
 - 进程内运行时：客户端注册表、会话占用、事件文件与轮转、断连处理链、心跳扫描（`runtime/`）。
 - Run 执行：串行执行队列、取消信号登记与执行端口安装；事件生产自 P2-023 起由 `agent-runtime` 提供。
-- 跨组件协调：发送消息后唤醒该会话的执行队列；停止运行时会话时取消未结束的 Run。
+- 跨组件协调：发送消息后唤醒该会话的执行队列（含恢复标记）；停止运行时会话时取消未结束的 Run。
 - 关闭入口：先让 Run 落终态（断连处理链），再关闭 MCP 连接与其子进程（P4-012）。
 - Skill 装配（P5-010 起）：`skills.toml` → `SkillLimits` 的翻译、`agent_skill::discover` 的调用、
   `skill_load` 的注册与装配日志（只记相对目录与状态），以及索引来源交给 Context 组装器；
   索引渲染与正文加载仍在 `agent-skill` 内完成。
+- 恢复段（P6 6A 起，`runner/resume.rs`）：会话收到一条新消息后，先把该会话的 `PAUSED` Run 逐个判定并恢复（`updated_at_ms` 升序），再执行本次消息产生的 `QUEUED` Run；只占用不发消息不触发（D-P6-009）。
 
 边界：
 
@@ -203,7 +207,8 @@ manager-agent
     |
     +-- runtime    进程内运行时（注册表 / 占用 / 事件文件 / 断连链 / 定时任务）
     |
-    +-- runner     Run 执行队列、取消信号登记与执行端口安装（生产方来自 `agent-runtime`）
+    +-- runner     Run 执行队列、取消信号登记与执行端口安装（生产方来自 `agent-runtime`）；
+    |               恢复段在 `resume.rs`（P6 6A 起，D-P6-009）
     |
     +-- session    会话业务对外入口与唤醒协调
     |
@@ -225,6 +230,7 @@ Agent 领域的基础类型与抽象。
 - Run。
 - Run Status。
 - Agent Event。
+- 检查点领域类型（P6 6A 起，`session/checkpoint.rs`）：`RunCheckpoint` / `CheckpointPhase` / `CheckpointPayload` / `ToolCallDigest` / `ResumePoint` / `CheckpointDecodeError`，以及 `CHECKPOINT_FORMAT_VERSION` / `CHECKPOINT_KEEP_LAST` 两个常量。只含领域自有结构，不含 `rig-core` / `rmcp` / `framework-*` 的协议类型（`AGENTS.md` 第 24 条）。
 - Agent Error。
 - Agent 基础领域模型。
 
@@ -288,6 +294,7 @@ Agent Skills 能力（P5 起落地）。
 - Tool Result。
 - Tool Permission。
 - Tool Execution Context。
+- 工具审计记录 `ToolCallRecord`（P6 6A 起新增 `started_at_ms`：`PENDING` 行有值，用于区分「从未开始」与「可能已执行」；**没有**新增「可重放」自述，恢复时一律不重放，D-P6-007）。
 - Tool Error。
 
 边界与约定：

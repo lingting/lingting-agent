@@ -111,10 +111,11 @@ async fn cancel_storage() -> Result<Vec<String>> {
         "库内行应与取消返回值逐字段同形：{stored:?} != {cancelled:?}"
     );
 
+    // 取消与裁剪同一事务：不需要（也没有）事后清理的调用点。
     let remaining = service.checkpoints_of_run(&run_id).await?;
     ensure!(
         remaining.len() == CHECKPOINT_KEEP_LAST,
-        "取消是终态，检查点应裁到 {CHECKPOINT_KEEP_LAST} 条，实际 {}",
+        "取消是终态，检查点应在收尾事务里裁到 {CHECKPOINT_KEEP_LAST} 条，实际 {}",
         remaining.len()
     );
 

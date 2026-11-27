@@ -107,6 +107,8 @@
 
   **测试要求**：由 P6A-016 的 `resume.checkpoint` 覆盖（序号连续性、事务回滚、清理策略）。（结案：存储半段已由新增的 `resume.checkpoint` 覆盖并通过。）
 
+  **复核补正（清理路径）**：原实现只在 `SessionService::cancel_run` 里事后调一次清理，`COMPLETED` / `FAILED` 两条收尾路径不清理，与「Run 落终态时按策略删除检查点」不符。现已收敛为「裁剪挂在推进终态的事务里」：`Repository::prune_checkpoints_in`（唯一实现）由 `with_run_completion` / `fail_run` / `cancel_run` 在同一事务内调用，`cancel_session_runs`（会话停止收尾）另有会话级版本；`SessionService::prune_checkpoints` 的事后入口已删除，改为只读的 `checkpoints_of_terminal_run`。
+
 - [x] **P6A-004 检查点格式版本化与不识别版本的处置**
 
   **目标**：检查点格式有版本号，遇到不认识的版本不猜测、不静默降级，直接判「不可恢复」。
@@ -146,7 +148,7 @@
 >
 > 需要回填的口径差异：
 >
-> 1. P6A-005 第 1 条要求起点 `MODEL_DONE` 的 payload 记 `assistant_message_id`：本轮**未加**该字段（`CheckpointPayload` 仍是「版本 + 工具组摘要」），因为它的唯一使用点是 P6A-010 的重发 `run_started`；届时应与恢复入口一起加，避免现在加一个没有读取点的字段。
+> 1. P6A-005 第 1 条要求起点 `MODEL_DONE` 的 payload 记 `assistant_message_id`：本轮**未加**该字段（`CheckpointPayload` 仍是「版本 + 工具组摘要」），因为它的唯一使用点是 P6A-010 的重发 `run_started`；届时应与恢复入口一起加，避免现在加一个没有读取点的字段。**（已回填）** 该字段已随复核补上：`CheckpointPayload.assistant_message_id` 只在起点检查点（`tool_round = 0` 的 `MODEL_DONE`）有值，`ResumePoint.assistant_message_id` 从第 1 条检查点取回，`drive` 重发的 `run_started` 与最终收尾都用它，客户端因此不会因为恢复多出一个助手气泡。
 > 2. 工具边界的条数口径：一轮工具提交后写 `MODEL_DONE` 与 `TOOLS_DONE` 各一条，因此「两轮工具 + 正常完成」= 5 条（起点 1 + 每轮 2），与 P6A-018 的数字一致。
 > 3. `append_checkpoint` 的序号改为「插入语句内现算 + `RETURNING seq_no`」：原实现先 `SELECT` 再 `INSERT`，事务以读快照起步，并发 Run 时升级写锁会直接拿到 `SQLITE_BUSY_SNAPSHOT`（不等 `busy_timeout`）；`run.concurrency` 因此暴露过一次「检查点写入失败」。属实现细节，不改验收口径。
 > 4. `make ui-check` 仍是既有失败：`Run` 的三个新字段自 Batch A 起没有同步到 UI 测试夹具（`tests/tool-events.test.tsx` / `tests/use-chat.test.tsx` 缺 `resumeCount` 等），与本次改动无关，留给 P6A-019 的门禁收口。

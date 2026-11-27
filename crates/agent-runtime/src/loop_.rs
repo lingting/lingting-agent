@@ -89,12 +89,17 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
     };
 
     // 四、run_started：助手消息 ID 先定，成功收尾时按它写库。
-    let assistant_message_id = match id::next_id() {
-        Ok(id) => id,
-        Err(error) => {
-            warn!(run_id = %run.id, %error, "生成助手消息 ID 失败");
-            return fail(runtime, &run, &mut feed, error::STORAGE).await;
-        }
+    //     恢复的 Run 复用起点检查点记下的那个 ID：客户端的助手气泡因此不会因为恢复多出一条
+    //     （P6A-005 第 1 条）。旧库的检查点没有这个字段时退回新生成。
+    let assistant_message_id = match resume.as_ref().and_then(|point| point.assistant_message_id.clone()) {
+        Some(id) => id,
+        None => match id::next_id() {
+            Ok(id) => id,
+            Err(error) => {
+                warn!(run_id = %run.id, %error, "生成助手消息 ID 失败");
+                return fail(runtime, &run, &mut feed, error::STORAGE).await;
+            }
+        },
     };
     let mut started = feed.event(RunEventKind::RunStarted);
     started.status = Some(RunStatus::Running);
@@ -110,8 +115,17 @@ pub(crate) async fn drive(runtime: &AgentRuntime, input: RunInput) -> RunOutcome
 
     // 四.5、起点检查点：只在正常路径写。恢复的 Run 上次的进度已经有检查点，
     //      这里没有新的已提交边界，补一条只会让序号与「已提交到哪」脱节。
+    //      起点同时记下本次运行的助手消息 ID：恢复时重发的 `run_started` 用它（P6A-005 第 1 条）。
     if resume.is_none()
-        && let Err(public) = checkpoint::append(runtime, &run, CheckpointPhase::ModelDone, 0, Vec::new()).await
+        && let Err(public) = checkpoint::append(
+            runtime,
+            &run,
+            CheckpointPhase::ModelDone,
+            0,
+            Vec::new(),
+            Some(assistant_message_id.clone()),
+        )
+        .await
     {
         return fail(runtime, &run, &mut feed, public).await;
     }

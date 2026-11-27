@@ -47,6 +47,11 @@ pub struct CheckpointPayload {
     pub format_version: u32,
     /// 本批工具组的摘要；模型边界没有工具组时为空。
     pub tool_calls: Vec<ToolCallDigest>,
+    /// 起点检查点（`tool_round = 0` 的 `MODEL_DONE`）上那个助手消息的 ID。
+    ///
+    /// 恢复时重发的 `run_started` 要带同一个 ID，否则客户端会把恢复的那一轮认成新消息
+    /// （P6A-005 第 1 条）。其余边界为 `None`：它们没有「本次运行的助手消息」这层含义。
+    pub assistant_message_id: Option<String>,
 }
 
 /// 一条检查点。
@@ -72,11 +77,13 @@ impl RunCheckpoint {
     /// 构造一条待追加的检查点：格式版本只从 [`CHECKPOINT_FORMAT_VERSION`] 取。
     ///
     /// `seq_no` 由存储层在追加时分配（这里固定为 0），以追加返回值或读回值为准。
+    /// `assistant_message_id` 只在起点检查点上有值，其余边界传 `None`。
     pub fn new(
         phase: CheckpointPhase,
         tool_round: u32,
         last_message_seq: i64,
         tool_calls: Vec<ToolCallDigest>,
+        assistant_message_id: Option<String>,
         created_at_ms: i64,
     ) -> Self {
         Self {
@@ -87,6 +94,7 @@ impl RunCheckpoint {
             payload: CheckpointPayload {
                 format_version: CHECKPOINT_FORMAT_VERSION,
                 tool_calls,
+                assistant_message_id,
             },
             format_version: CHECKPOINT_FORMAT_VERSION,
             created_at_ms,
@@ -107,6 +115,9 @@ pub struct ResumePoint {
     pub round: u32,
     /// 最后一个工具组里没有配对结果的调用：只用于回灌中断通知，绝不执行。
     pub unpaired: Vec<LlmToolCallVO>,
+    /// 起点检查点记下的助手消息 ID：恢复重发的 `run_started` 与最终收尾都用它，
+    /// 客户端因此不会因为恢复多出一个助手气泡（P6A-005 第 1 条）。旧库的检查点没有该字段时为 `None`。
+    pub assistant_message_id: Option<String>,
 }
 
 /// 检查点不可解释的两种情形：都判「不可恢复」，既不猜测也不降级成从头执行（D-P6-003）。

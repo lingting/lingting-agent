@@ -1,6 +1,6 @@
 # 6A 验收清单
 
-**状态：已完成（Batch A ~ E 全部结案）。** 十组共 58 条：除 `O-3` 记为「未采集」（无 `metrics` 特性的构建不注册该探针）外全部成立，另有 6 处判据原文与实现的偏差在[报告](../../../docs/reports/p6a-020-acceptance.md) §6.2 逐条说明。**任一条不通过（或未取得授权、或明确记为未采集后未给出替代证据），6A 不视为完成。**
+**状态：已完成（Batch A ~ E 全部结案）。** 十组共 59 条：除 `O-3` 记为「未采集」（无 `metrics` 特性的构建不注册该探针）外全部成立，另有 6 处判据原文与实现的偏差在[报告](../../../docs/reports/p6a-020-acceptance.md) §6.2 逐条说明。**任一条不通过（或未取得授权、或明确记为未采集后未给出替代证据），6A 不视为完成。**
 
 证据只允许来自：接口响应、客户端事件、`metrics` 快照、源码静态核对、`git diff`（限定到本次改动文件）。**不得读取、解析或检索 `server.log` 与日志目录**（仓库根 `AGENTS.md` 的测试数据采集条款）。
 
@@ -46,8 +46,8 @@
 |---|---|---|---|
 | S-1 | 状态集合 | 静态核对 `RunStatus`：既有六值的 wire 值逐字不变，新增仅 `PAUSED`；`is_terminal()` / `is_active()` / `can_cancel()` 各只有一处定义 | 不需授权 |
 | S-2 | 强杀自愈为 `PAUSED` | 用例 `resume.crash`：强杀后重启，`api/run/get` 的 `status = PAUSED`、`interruptedReason` 为固定值、`finishedAtMs` 为空 | 需授权 |
-| S-3 | 终态不被改写 | 用例 `resume.terminal`：对已 `COMPLETED` / `CANCELLED` / `FAILED` 的 Run 分别调用 `api/run/resume` 与 `api/run/cancel`，均返回 409，`api/run/get` 的 `status`、`error`、`finishedAtMs` 逐字段不变 | 需授权 |
-| S-3 | 终态不被改写 | 用例 `resume.terminal`：对已 `COMPLETED` / `CANCELLED` / `FAILED` 的 Run 分别触发一次恢复（占用 + 发消息）与一次 `api/run/cancel`，各自都不改变该 Run 的 `status`、`error`、`finishedAtMs`（逐字段相等）；`api/run/cancel` 对终态返回既有口径 | 需授权 |
+| S-3 | 终态不被改写 | 用例 `resume.terminal`：对已 `COMPLETED` / `CANCELLED` / `FAILED` 的 Run 分别触发一次恢复（占用 + 发消息）与一次 `api/run/cancel`，各自都不改变该 Run 的 `status`、`error`、`finishedAtMs`（逐字段相等）；`api/run/cancel` 对终态返回既有口径。**注**：原文「调用 `api/run/resume` 返回 409」与 D-P6-009 冲突（该接口不存在），以决策为准 | 需授权 |
+| S-4 | 终态即裁剪检查点 | 用例 `resume.checkpoint`：`fail_run` 之后 `steps` 条数 ≤ `CHECKPOINT_KEEP_LAST`（裁剪与状态推进同一事务，用例不手工触发清理）；`resume.terminal` 在隔离服务端上断言取消后的条数与 `checkpointsPruned` 增量逐值相等 | 需授权 |
 | S-5 | 恢复不产生第二条助手消息 | 用例 `resume.crash`：崩溃前已提交 1 条助手消息，恢复完成后 `api/message/list` 中该 Run 的助手消息条数仍为 1 | 需授权 |
 | S-6 | 恢复中再次中断仍是一个 `PAUSED` | 用例 `resume.terminal`：恢复执行中强杀 → 重启，`api/run/get` 是单条 `PAUSED`，`resumeCount` 单调不减（≥ 1） | 需授权 |
 | S-7 | 探活口径 | 用例 `resume.crash` 断言 `api/probe/health` 的 `runningRunCount` 不把 `PAUSED` 计入（`PAUSED` 期间为 0）；静态核对统计 SQL 只 `WHERE status = 'RUNNING'` | 需授权 |

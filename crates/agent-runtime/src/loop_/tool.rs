@@ -118,7 +118,7 @@ pub(crate) async fn run_round(
     }
     // 本轮的两个边界都已提交：模型轮次（assistant 调用）与工具批次（结果）同一事务落库，
     // 因此检查点只能写在这之后（D-P6-001）；写不进去即 FAILED，不降级继续（D-P6-010）。
-    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ModelDone, round, Vec::new()).await {
+    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ModelDone, round, Vec::new(), None).await {
         return Step::Failed(public);
     }
     if let Err(public) = checkpoint::append(
@@ -127,6 +127,7 @@ pub(crate) async fn run_round(
         CheckpointPhase::ToolsDone,
         round,
         checkpoint::digests(&executed.records),
+        None,
     )
     .await
     {
@@ -180,7 +181,9 @@ pub(crate) async fn resume(
             }
             // 驳回同样是这一组的终结：结果消息提交后补一条检查点，恢复时不必再解释这组调用。
             let digests = checkpoint::digests(&records);
-            if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
+            if let Err(public) =
+                checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests, None).await
+            {
                 return Resumed::Failed(public);
             }
             // 驳回也是一次终结：补完成事件，客户端的开始事件因此不会悬挂。
@@ -213,7 +216,9 @@ pub(crate) async fn resume(
             }
             // 批准后的工具批次同样是一个已提交边界：唤醒前的 `AWAITING_CONFIRM` 到此才真正收尾。
             let digests = checkpoint::digests(&executed.records);
-            if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
+            if let Err(public) =
+                checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests, None).await
+            {
                 return Resumed::Failed(public);
             }
             if !emit_completed(feed, &executed.records).await {
@@ -287,7 +292,7 @@ pub(crate) async fn resume_interrupted(
     // 这一组调用到此终结：写一条 `TOOLS_DONE` 检查点（序号接着递增，不重置），
     // 恢复后的轨迹因此不必再解释这组调用。
     let digests = checkpoint::digests(&records);
-    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests).await {
+    if let Err(public) = checkpoint::append(runtime, run, CheckpointPhase::ToolsDone, round, digests, None).await {
         return Resumed::Failed(public);
     }
     if !emit_completed(feed, &records).await {
@@ -430,6 +435,7 @@ async fn suspend(runtime: &AgentRuntime, run: &Run, feed: &mut Feed<'_>, pending
         CheckpointPhase::AwaitingConfirm,
         pending.tool_round,
         vec![digest],
+        None,
     )
     .await
     {

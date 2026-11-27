@@ -98,6 +98,20 @@ async fn boundaries(context: &TestContext) -> Result<Vec<String>> {
             item.seq_no
         );
     }
+    // 起点（seq 1）记下本次运行的助手消息 ID，其余边界不带（P6A-005 第 1 条）。
+    let start_id = steps.first().and_then(|item| item.payload.assistant_message_id.clone());
+    ensure!(
+        start_id.is_some()
+            && steps
+                .iter()
+                .skip(1)
+                .all(|item| item.payload.assistant_message_id.is_none()),
+        "只有起点检查点带助手消息 ID：{:?}",
+        steps
+            .iter()
+            .map(|item| (item.seq_no, item.payload.assistant_message_id.clone()))
+            .collect::<Vec<_>>()
+    );
 
     // 写放大口径（P6A-018）：单 Run 条数已知（上面断言 5 条），这里给出载荷字节的上界与平均值。
     // 载荷在库里就是 `serde_json::to_string(&payload)` 的结果，因此这里算出的字节数与落库值逐字节相等。

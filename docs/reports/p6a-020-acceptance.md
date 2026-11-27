@@ -5,18 +5,19 @@
 - **前置**：Batch A ~ D 已在前四个提交落地（`6af692b` ~ `be94cd9`）；Batch E（P6A-017 ~ P6A-020）在本轮结案
 - **执行日期**：2026-11-28
 - **环境**：Windows 11 / Git Bash；`bin-agent` 以 `metrics` 特性构建；用例并发度取默认 `available_parallelism()`
-- **判据来源**：[`.steps/p6/6a/acceptance.md`](../../.steps/p6/6a/acceptance.md)（10 组 58 条）；任务清单见 [`tasks.md`](../../.steps/p6/6a/tasks.md)，决策见 [`decisions.md`](../../.steps/p6/6a/decisions.md)
+- **判据来源**：[`.steps/p6/6a/acceptance.md`](../../.steps/p6/6a/acceptance.md)（10 组 59 条）；任务清单见 [`tasks.md`](../../.steps/p6/6a/tasks.md)，决策见 [`decisions.md`](../../.steps/p6/6a/decisions.md)
 - **测试授权**：本轮在**明确授权**下执行用例与门禁（需求方确认「授权：用例 + 门禁都跑」）。最终代码的定向执行：`resume`（12/12，`run-1795771595433-34504`）、`llm.config`（1/1，`run-1795771244801-29484`）、`skill`（15/15，`run-1795771247486-42336`）、`tool`（28/28，`run-1795771255790-37816`）、`persist`（5/5，`run-1795771266366-16600`）、`run`（10/10，`run-1795771270190-26988`）、`runtime`（18/18，`run-1795771281618-32376`）、`resume` 复跑（12/12，`run-1795772169277-44416`）；最终代码的全量 `make test ARGS="--all"` → **150/150 通过**（`run-1795772185789-27720`）。数字全部来自用例报告与 `metrics` 快照，**不读日志**。
+- **复核轮（2026-11-28）**：三处补正后在授权下复跑——`resume`（12/12，`run-1795776896689-29020`）、`persist`（5/5，`run-1795776913883-38792`）、`run`（10/10，`run-1795776916389-41664`）、`tool`（28/28，`run-1795776926497-36840`）、`runtime`（18/18，`run-1795776936914-11608`）；全量 `make test ARGS="--all"` → **150/150 通过**（`run-1795776947333-39336`）。门禁 `make check` / `make gen-check` / `make ui-check` 退出码均为 0，`make gen` 仍是路由 / 接口各 **33** 条。
 - **本轮改动面**：`types-core`（两个新配置项与两个上限）、`lib-bin-cli`（装载校验）、`agent-runtime`（失败分类 + Run 级重试 + 重试计数）、`service-core`（载荷字节计数）、`manager-agent` / `lib-bin-web`（快照转写）、`bin-tests`（新增 `resume.retry`、写放大与清理复算断言、配置校验断言）。**没有新增接口、没有新增 Crate、没有新增事件类型。**
 
 ---
 
 ## 一、结论
 
-1. **十组判据逐条有结论**：`B` / `A` / `S` / `C` / `R` / `P` / `I` / `O` / `E` / `K` 除 `O-3` 外**全部成立**；`O-3` 按「未采集」显式记录（无特性构建的 `metrics` 快照），另有 6 处「判据原文与实现的偏差」在 §6.2 逐条说明，**没有「未授权」项**。逐条证据见 §二 ~ §五，「未采集」与结转风险见 §六。
+1. **十组判据逐条有结论**：`B` / `A` / `S` / `C` / `R` / `P` / `I` / `O` / `E` / `K` 共 **59 条**（复核轮新增 `S-4`「终态即裁剪检查点」），除 `O-3` 外**全部成立**；`O-3` 按「未采集」显式记录（无特性构建的 `metrics` 快照），另有 8 处「判据原文与实现的偏差」在 §6.2 逐条说明，**没有「未授权」项**。逐条证据见 §二 ~ §五，「未采集」与结转风险见 §六，复核轮的三处代码补正在 §八。
 2. **失败有分类、重试有上限且可复算**：`resume.retry` 证明上游 503（可重试分类）按 `run_max_retries = 2` 被重发 **2 次**（Mock 侧 `scenarios.upstream` 计数 = 3 = 1 次失败 + 2 次重试），用尽后落固定文案「模型调用重试次数已用尽」；认证失败（不可重试分类）**只请求上游 1 次**、文案仍是原始脱敏文案、重试计数不变。`limit.retries` 快照值 = 2，等于配置上限。
 3. **缺省不重试是硬保证**：`run_max_retries` 缺省 `0`，`run.failed_upstream` / `run.failed_auth` / `run.failed_timeout` 三条既有用例（10/10 全绿）断言的仍是各自的原始脱敏文案——说明「不重试」路径与改动前逐字段一致。
-4. **写放大是数字而不是感觉**：两轮工具 + 正常完成的 Run 有 **5 条**检查点（起点 + 每轮模型边界 + 每轮工具边界），载荷共 **272 字节**、平均 **54 字节/条**，单条上界断言 **2048 字节**；`resume.checkpoint` 的存储半段另外断言 25 条写入 → 终态删除 5 条 → 保留 20 条，`checkpointsWritten` / `checkpointsPruned` 的增量与这两个数字逐值相等。
+4. **写放大是数字而不是感觉**：两轮工具 + 正常完成的 Run 有 **5 条**检查点（起点 + 每轮模型边界 + 每轮工具边界），载荷共 **428 字节**、平均 **85 字节/条**，单条上界断言 **2048 字节**（复核轮加入起点检查点的 `assistant_message_id` 后由 272 / 54 变为这两个值）；`resume.checkpoint` 的存储半段另外断言 25 条写入 → 落终态时在同一事务里删除 5 条 → 保留 20 条。
 5. **检查点写入没有引入新的阻塞模式**：写入与指针更新在同一个事务里、走既有连接池路径（`Repository::begin`），全仓 `checkpoint` 相关代码没有 `spawn_blocking`、没有 `block_on`、没有新线程；`O-2` 的「落库次数」用「事件帧 + 检查点写入」两项快照复算（`resume.metrics` 读出 16）。
 6. **契约漂移面是可枚举的**：生成物相对 P5 基线只多一项——`api/run/history` 一个只读接口（路由 / 接口各 33 条，`make gen` 输出「路由 33 条，接口 33 条」）；`RunStatus` 的 `PAUSED` 与 `Run` 的三个新字段是 Batch A / D 已落地的产物；`api/run/resume` 与 `resume_on_occupy` 全仓检索命中 **0**。
 
@@ -35,7 +36,7 @@
 | A-3 | SQL 只在 repository | 成立 | `grep -rln "run_checkpoints" --include=*.rs crates` 的产品 crate 命中只有 `crates/service-core/src/repository/checkpoint.rs`（`crates/agent-core/.../checkpoint.rs` 是一处文档注释里的列名说明）；`agent-runtime` / `manager-agent` / `lib-web` 的 SQL 字面量检索（`"(SELECT` / `"(INSERT` / `"(UPDATE` / `"(DELETE`）命中 0 |
 | A-4 | 装配层不承载循环逻辑 | 成立 | `crates/manager-agent/src/` 里 `CheckpointPhase` 命中 **0**、`ToolCallDigest` 命中 **0**、`RunCheckpoint::new` 命中 **0**（检查点载荷构造只在 `agent-runtime/src/loop_/checkpoint.rs` 一处）；`ResumePoint` 只出现在 `runner/queue.rs`（`run_one` 的转发参数）与 `runner/resume.rs`（判定结果转发） |
 | A-5 | 运行时只经端口访问业务 | 成立（传递依赖口径见 §六） | `cargo tree -p agent-runtime --depth 1` 的 14 条直接依赖里**没有** `lib-db` / `sqlx`（两者只经 `service-core` 传递出现）；`grep -rn "sqlx" crates/agent-runtime/src` 命中 0；检查点与恢复的调用全部是 `service_core::session::{SessionService, RunDriver, ResumePlan}` |
-| A-6 | 结构文档待同步清单 | 成立 | 清单见 §七；`git status --short` 里**没有** `docs/` 改动 |
+| A-6 | 结构文档待同步清单 | 成立 | 清单见 §九（复核轮之前的记录）；复核轮已按授权把清单落地，见 §七 |
 
 ---
 
@@ -48,6 +49,7 @@
 | S-1 | 状态集合 | 成立 | `RunStatus` 的既有六值 wire 值逐字不变，新增只有 `Paused`（`PAUSED`）；`is_terminal()` / `is_active()` / `can_cancel()` 各只有一处定义（`crates/agent-core/src/session/run.rs`），终态与未结束集合各只有一个常量（`TERMINAL` / `ACTIVE`） |
 | S-2 | 强杀自愈为 `PAUSED` | 成立 | `resume.crash`：强杀重启后 `run/get` 的 `status = PAUSED`、`interruptedReason = 「服务重启，执行中的 Run 已中断」`、`finishedAtMs` 为空、`resumeCount = 0` |
 | S-3 | 终态不被改写 | 成立（原文的一处口径见 §六） | `resume.terminal`：对已 `PAUSED` 的 Run 取消后落 `CANCELLED`；对已终态的 Run 二次取消返回「不可取消」且 `status` / `error` / `finishedAtMs` / `updatedAtMs` 逐字段不变；随后发消息只执行新 Run（`run_completed`），已终态 Run 的 `status` / `updatedAtMs` 仍不变 |
+| S-4 | 终态即裁剪检查点 | 成立（复核轮补正，见 §八） | `resume.checkpoint`：`fail_run` 之后 `steps` 条数 ≤ `CHECKPOINT_KEEP_LAST`，裁剪与状态推进在同一事务里完成，用例不再手工调清理；`resume.terminal` 在隔离服务端上断言取消后的条数与 `checkpointsPruned` 增量逐值相等 |
 | S-5 | 恢复不产生第二条助手消息 | 成立 | `resume.crash`：恢复完成后该 Run 的助手消息**恰好 1 条**；`resume.terminal` 的「两次中断都不应补写助手消息」再验一次 |
 | S-6 | 恢复中再次中断仍是一个 `PAUSED` | 成立 | `resume.terminal`：恢复执行中强杀 → 重启，同一 `runId` 仍是单条 `PAUSED`、`resumeCount` 从 0 涨到 1 后不再重置、`finishedAtMs` 为空 |
 | S-7 | 探活口径 | 成立 | `resume.crash` 断言 `PAUSED` 期间 `api/probe/health` 的 `runningRunCount = 0`；统计 SQL 只 `WHERE status = 'RUNNING'`（`service-core` 的探活查询，注释写明 `PAUSED` 不计入） |
@@ -59,7 +61,7 @@
 | C-1 | 三种 phase 各有唯一落点 | 成立 | `RunCheckpoint::new` 全仓只有一处调用点（`agent-runtime/src/loop_/checkpoint.rs` 的 `append`）；四个写入点都在对应提交之后；取消路径（`cancelled`）不调用 `append` |
 | C-2 | 序号连续 | 成立 | `resume.checkpoint`：两轮工具 + 正常完成的 `steps` 序号 `1..5` 连续、phase 依次 `MODEL_DONE / MODEL_DONE / TOOLS_DONE / MODEL_DONE / TOOLS_DONE`；存储半段另断言 `1..3`。「人为制造缺口后判损坏」属 `R-6`（见 §六） |
 | C-3 | 指针同事务 | 成立 | `resume.checkpoint`：注入 `run_checkpoints` 插入失败后 `lastCheckpointSeq` 保持 1、库内仍只有 1 行；解除注入后接着写 `seq 2`、指针前移到 2（序号不重置）。实现上「插行 + 更新指针」在同一 `transaction` 内（`Repository::append_checkpoint`） |
-| C-4 | payload 最小事实 + 保留策略 | 成立 | 载荷顶层白名单 = `["format_version", "tool_calls"]`，摘要白名单 = `["status", "tool_call_id"]`；单条 `80 字节`（≤ 2048）、两轮工具 Run 的 5 条共 `272 字节`；终态后保留 20 条（`CHECKPOINT_KEEP_LAST`）、`resume.checkpoint` 断言 25 → 20 |
+| C-4 | payload 最小事实 + 保留策略 | 成立 | 载荷顶层白名单 = `["assistant_message_id", "format_version", "tool_calls"]`（复核轮加入助手消息 ID，只在起点有值），摘要白名单 = `["status", "tool_call_id"]`；单条 ≤ 2048 字节；终态后保留 20 条（`CHECKPOINT_KEEP_LAST`）、`resume.checkpoint` 断言 25 → 20（裁剪在 `fail_run` 事务内完成） |
 | C-5 | 格式版本单一产点 | 成立 | `grep -rn "CHECKPOINT_FORMAT_VERSION" --include=*.rs crates \| grep const` 只有一处 `crates/agent-core/src/session/checkpoint.rs:16`；`resume.checkpoint` 断言读回行的 `format_version` 与载荷里的 `format_version` 都是 `1` |
 | C-6 | 未知版本不可恢复 | 成立 | `resume.broken` ⑥：`format_version = 99` 后触发恢复 → Run 落 `FAILED` + 「检查点格式版本不受支持，Run 不可恢复」，工具审计行数不变 |
 | C-7 | 检查点写失败 → `FAILED` | 成立 | `resume.checkpoint` 的注入式失败段：Run 落 `FAILED`、`run_failed` 与 `run/get` 的 `error` 都是「检查点写入失败」、无助手消息、该 Run 的检查点 0 条 |
@@ -89,8 +91,8 @@
 | P-1 | 迁移幂等 | 成立 | `persist.migration`：同一数据库连续两次迁移退出码 0，`run_checkpoints` 只有一张、`runs` 新列不重复；迁移账本 `[1, 2, 3]` |
 | P-2 | 旧库可升级 | 成立 | `persist.migration`：`0001` + `0002` 的旧库（含终态 Run、工具审计行、消息）升级到 `0003` 后逐字段读回相等；`resumeCount = 0`、`interruptedReason` / `lastCheckpointSeq` 为 `NULL` |
 | P-3 | 新列对旧逻辑无害 | 成立 | `persist.migration` + `run`（10/10）+ `tool`（28/28）全绿；`run.failed_auth` / `failed_upstream` / `failed_timeout` 的文案与字段断言未放宽 |
-| P-4 | 升级不可回滚（人工） | 成立 | `crates/lib-db/migrations/` 只有 `0001_init.sql` / `0002_tool_calls.sql` / `0003_checkpoints.sql` 三个前进迁移，**没有** down 脚本；任务结案说明写明「升级前备份 `agent.db`」（§七）；回滚策略登记为 6E 输入（§六 `KI-P6A-003`） |
-| P-5 | 检查点不无限增长 | 成立 | `resume.checkpoint`：25 条写入 → 未终态清理 0 条 → 落 `FAILED` 后删除 5 条、保留 20 条（`steps ≤ keep_last`）；快照侧 `checkpointsWritten` 与 `checkpointsPruned` 的增量与写入 / 删除条数**逐值相等**；`resume.terminal` 另在隔离服务端上断言「取消后 `steps` 从 25 裁到 20、`checkpointsPruned` 增量 = 删掉的条数」 |
+| P-4 | 升级不可回滚（人工） | 成立 | `crates/lib-db/migrations/` 只有 `0001_init.sql` / `0002_tool_calls.sql` / `0003_checkpoints.sql` 三个前进迁移，**没有** down 脚本；任务结案说明写明「升级前备份 `agent.db`」（§7.1）；回滚策略登记为 6E 输入（§六 `KI-P6A-003`） |
+| P-5 | 检查点不无限增长 | 成立（复核轮补正，见 §八） | 存储半段（`resume.checkpoint`）：25 条写入 → 未终态时一条不删 → 落 `FAILED` 时**在同一事务里**删除 5 条、保留 20 条，`checkpointsPruned` 至少增长 5。隔离服务端的 `resume.terminal`：取消一个 `PAUSED` Run 后 `steps` 从 25 裁到 20，同一次取消的 `checkpointsPruned` 增量与删掉的条数**逐值相等**（该段的步骤基数为 1，增量 = 0，因为取消前已被前一次终态收尾裁过） |
 
 ### 4.3 接口与客户端（I 组）
 
@@ -150,6 +152,8 @@
 | — | `I-3`「`api/run/history` 显示『上下文重新组装』标记（若实现为字段则断言字段，若为文案则断言文案）」 | 既没有字段也没有文案 | D-P6-003 第 3 条只要求「恢复时 Context 重新组装，并在步骤历史里显示」。当前实现选择了「不记录上下文指纹、不加标记字段」——加字段会与 P5 的 Skill 集合、`AGENTS.md` 的现场读取口径纠缠。见 `KI-P6A-004` |
 | — | `O-1` 六个字段名写作 camelCase（`checkpointsWritten` 等） | 快照键名是 **snake_case**（`checkpoints_written` 等），且是**七个**键 | 既有七段（`chain` / `stop` / `journal` / `limit` / `mcp` / `skills` / `audit`）全部是 snake_case；为一段单独改 camelCase 会造出两套命名。第七个键 `checkpoint_payload_bytes` 是 P6A-018 的写放大口径 |
 | — | `P-5`「`metrics` 的 `checkpointsPruned` 与删除条数相等」 | `resume.checkpoint` 的存储半段断言「至少增长」（进程内共享计数器）；「逐值相等」在 `resume.terminal` 的隔离服务端上断言 | 存储半段在同进程并行跑，共享原子量会被其它用例累加；隔离服务端的服务端进程独占计数器，可以做等值断言 |
+| — | P6A-014 第 1 条「`resume_rejected` 按拒绝原因分桶」 | 快照里是**单个标量**（「没有检查点」与「判定读库失败」两个计数器求和） | 两个原因对外只需要一个「被拒绝」的数量；分桶会多出两个没有消费方的键。拒绝原因仍可从日志与 `resume.broken` 的用例分支区分 |
+| — | P6A-017 第 4 条「配置非法是启动期硬错误（退出码 2）」 | `llm.config` 断言的是配置解析报错，未起子进程断言退出码 | 重试项的校验与其他 `[agent]` 项走同一个 `validate_agent`，`mcp.config` 已对同一路径的退出码 2 取证 |
 
 ### 6.3 结转风险
 
@@ -166,7 +170,29 @@
 
 ---
 
-## 七、文档待同步清单（本轮未改，需另行授权）
+## 七、文档同步记录（复核轮已按授权执行）
+
+复核时发现四份文档与代码不一致（`docs/api/session.md` 的「本阶段进度」段仍写「随 P6A-009 ~ P6A-013 落地」，而它们已全部落地），已按需求方授权同步：
+
+| 文档 | 已补内容 |
+|---|---|
+| `docs/api/session.md` | ① 接口清单补 `api/run/history`，`api/message/create` 补「已占用时先恢复 `PAUSED` Run」的副作用；② 入参表补 `RunHistoryParams`；③ 新增 `RunHistory` / `RunStep` 两个载荷类型章节；④ 「检查点」章节改为「落终态即裁剪（事务内）」、补助手消息 ID 与「恢复复用同一 ID」的口径，并删掉已过时的「本阶段进度」段 |
+| `docs/api/probe.md` | `metrics` 的 `resume` 段七个字段（snake_case）与复算口径；`limit` 段新增的 `retries` |
+| `docs/workspace.md` | ① `service-core` 的 `repository/checkpoint.rs` 与 `observability.rs`；② `agent-core` 的检查点类型；③ `agent-tool` 的 `ToolCallRecord.started_at_ms`（并注明**没有**新增可重放自述）；④ `manager-agent` 的 `runner/resume.rs`（恢复段） |
+| `docs/develop.md` | `[agent]` 的 `run_max_retries` / `run_retry_backoff_ms`（缺省与上限、启动期硬错误）；失败分类与重试口径；检查点保留策略改为「裁剪在推进终态的同一事务里完成」 |
+| `.steps/p6/6a/README.md` / `.steps/README.md` | 状态行 |
+
+## 八、复核轮补正（本轮新增）
+
+| 项 | 原状 | 补正 |
+|---|---|---|
+| 终态裁剪 | 只有 `cancel_run` 事后清理一次；`COMPLETED` / `FAILED` 不清理，检查点会随 Run 生命周期一直留在库里 | 裁剪收敛到推进终态的同一事务：`Repository::prune_checkpoints_in`（唯一实现）由 `with_run_completion` / `fail_run` / `cancel_run` 调用，`cancel_session_runs` 走会话级版本；`SessionService::prune_checkpoints` 的事后入口删除 |
+| 起点检查点的助手消息 ID | `CheckpointPayload` 没有该字段，`P6A-005` 第 1 条悬空 | `CheckpointPayload.assistant_message_id`（只在起点有值）→ `ResumePoint.assistant_message_id`（从第 1 条取回）→ 恢复的 `run_started` 与收尾复用同一 ID |
+| `acceptance.md` 编号 | 两条 `S-3`、缺 `S-4` | 合并为一条 `S-3`（并注明与 D-P6-009 的冲突以决策为准），新增 `S-4`「终态即裁剪检查点」 |
+| 文档口径差异 | 两条未登记（`resume_rejected` 分桶、配置非法退出码） | 补进 §6.2 |
+| 用例与门禁复跑 | 补正前只跑过旧代码 | 授权下复跑：`resume` 12/12、`persist` 5/5、`run` 10/10、`tool` 28/28、`runtime` 18/18，全量 `--all` **150/150**；`make check` / `gen-check` / `ui-check` 全部 0 退出。载荷实测由 272 字节 / 54 字节变为 **428 字节 / 85 字节**（已回填 §一 第 4 条） |
+
+## 九、文档待同步清单（复核轮之前的记录，保留备查）
 
 | 文档 | 待补内容 |
 |---|---|
@@ -176,7 +202,7 @@
 | `docs/develop.md` | `[agent]` 的两个新配置项（`run_max_retries` 缺省 `0` = 不重试、上限 10；`run_retry_backoff_ms` 缺省 500ms、`0` = 立即重试、上限 60000ms）与「非法取值是启动期硬错误（退出码 2）」 |
 | `.steps/p6/6a/README.md` / `.steps/README.md` | 状态行（本报告与 `tasks.md` 已随本轮更新） |
 
-### 7.1 升级前人工动作
+### 9.1 升级前人工动作
 
 - 升级到 `0003` 前**备份 `<AGENT_HOME>/data/agent.db`**（`P-4` 的人工判定项；`lib-db` 只有前进迁移）。
 - 升级后首次启动会执行自愈：执行中的 Run 落 `PAUSED`、排队中与等确认的 Run 落 `CANCELLED`。这是**行为变更**，运维侧要知道「重启后看到 `PAUSED` 是正常的，发一条消息即可继续」。

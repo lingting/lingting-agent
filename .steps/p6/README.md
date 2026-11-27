@@ -1,6 +1,6 @@
 # P6：Production Readiness
 
-**状态：未开始（仅阶段级规划，暂不拆任务）**
+**状态：6A 已完成（2026-11-28），6B ~ 6E 未开始。** 6A 落地 20 个任务 / 5 个批次、判据 10 组 59 条、决策 13 项，报告见 [`reports/p6a-020-acceptance.md`](../../docs/reports/p6a-020-acceptance.md)。
 
 ---
 

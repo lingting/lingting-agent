@@ -93,8 +93,11 @@
 | `session_lock_wait` | `calls` / `total_millis` / `max_millis` | 取会话锁的等待时间 |
 | `registry_lock` | `reads` / `read_wait_millis` / `read_wait_max_millis` / `writes` / `write_wait_millis` / `write_wait_max_millis` / `forwards` / `forward_max_millis` | 注册表整表锁的读写等待与下行转发临界区 |
 | `database` | `calls` / `total_millis` / `max_millis` / `errors` | 取连接等待；`errors` 是 `database is locked` / `SQLITE_BUSY` 次数 |
-| `limit` | `queued` / `timeouts` / `cancelled` / `wait_total_millis` / `wait_max_millis` / `queued_max` / `running_max` / `running_now` | Run 排队与执行：排队超时、取消、最长排队、排队与执行峰值 |
+| `limit` | `queued` / `timeouts` / `cancelled` / `wait_total_millis` / `wait_max_millis` / `queued_max` / `running_max` / `running_now` / `retries` | Run 排队与执行：排队超时、取消、最长排队、排队与执行峰值；`retries` 是 Run 级重试次数（`[agent] run_max_retries`，每个 Run 不超过配置上限） |
+| `resume` | `checkpoints_written` / `checkpoints_pruned` / `resume_attempts` / `resume_succeeded` / `resume_rejected` / `resume_unrecoverable` / `checkpoint_payload_bytes` | 检查点与恢复：写入条数、终态裁剪条数、进入判定的次数、推进成功次数、拒绝次数（无检查点 + 读库失败）、不可恢复次数、载荷总字节 |
 | `audit` | `total` / `error` / `warn` / `secret_hits` / `panics` | 日志审计：事件总数与级别计数、敏感串命中数、进程内 panic 数 |
+
+`resume` 段的复算口径：`checkpoints_written` 对应 `api/run/history` 的 `steps` 条数之和；`resume_succeeded` 对应各 Run 的 `resumeCount` 之和；`resume_unrecoverable` 对应判定为「不可恢复」的次数；平均载荷 = `checkpoint_payload_bytes` / `checkpoints_written`。数字只来自本接口与业务接口的响应，不读日志。
 
 ```text
 GET api/probe/metrics

@@ -291,12 +291,19 @@ async fn sequence_and_payload() -> Result<Vec<String>> {
         "未恢复过的 Run 不应有恢复次数与中断原因：{run:?}"
     );
 
-    // 载荷只允许最小事实：顶层是「版本 + 工具组摘要」，摘要里是「调用标识 + 状态」。
+    // 载荷只允许最小事实：顶层是「版本 + 工具组摘要 + 助手消息 ID」，摘要里是「调用标识 + 状态」。
+    // 助手消息 ID 只在起点检查点上有值（`P6A-005` 第 1 条），存储半段构造的检查点传的是 `None`。
     let payload = serde_json::to_string(&latest.payload).context("序列化载荷失败")?;
     let value: serde_json::Value = serde_json::from_str(&payload).context("解析载荷失败")?;
     ensure!(
-        sorted_keys(&value)? == ["format_version", "tool_calls"],
+        sorted_keys(&value)? == ["assistant_message_id", "format_version", "tool_calls"],
         "载荷顶层字段应为白名单：{payload}"
+    );
+    ensure!(
+        value
+            .get("assistant_message_id")
+            .is_some_and(serde_json::Value::is_null),
+        "非起点的检查点不应带助手消息 ID：{payload}"
     );
     let groups = value
         .get("tool_calls")
@@ -346,20 +353,18 @@ async fn prune_policy() -> Result<Vec<String>> {
         "应写入 {total} 条检查点，实际 {written}"
     );
 
-    // 未结束的 Run 一条都不删：检查点正是它恢复的依据。
-    ensure!(
-        service.prune_checkpoints(&run_id).await? == 0,
-        "未结束的 Run 不应清理检查点"
-    );
+    // 未结束的 Run 一条都不删：检查点正是它恢复的依据（终态裁剪只挂在收尾事务上）。
     ensure!(
         service.checkpoints_of_run(&run_id).await?.len() == written,
-        "未结束的 Run 清理后条数不应变化"
+        "未结束的 Run 一条检查点都不应被删除"
     );
 
+    // 落 FAILED 即裁剪：`fail_run` 在推进终态的同一事务里删除多余的检查点，
+    // 用例不需要（也无法）再手工触发一次清理（`P-5`）。
     ensure!(service.fail_run(&run_id, "用例收尾").await?, "Run 应能被落成 FAILED");
-    let removed = service.prune_checkpoints(&run_id).await?;
-    ensure!(removed == 5, "应删除最早的 5 条，实际 {removed}");
     let remaining = service.checkpoints_of_run(&run_id).await?;
+    let removed = written.saturating_sub(remaining.len());
+    ensure!(removed == 5, "落终态应删除最早的 5 条，实际 {removed}");
     ensure!(
         remaining.len() == CHECKPOINT_KEEP_LAST,
         "终态后应保留 {CHECKPOINT_KEEP_LAST} 条，实际 {}",
@@ -369,10 +374,6 @@ async fn prune_policy() -> Result<Vec<String>> {
         remaining.first().map(|item| item.seq_no) == Some(6),
         "应保留最近的一批（从 seq 6 起）：{:?}",
         remaining.first().map(|item| item.seq_no)
-    );
-    ensure!(
-        service.prune_checkpoints(&run_id).await? == 0,
-        "重复清理不应再删除任何行"
     );
     // 快照口径（`P-5`）：写入与删除都在 `service-core` 的同一处计数。这里是进程内共享计数器，
     // 同进程并行跑的其它存储半段也会累加，因此只断言「至少包含本次的量」；「增量与删除条数逐值
@@ -391,7 +392,7 @@ async fn prune_policy() -> Result<Vec<String>> {
 
     Ok(vec![
         format!("写入 {written} 条后未终态时清理 0 条，落 FAILED 后删除 {removed} 条、保留 {CHECKPOINT_KEEP_LAST} 条"),
-        "再次清理返回 0（保留策略是幂等的）".to_owned(),
+        "落终态即裁剪，没有第二次清理（裁剪与状态推进同一事务）".to_owned(),
         format!(
             "快照口径：checkpointsWritten 至少 +{written_delta}、checkpointsPruned 至少 +{pruned_delta}（逐值相等见 resume.terminal）"
         ),
@@ -582,6 +583,7 @@ fn checkpoint(phase: CheckpointPhase, round: u32, last_message_seq: i64) -> RunC
             tool_call_id: format!("call-{round}"),
             status: ToolCallStatus::Pending,
         }],
+        None,
         time::now_millis(),
     )
 }
